@@ -115,6 +115,54 @@ class Studio {
       return { times };
     });
   }
+  // ----- Background removal (matting) -----
+  // The app streams small frames to its AI worker and sends back one 8-bit mask per frame;
+  // the masks are upscaled and merged as alpha onto the full-resolution original (VP9 + alpha).
+  matteStart({ mediaId, from = 0, to, fps }) {
+    const a = this.asset(mediaId); if (!a.video || a.kind === 'image') throw Error('Background removal works on video clips.');
+    const A = Math.max(0, from), B = Math.min(a.duration || to, to ?? a.duration), len = B - A;
+    if (!(len > 0.05)) throw Error('That clip is too short.'); if (len > 600) throw Error('Remove backgrounds in parts of up to 10 minutes. Split the clip first.');
+    const rate = Math.max(1, Math.min(60, Math.round(+fps || a.fps || 30)));
+    // Model input: long side 512, both sides multiples of 32 (MODNet).
+    const k = 512 / Math.max(a.width, a.height), r32 = v => Math.max(32, Math.round(v * k / 32) * 32);
+    const id = require('node:crypto').randomUUID(), dir = this.library.dirs.derived;
+    const sess = { id, mediaId, from: A, to: B, fps: rate, mw: r32(a.width), mh: r32(a.height), frames: Math.max(1, Math.round(len * rate)), mask: path.join(dir, `${a.id}-matte-${id.slice(0, 8)}.gray`), received: 0 };
+    fs.writeFileSync(sess.mask, Buffer.alloc(0)); (this.mattes ||= new Map()).set(id, sess);
+    return { session: id, mw: sess.mw, mh: sess.mh, fps: rate, frames: sess.frames };
+  }
+  matteSession(id) { const s = this.mattes?.get(id); if (!s) throw Error('That background removal session has ended.'); return s; }
+  // Raw RGB24 frames at mask size, streamed in order.
+  matteFrames(id, res) {
+    const s = this.matteSession(id), a = this.asset(s.mediaId);
+    const { spawn } = require('node:child_process');
+    const p = spawn(ffmpeg, ['-v', 'error', '-ss', f(s.from), '-t', f(s.to - s.from), '-i', a.path, '-an', '-vf', `fps=${s.fps},scale=${s.mw}:${s.mh}:flags=area,format=rgb24`, '-frames:v', String(s.frames), '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'], { windowsHide: true });
+    res.setHeader('Content-Type', 'application/octet-stream'); res.setHeader('X-Frame-Bytes', String(s.mw * s.mh * 3));
+    p.stdout.pipe(res); res.on('close', () => p.kill());
+  }
+  async matteMask(id, body) {
+    const s = this.matteSession(id), size = s.mw * s.mh;
+    if (body.length % size) throw Error('Mask data is incomplete.');
+    await fsp.appendFile(s.mask, body); s.received += body.length / size; return { received: s.received };
+  }
+  matteCancel(id) { const s = this.mattes?.get(id); if (!s) return; this.mattes.delete(id); fs.rmSync(s.mask, { force: true }); }
+  matteFinish(id) {
+    const s = this.matteSession(id), a = this.asset(s.mediaId); this.mattes.delete(id);
+    if (s.received < 1) { fs.rmSync(s.mask, { force: true }); throw Error('No frames were processed.'); }
+    return this.jobs.add({ type: 'matte', label: 'Removing background · ' + a.name, lane: 'heavy', meta: { mediaId: a.id } }, async ({ signal, progress }) => {
+      const len = s.received / s.fps, out = this.derivedPath(`${a.id}-cutout-${Date.now()}.webm`);
+      const W = Math.min(1920, a.width % 2 ? a.width - 1 : a.width), H = Math.round(W * a.height / a.width / 2) * 2;
+      const af = a.audio ? ['-map', '0:a:0?', '-c:a', 'libopus', '-b:a', '192k'] : [];
+      try {
+        await run(ffmpeg, ['-y', '-v', 'error', '-ss', f(s.from), '-t', f(len), '-i', a.path,
+          '-f', 'rawvideo', '-pix_fmt', 'gray', '-s', `${s.mw}x${s.mh}`, '-r', String(s.fps), '-i', s.mask,
+          '-filter_complex', `[0:v]fps=${s.fps},scale=${W}:${H},format=yuv420p[c];[1:v]scale=${W}:${H}:flags=bicubic,format=gray[m];[c][m]alphamerge,format=yuva420p[v]`,
+          '-map', '[v]', ...af, '-c:v', 'libvpx-vp9', '-pix_fmt', 'yuva420p', '-crf', '24', '-b:v', '0', '-row-mt', '1', '-deadline', 'good', '-cpu-used', '4', '-auto-alt-ref', '0',
+          '-metadata:s:v:0', 'alpha_mode=1', '-t', f(len), '-progress', 'pipe:1', out], { signal, onStdout: progressFrom(len, progress) });
+      } finally { fs.rmSync(s.mask, { force: true }); }
+      const asset = await this.library.importPath(out, { name: a.name.replace(/(\.[^.]+)?$/, ' (cutout)'), derivedFrom: a.id, derivedKind: 'cutout', derivedRange: [s.from, s.from + len] });
+      return { asset: this.library.public(asset), from: s.from };
+    });
+  }
   async speechAudio({ mediaId, from = 0, to }) {
     const a = this.asset(mediaId); if (!a.audio) throw Error('This clip has no audio.');
     const len = Math.max(0.1, (to ?? a.duration) - from);

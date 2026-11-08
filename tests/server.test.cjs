@@ -103,3 +103,37 @@ test('Proxies: 4K and unplayable files get playback copies; export still uses th
     assert.ok(exported > viaProxy + 4, 'export rendered from the original, not the proxy');
   } finally { await s?.close(); await fs.rm(dir, { recursive: true, force: true }).catch(() => {}); }
 });
+
+test('Background removal pipeline: frames out, masks in, VP9 alpha cutout that composites in export', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'framecut-matte-')); let s;
+  try {
+    const clip = path.join(dir, 'Person.mp4'), bg = path.join(dir, 'Red.mp4');
+    await run(ffmpeg, ['-y', '-f', 'lavfi', '-i', 'testsrc2=s=1280x720:r=30', '-f', 'lavfi', '-i', 'sine=frequency=500:sample_rate=48000', '-t', '2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', clip]);
+    await run(ffmpeg, ['-y', '-f', 'lavfi', '-i', 'color=c=red:s=1280x720:r=30', '-t', '2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', bg]);
+    s = await startServer({ dataDir: path.join(dir, 'data') }); const call = api(s.url);
+    const { assets } = await call('/api/media/import', { paths: [clip, bg] }); const m = assets.find(a => a.name.startsWith('Person')), red = assets.find(a => a.name.startsWith('Red'));
+    const sess = await call('/api/tools/matte/start', { mediaId: m.id, from: 0.5, to: 1.5, fps: 30 });
+    assert.equal(sess.mw % 32, 0); assert.equal(sess.mh % 32, 0); assert.equal(sess.frames, 30);
+    const raw = Buffer.from(await (await fetch(`${s.url}/api/tools/matte/${sess.session}/frames`)).arrayBuffer());
+    assert.equal(raw.length, sess.mw * sess.mh * 3 * sess.frames, 'all frames streamed at mask size');
+    // Synthetic matte: keep a centred circle (stands in for the model's output).
+    const mask = Buffer.alloc(sess.mw * sess.mh); for (let y = 0; y < sess.mh; y++) for (let x = 0; x < sess.mw; x++) mask[y * sess.mw + x] = Math.hypot(x - sess.mw / 2, y - sess.mh / 2) < sess.mh * 0.3 ? 255 : 0;
+    for (let i = 0; i < sess.frames; i += 10) await fetch(`${s.url}/api/tools/matte/${sess.session}/mask`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: Buffer.concat(Array(10).fill(mask)) });
+    const job = await waitJob(call, (await call(`/api/tools/matte/${sess.session}/finish`, {})).job, 120000);
+    assert.equal(job.status, 'done', job.error);
+    const cut = job.result.asset; assert.ok(cut.alpha, 'cutout is detected as having transparency'); assert.ok(Math.abs(cut.duration - 1) < 0.1, 'duration ' + cut.duration);
+    // Composite the cutout over red: centre shows the picture, corners show red.
+    const p = await call('/api/projects', { name: 'Cutout', ratio: '16:9' });
+    p.tracks.unshift({ id: 'over', kind: 'video', name: 'Overlay' });
+    p.clips.push(newClip('video', { trackId: 'main', mediaId: red.id, start: 0, duration: 1 }), newClip('video', { trackId: 'over', mediaId: cut.id, start: 0, duration: 1 }));
+    const output = path.join(dir, 'comp.mp4');
+    const ej = await waitJob(call, (await call('/api/export', { project: p, rasters: {}, settings: { format: 'mp4', resolution: 720, fps: 30, output } })).job, 120000);
+    assert.equal(ej.status, 'done', ej.error);
+    const { out: px } = await run(ffmpeg, ['-v', 'error', '-ss', '0.5', '-i', output, '-frames:v', '1', '-vf', 'scale=64:36', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { encoding: 'buffer' });
+    const at = (x, y) => [...px.slice((y * 64 + x) * 3, (y * 64 + x) * 3 + 3)];
+    const corner = at(3, 3), centre = at(32, 18);
+    assert.ok(corner[0] > 200 && corner[1] < 50 && corner[2] < 50, 'corner is the red background: ' + corner);
+    assert.ok(!(centre[0] > 200 && centre[1] < 50 && centre[2] < 50), 'centre is the kept subject: ' + centre);
+    const bad = await fetch(`${s.url}/api/tools/matte/${sess.session}/frames`); assert.equal(bad.status >= 400, true, 'finished session is closed');
+  } finally { await s?.close(); await fs.rm(dir, { recursive: true, force: true }).catch(() => {}); }
+});

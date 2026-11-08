@@ -142,6 +142,11 @@ async function startServer({ dataDir = path.join(__dirname, '..', '.workspace'),
   app.post('/api/tools/stabilize', wrap(async (req, res) => jobReply(res, studio.stabilize(req.body))));
   app.post('/api/tools/smooth-slowmo', wrap(async (req, res) => jobReply(res, studio.smoothSlowmo(req.body))));
   app.post('/api/tools/scenes', wrap(async (req, res) => jobReply(res, studio.scenes(req.body))));
+  app.post('/api/tools/matte/start', wrap(async (req, res) => res.json(studio.matteStart(req.body))));
+  app.get('/api/tools/matte/:id/frames', wrap(async (req, res) => studio.matteFrames(req.params.id, res)));
+  app.post('/api/tools/matte/:id/mask', express.raw({ type: 'application/octet-stream', limit: '256mb' }), wrap(async (req, res) => res.json(await studio.matteMask(req.params.id, req.body))));
+  app.post('/api/tools/matte/:id/finish', wrap(async (req, res) => jobReply(res, studio.matteFinish(req.params.id))));
+  app.delete('/api/tools/matte/:id', wrap(async (req, res) => { studio.matteCancel(req.params.id); res.json({ ok: true }); }));
   app.post('/api/tools/silence', wrap(async (req, res) => res.json(await studio.silence(req.body))));
   app.post('/api/tools/audiofx', wrap(async (req, res) => res.json(studio.audioFx(req.body))));
   app.post('/api/tools/speech-audio', wrap(async (req, res) => { const r = await studio.speechAudio(req.body); res.json({ url: r.url, duration: r.duration }); }));

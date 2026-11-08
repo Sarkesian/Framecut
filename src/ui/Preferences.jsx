@@ -1,4 +1,5 @@
 // Preferences: storage locations, performance, captions engine, optional AI connection.
+import { matteStatus, deleteMatteModel, MATTE_MODEL } from '../lib/matte.js';
 import { useEffect, useState } from 'preact/hooks';
 import { HardDrive, Cpu, Captions, Bot, FolderOpen, Trash2, Check, TriangleAlert } from 'lucide-preact';
 import { prefs, savePrefs, health, toast } from '../lib/state.js';
@@ -46,8 +47,8 @@ function Storage() {
   </>;
 }
 function CaptionsAi() {
-  const p = prefs.value; const [w, setW] = useState(null);
-  useEffect(() => { whisperStatus().then(setW); }, []);
+  const p = prefs.value; const [w, setW] = useState(null), [bg, setBg] = useState(null);
+  useEffect(() => { whisperStatus().then(setW); matteStatus().then(setBg); }, []);
   return <>
     <h3>Automatic captions</h3>
     <p class="muted">Speech recognition runs on this computer with the open-source Whisper model. Nothing is uploaded.</p>
@@ -60,8 +61,10 @@ function CaptionsAi() {
       <Status ok label="Noise reduction, voice enhance, pitch" text="Built in (signal processing)" />
       <Status ok label="Silence removal & scene detection" text="Built in (audio/video analysis)" />
       <Status ok label="Stabilization & smooth slow motion" text="Built in (vid.stab, motion interpolation)" />
-      <Status ok={false} label="Background removal, upscaling, vocal isolation" text="Not included in this version" />
+      <Status ok label="Background removal (MODNet)" text={bg ? 'Installed · runs offline' : `Downloads on first use (${MATTE_MODEL.size})`} />
+      <Status ok={false} label="Upscaling, vocal isolation" text="Not included in this version" />
     </div>
+    {bg && <div class="row"><button class="btn sm" onClick={async () => { await deleteMatteModel(); setBg(false); toast('Background removal model deleted. It will download again if you use it.'); }}><Trash2 size={13} />Delete background removal model</button></div>}
   </>;
 }
 const Status = ({ ok, label, text }) => <div class="status-row">{ok ? <Check size={14} class="ok" /> : <TriangleAlert size={14} class="warnc" />}<b>{label}</b><span class="muted">{text}</span></div>;

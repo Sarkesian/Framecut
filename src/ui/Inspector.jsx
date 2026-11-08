@@ -11,6 +11,9 @@ import { RATIOS, RESOLUTIONS, FRAME_RATES, clipEnd, transitionPartner, maxTransi
 import { shortTime } from '../lib/format.js';
 import { userLuts } from '../lib/state.js';
 import { AudioPanel } from './AudioPanel.jsx';
+import { signal } from '@preact/signals';
+import { removeBackground, matteStatus, MATTE_MODEL } from '../lib/matte.js';
+import { confirm, Progress } from './kit.jsx';
 import { KEY_PROPS, EASINGS, hasKeys, anyKeys, keyAt, propValue, setKey, removeKey, writeProp } from '../../shared/keys.mjs';
 import { Diamond, ChevronLeft, ChevronRight } from 'lucide-preact';
 
@@ -79,8 +82,36 @@ function BasicPanel({ c }) {
       <div class="field"><label>Fit to canvas</label><Segmented value={c.fit || 'contain'} options={[['contain', 'Fit'], ['cover', 'Fill']]} onChange={v => set(c, 'Fit', 'fit', x => { x.fit = v; })} /></div>
       <div class="field-row">{[['l', 'Crop left'], ['r', 'Crop right'], ['t', 'Crop top'], ['b', 'Crop bottom']].map(([k, l]) => <Slider key={k} label={l} min={0} max={0.45} step={0.005} value={cr[k] || 0} def={0} fmt={v => Math.round(v * 100) + '%'} onChange={v => set(c, 'Crop', 'crop' + k, x => { x.crop[k] = v; })} />)}</div>
     </Section>}
+    {c.kind === 'video' && <CutoutSection c={c} />}
     {c.kind !== 'audio' && c.kind !== 'adjust' && <TransitionSection c={c} />}
   </>;
+}
+// Background removal (MODNet). Runs in the background; progress survives switching clips.
+const matteRun = signal(null);
+function CutoutSection({ c }) {
+  const run = matteRun.value, mine = run?.clipId === c.id, a = asset(c.mediaId);
+  const start = async () => {
+    if (window.__fc?.matteEngine !== 'synthetic' && !(await matteStatus())) {
+      const ok = await confirm({ title: 'Download background removal?', ok: 'Download and remove', text: `FrameCut uses ${MATTE_MODEL.name} (${MATTE_MODEL.license}). It downloads once (${MATTE_MODEL.size}) from Hugging Face, then runs entirely on this computer — your video never leaves it.` });
+      if (!ok) return;
+    }
+    const srcLen = c.duration * (c.speed || 1), from = Math.max(0, c.in - 0.5), to = Math.min(a.duration, c.in + srcLen + 0.5);
+    const ctrl = new AbortController(); matteRun.value = { clipId: c.id, progress: 0, message: 'Starting…', ctrl };
+    try {
+      const r = await removeBackground({ mediaId: c.mediaId, from, to, fps: project.value.settings.fps, signal: ctrl.signal, onProgress: p => { matteRun.value = { ...matteRun.value, ...(p.progress !== undefined && p.progress !== null ? { progress: p.progress } : {}), message: p.message || matteRun.value.message }; } });
+      const m = new Map(media.value); m.set(r.asset.id, r.asset); media.value = m;
+      updateClip(c.id, x => { x.cutout = { mediaId: x.cutout?.mediaId || x.mediaId, in: x.cutout?.in ?? x.in }; x.in = Math.max(0, x.in - r.from); x.mediaId = r.asset.id; }, { label: 'Remove background' });
+      toast('Background removed. Put another clip or a color on the track below to show behind it. Your original file is untouched.');
+    } catch (e) { if (!e.cancelled) toast('Background removal failed: ' + e.message, 'error'); }
+    finally { matteRun.value = null; }
+  };
+  const restore = () => updateClip(c.id, x => { x.mediaId = x.cutout.mediaId; x.in = x.cutout.in; delete x.cutout; }, { label: 'Restore background' });
+  return <Section title="Remove background" open={!!c.cutout || mine}>
+    {mine ? <div class="matte-run"><Progress value={run.progress} indeterminate={!run.progress} /><div class="row"><small class="muted grow">{run.message}</small><button class="btn ghost sm" onClick={() => run.ctrl.abort()}>Cancel</button></div></div>
+      : c.cutout ? <div class="row"><span class="badge ok"><Scissors size={11} />Background removed</span><span class="grow" /><button class="btn sm" onClick={restore}>Restore original</button></div>
+      : <><button class="btn block" disabled={!!run || a?.missing} onClick={start}><Wand2 size={14} />Remove background</button>
+        <p class="muted hint">Works best on people. Runs on this computer (GPU when available) and creates a separate cutout file.</p></>}
+  </Section>;
 }
 function TransitionSection({ c }) {
   const p = project.value; const partner = transitionPartner(p, c);
