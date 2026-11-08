@@ -1,0 +1,51 @@
+{
+  "name": "framecut-studio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A simple, local, single-user video editor",
+  "author": "FrameCut",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "build": "vite build",
+    "start": "npm run build && electron .",
+    "dev": "node desktop/server.cjs",
+    "test": "node --test tests/*.test.cjs",
+    "package": "npm run build && electron-builder --win portable --x64"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "ffmpeg-static": "^5.3.0",
+    "ffprobe-static": "^3.1.0",
+    "multer": "^2.0.2"
+  },
+  "devDependencies": {
+    "@huggingface/transformers": "^4.3.2",
+    "electron": "^45.2.2",
+    "electron-builder": "^26.0.12",
+    "playwright": "^1.56.1",
+    "vite": "^7.2.2"
+  },
+  "build": {
+    "appId": "local.framecut.studio",
+    "productName": "FrameCut Studio",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "desktop/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/**/*",
+      "node_modules/ffprobe-static/**/*"
+    ],
+    "win": {
+      "target": "portable",
+      "signAndEditExecutable": false
+    },
+    "portable": {
+      "artifactName": "FrameCut-Studio.exe"
+    }
+  }
+}
