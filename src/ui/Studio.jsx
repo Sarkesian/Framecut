@@ -11,6 +11,8 @@ import { newClip, clipEnd } from '../../shared/model.mjs';
 import { profileFx, AUDIO_PROFILES, duckKeys } from '../../shared/audio.mjs';
 import { devices, refreshDevices, ensurePermission, setOutput, activeOutput, deviceLabel, iconFor, isSpeaker, testSpeaker, quickSwap } from '../audio/devices.js';
 import { Capture, micCheck } from '../audio/capture.js';
+import { NativeCapture, nativeDevices } from '../audio/native.js';
+import { beginLiveTake, pushLivePeaks, endLiveTake } from './LiveTake.jsx';
 import { openMenu, Toggle, Slider, Segmented, Select, Section } from './kit.jsx';
 import { shortTime } from '../lib/format.js';
 
@@ -28,13 +30,35 @@ export const currentCapture = () => capture;
 export function openStudio() { studioOpen.value = true; }
 export function closeStudio() { if (recState.value === 'rec') return toast('Stop recording first.', 'warn'); studioOpen.value = false; focusMode.value = false; capture?.close(); capture = null; }
 
-export async function getCapture(deviceId) {
-  if (capture && capture.settings && (capture.settings.deviceId === deviceId || (!deviceId && capture.ctx))) return capture;
-  capture?.close(); capture = new Capture({ onMeter: m => (meter.value = m) });
-  capture.onEnded = () => { if (recState.value === 'rec') { stopRecording().then(() => toast('The microphone was disconnected. Your take up to that moment was saved.', 'warn')); } else toast('The microphone was disconnected.', 'warn'); };
-  await capture.open(deviceId); return capture;
+// Recording engine: 'pro' = native WASAPI (exclusive / raw), 'browser' = Chromium capture.
+let nativeOk = null;
+export const capInfo = signal(null); // settings of the open microphone (re-renders the input panel)
+const lastTake = signal(null);
+async function engineFor() {
+  if ((opts().engine || 'pro') === 'browser') return 'browser';
+  if (nativeOk === null) nativeOk = !!(await nativeDevices()).available;
+  return nativeOk ? 'native' : 'browser';
 }
-const opts = () => ({ playVideo: true, countdown: true, preroll: 0, monitor: false, trimSilence: true, ...(prefs.value.recording || {}) });
+export async function getCapture(deviceId) {
+  const eng = await engineFor();
+  if (capture && capture.settings && (capture.engine || 'browser') === eng && (capture.settings.deviceId === (deviceId || 'default') || capture.settings.deviceId === deviceId || (!deviceId && (capture.ctx || capture.engine === 'native')))) return capture;
+  await capture?.close();
+  const onMeter = m => { meter.value = m; if (recState.value === 'rec' && m.wave?.length) pushLivePeaks(m.wave); };
+  capture = eng === 'native' ? new NativeCapture({ onMeter }) : new Capture({ onMeter });
+  capture.onNotice = msg => toast(msg, 'info', { timeout: 7000 });
+  capture.onEnded = () => { if (recState.value === 'rec') { stopRecording().then(() => toast('The microphone was disconnected. Your take up to that moment was saved.', 'warn')); } else toast('The microphone was disconnected.', 'warn'); };
+  try { await capture.open(deviceId); }
+  catch (e) {
+    if (eng !== 'native') throw e;
+    // Pro capture unavailable for this device: fall back to the browser engine rather than failing.
+    toast('Pro recording could not open this microphone (' + e.message + '). Using standard recording.', 'warn');
+    capture = new Capture({ onMeter }); capture.onNotice = msg => toast(msg, 'info'); await capture.open(deviceId);
+  }
+  capInfo.value = { ...capture.settings, engine: capture.engine || 'browser' };
+  return capture;
+}
+const MODE_NAMES = { exclusive: 'Exclusive · bit-perfect', raw: 'Raw · no driver effects', shared: 'Shared', browser: 'Standard' };
+const opts = () => ({ engine: 'pro', playVideo: true, countdown: true, preroll: 0, monitor: false, trimSilence: true, ...(prefs.value.recording || {}) });
 const setOpt = patch => savePrefs({ recording: { ...opts(), ...patch } });
 
 export async function startRecording({ retake = false } = {}) {
@@ -53,10 +77,13 @@ export async function startRecording({ retake = false } = {}) {
   try {
     if (o.playVideo && pl) { pl.pause(); pl.seek(at - pre); }
     const info = await capture.start({ name: `Voiceover ${new Date().toLocaleString().replace(/[/:]/g, '-')}` });
-    recState.value = 'rec';
+    recState.value = 'rec'; capInfo.value = { ...capture.settings, engine: capture.engine || 'browser' };
     const lat = o.playVideo ? capture.latency(pl?.ctx) : 0;
     session = { at, pre, started: performance.now(), latency: lat, retakeOf: prev?.id || null, playing: o.playVideo };
     if (o.playVideo && pl) { pl.play(); session.timelineAtStart = at - pre; }
+    // Native capture starts in another process: add the measured gap between capture start and playback start.
+    if (o.playVideo && capture.markPlay) session.latency += capture.markPlay();
+    beginLiveTake(at - pre - (o.playVideo ? session.latency : 0), null);
     await capture.setMonitor(o.monitor, activeOutput.value);
   } catch (e) { recState.value = 'idle'; toast('Recording could not start: ' + e.message, 'error'); }
 }
@@ -95,11 +122,12 @@ export async function stopRecording() {
       c.trackId = track.id; p.clips.push(c); id = c.id;
     }, { select: [] });
     lastRecording.value = id; selection.value = [id];
-    const fmt = a.recording ? `${a.recording.sampleRate / 1000} kHz · 24-bit WAV` : 'WAV';
+    const R = a.recording || {}, fmt = R.sampleRate ? `${R.sampleRate / 1000} kHz · ${R.bits || 24}-bit${R.float ? ' float' : ''} WAV${R.mode ? ' · ' + MODE_NAMES[R.mode] : ''}` : 'WAV';
+    lastTake.value = { fmt, clipped: r.clipped || 0, effectiveBits: r.effectiveBits, bits: R.bits, float: R.float, limited: capture?.settings?.capability?.limited };
     toast(`${s.retakeOf ? 'New take' : 'Recording'} saved · ${shortTime(dur)} · ${fmt}${r.clipped ? ` · ${r.clipped} clipped samples — lower your input level` : ''}`, r.clipped ? 'warn' : 'info');
     if (project.value.settings.ducking?.on) applyDucking();
   } catch (e) { toast('The recording could not be saved: ' + e.message, 'error'); }
-  finally { recState.value = 'idle'; session = null; }
+  finally { recState.value = 'idle'; session = null; endLiveTake(); if (capture?.settings) capInfo.value = { ...capture.settings, engine: capture.engine || 'browser' }; }
 }
 export function cleanVoice(ids) {
   const p = project.value; const target = ids || (selection.value.length ? selection.value : lastRecording.value ? [lastRecording.value] : []);
@@ -193,6 +221,48 @@ function Meter() {
     <span class="mono db">{Number.isFinite(m.peakDb) ? m.peakDb.toFixed(0) : '−∞'} dB</span>
   </div>;
 }
+// Input format, hardware gain and automatic level setting.
+function InputPanel() {
+  const s = capInfo.value; const [busy, setBusy] = useState(null); const [gain, setGainState] = useState(null);
+  const q = useRef({ pending: null, inflight: false });
+  const g = gain ?? s?.gain;
+  if (!s) return null;
+  const native = s.engine === 'native';
+  const setGain = async v => {
+    setGainState({ ...(g || {}), db: v }); q.current.pending = v; if (q.current.inflight) return; q.current.inflight = true;
+    try { while (q.current.pending !== null) { const x = q.current.pending; q.current.pending = null; const r = await capture.setGain(x); if (q.current.pending === null) setGainState(r); } }
+    catch (e) { toast('Could not set the input level: ' + e.message, 'error'); } finally { q.current.inflight = false; }
+  };
+  const autoLevel = async () => {
+    setBusy('auto');
+    try {
+      let cur = g?.db ?? 0; const target = -10;
+      for (let pass = 0; pass < 3; pass++) {
+        toast(pass ? 'Once more — keep speaking…' : 'Speak at your normal recording volume for a few seconds…', 'info', { timeout: 3000 });
+        const peaks = []; const prev = capture.onMeter; capture.onMeter = m => { prev?.(m); if (Number.isFinite(m.peakDb)) peaks.push(m.peakDb); };
+        await new Promise(r => setTimeout(r, 3000)); capture.onMeter = prev;
+        const loud = peaks.sort((a, b) => b - a)[Math.floor(peaks.length * 0.03)] ?? -Infinity;
+        if (!(loud > -50)) { toast('No speech was detected. Check the microphone and try again.', 'warn'); return; }
+        const delta = target - loud; if (Math.abs(delta) < 2) { toast(`Level set: your voice peaks around ${loud.toFixed(0)} dB, with headroom for louder moments.`); return; }
+        const next = Math.max(g.min, Math.min(g.max, cur + delta));
+        if (Math.abs(next - cur) < 0.1) { toast(delta > 0 ? 'The input is already at maximum. Turn up the gain knob on your microphone or interface, or move closer.' : 'The input is already at minimum. Turn down the gain on your microphone or interface.', 'warn'); return; }
+        const r = await capture.setGain(next); setGainState(r); cur = r.db;
+      }
+      toast('Level adjusted. Check the meter while you speak — peaks around −10 dB are ideal.');
+    } catch (e) { toast(e.message, 'error'); } finally { setBusy(null); }
+  };
+  const t = lastTake.value;
+  return <div class="input-panel">
+    <div class="input-fmt"><span class={`chip ${native ? 'accent' : ''}`}>{native ? MODE_NAMES[s.mode] || 'Pro' : 'Standard'}</span><span class="muted mono">{s.sampleRate ? s.sampleRate / 1000 + ' kHz' : ''}{s.sampleSize ? ` · ${s.sampleSize}-bit` : ''}{s.channels ? ` · ${s.channels === 1 ? 'mono' : 'stereo'}` : ''}</span></div>
+    {s.capability?.limited && <div class="check warn"><TriangleAlert size={13} /><span>{s.capability.note}</span></div>}
+    {native && g && <>
+      <Slider label={`Input gain${g.hardware ? ' (device)' : ' (driver)'}`} min={g.min} max={g.max} step={Math.max(0.1, g.step || 0.5)} value={g.db} unit=" dB" disabled={recState.value === 'rec'} onChange={setGain} />
+      <button class="btn sm" disabled={!!busy || recState.value !== 'idle'} onClick={autoLevel} data-tip="Listens while you speak and sets the input gain so peaks land around −10 dB">{busy === 'auto' ? <LoaderCircle size={13} class="spin" /> : <Activity size={13} />}Set level for me</button>
+    </>}
+    {!native && <p class="muted hint">Standard recording can’t change the input level — set it in Windows sound settings, or switch to Pro in Recording options.</p>}
+    {t && <div class="muted hint last-take">Last take: {t.fmt}{t.clipped ? ` · ${t.clipped} clipped samples` : ' · no clipping'}{t.effectiveBits && !t.float && t.bits && t.effectiveBits < t.bits - 4 ? ` · the device only sends ${t.effectiveBits}-bit detail` : ''}</div>}
+  </div>;
+}
 function MicCheck() {
   const [res, setRes] = useState(null), [busy, setBusy] = useState(false);
   const run = async () => { setBusy(true); try { const c = await getCapture(prefs.value.audioInput); setRes(await micCheck(c, 3)); } catch (e) { toast(e.message, 'error'); } finally { setBusy(false); } };
@@ -254,6 +324,7 @@ export function StudioPanel() {
     <div class="studio-body">
       <div class="devices"><DeviceButton kind="input" /><DeviceButton kind="output" /></div>
       <Meter />
+      <InputPanel />
       <div class="rec-actions">
         {st === 'rec' ? <button class="rec-btn stop" onClick={stopRecording} data-tip="Stop" data-kbd="R"><Square size={18} fill="currentColor" /><span>Stop · {shortTime(elapsed)}</span></button>
           : st === 'count' ? <button class="rec-btn count" onClick={stopRecording}><b>{countdown.value}</b><span>Cancel</span></button>
@@ -276,7 +347,9 @@ export function StudioPanel() {
         <Toggle label="Hear yourself (monitoring)" on={o.monitor} onChange={v => { if (v && isSpeaker(deviceLabel(devices.value.outputs, activeOutput.value))) toast('Monitoring through speakers can cause feedback. Use headphones.', 'warn'); setOpt({ monitor: v }); capture?.setMonitor(v && recState.value === 'rec', activeOutput.value); }} />
         <div class="field"><label>Profile for new recordings</label><Select value={prefs.value.recordingProfile || 'original'} options={[...AUDIO_PROFILES, ...(prefs.value.audioProfiles || [])].map(x => [x.id, x.name])} onChange={v => savePrefs({ recordingProfile: v })} /></div>
         <MicCheck />
-        <p class="muted hint">Recordings are saved uncompressed (24-bit WAV) with Windows voice processing turned off. Input level is set in Windows sound settings.</p>
+        <div class="field"><label>Recording engine</label><Segmented value={o.engine || 'pro'} options={[['pro', 'Pro (WASAPI)'], ['browser', 'Standard']]} onChange={async v => { if (recState.value === 'rec') return; await setOpt({ engine: v }); nativeOk = null; try { await getCapture(prefs.value.audioInput); } catch (e) { toast(e.message, 'error'); } }} />
+          <small class="muted">Pro records straight from the device: bit-perfect in exclusive mode where the microphone allows it, otherwise raw (no driver effects). Standard uses Chromium’s capture.</small></div>
+        <p class="muted hint">Recordings are saved uncompressed as WAV with all Windows voice processing off.</p>
       </Section>
       <Section title="Mix" open>
         <button class="btn block" disabled={!!mixBusy} onClick={async () => { setMixBusy('bal'); try { await autoBalance(); } finally { setMixBusy(null); } }}>{mixBusy === 'bal' ? <LoaderCircle size={14} class="spin" /> : <Scale size={14} />}Auto balance levels</button>

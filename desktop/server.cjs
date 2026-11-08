@@ -12,6 +12,7 @@ const { Library } = require('./library.cjs');
 const { Projects } = require('./projects.cjs');
 const { Studio } = require('./studio.cjs');
 const { Recorder } = require('./recorder.cjs');
+const { NativeAudio } = require('./native-audio.cjs');
 const { audioFx: fxOf, audioChain } = require('../shared/audio.mjs');
 const { num } = require('../shared/model.mjs');
 
@@ -29,6 +30,7 @@ async function startServer({ dataDir = path.join(__dirname, '..', '.workspace'),
   const projects = new Projects({ dataDir }); await projects.init();
   const studio = new Studio({ library, jobs, cacheDir, dataDir, prefs: getPrefs });
   const recorder = new Recorder({ dir: path.join(dataDir, 'media', 'recordings'), library }); await recorder.init();
+  const nativeAudio = new NativeAudio({ dir: path.join(dataDir, 'media', 'recordings'), library }); await nativeAudio.init();
   let provider = { baseUrl: prefs.ai?.baseUrl || '', key: '', model: prefs.ai?.model || '', speechModel: prefs.ai?.speechModel || 'whisper-1' };
 
   const app = express();
@@ -178,7 +180,13 @@ async function startServer({ dataDir = path.join(__dirname, '..', '.workspace'),
   }));
 
   // ---------- Recording (24-bit WAV streamed to disk) ----------
-  app.get('/api/record/recovered', (_req, res) => { res.json(recorder.recovered || []); recorder.recovered = []; });
+  app.get('/api/record/recovered', (_req, res) => { res.json([...(recorder.recovered || []), ...(nativeAudio.recovered || [])]); recorder.recovered = []; nativeAudio.recovered = []; });
+  // Native WASAPI capture (exclusive / raw / shared), endpoint gain and live events.
+  app.get('/api/native-audio/devices', wrap(async (req, res) => res.json({ available: nativeAudio.available, devices: await nativeAudio.devices({ fresh: req.query.fresh === '1' }) })));
+  app.post('/api/native-audio/gain', wrap(async (req, res) => res.json(await nativeAudio.gain(req.body))));
+  app.post('/api/native-audio/start', wrap(async (req, res) => res.json(await nativeAudio.start(req.body))));
+  app.get('/api/native-audio/:id/events', (req, res) => nativeAudio.events(req.params.id, res));
+  app.post('/api/native-audio/:id/stop', wrap(async (req, res) => res.json(await nativeAudio.stop(req.params.id, req.body || {}))));
   app.post('/api/record/start', wrap(async (req, res) => res.json(await recorder.start(req.body))));
   app.post('/api/record/:id/chunk', express.raw({ type: 'application/octet-stream', limit: '64mb' }), wrap(async (req, res) => res.json(await recorder.chunk(req.params.id, req.body))));
   app.post('/api/record/:id/finish', wrap(async (req, res) => res.json(await recorder.finish(req.params.id))));
@@ -236,7 +244,7 @@ async function startServer({ dataDir = path.join(__dirname, '..', '.workspace'),
 
   const server = await new Promise(resolve => { const s = app.listen(port, '127.0.0.1', () => resolve(s)); });
   const url = 'http://127.0.0.1:' + server.address().port;
-  return { url, library, projects, jobs, studio, async close() { for (const j of jobs.jobs.values()) jobs.cancel(j.id); await library.flush().catch(() => {}); server.close(); } };
+  return { url, library, projects, jobs, studio, async close() { await nativeAudio.stopAll(); for (const j of jobs.jobs.values()) jobs.cancel(j.id); await library.flush().catch(() => {}); server.close(); } };
 }
 if (require.main === module) startServer({ port: +process.env.PORT || 0 }).then(s => console.log('FRAMECUT_URL=' + s.url));
 module.exports = { startServer, run, ffmpeg, ffprobe, num };

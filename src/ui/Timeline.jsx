@@ -1,4 +1,5 @@
 // Multitrack timeline: tracks, clips (filmstrips, waveforms), playhead, snapping, trimming, dragging and drops.
+import { LiveTakeRow } from './LiveTake.jsx';
 import { useEffect, useRef, useState, useMemo } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { Scissors, Trash2, Copy, Undo2, Redo2, Magnet, ZoomIn, ZoomOut, Maximize, Eye, EyeOff, Lock, LockOpen, Volume2, VolumeX, Plus, Film, Music, Type, Layers, Snowflake, Unlink, Pencil, ArrowLeftToLine, ArrowRightToLine, Diamond, Gauge, Blend, Captions, Sparkles, Mic, MoreHorizontal } from 'lucide-preact';
@@ -77,6 +78,7 @@ export function Timeline() {
       <div class="tl-inner" style={{ width: width + HEADER_W }}>
         <div class="ruler-row"><div class="corner"><button class="btn ghost sm" onClick={e => openMenu(e, [{ label: 'Add track' }, ...['video', 'audio', 'text', 'effect'].map(k => ({ text: { video: 'Video overlay track', audio: 'Audio track', text: 'Text track', effect: 'Effect track' }[k], icon: KIND_ICON[k], onClick: () => commit('Add track', d => { addTrack(d, k); }) }))], { align: 'below' })}><Plus size={13} />Track</button></div><Ruler width={width} z={z} onPointerDown={scrub} /></div>
         {p.tracks.map(t => <TrackRow key={t.id} t={t} z={z} width={width} />)}
+        <LiveTakeRow z={z} width={width} />
         <div class="tl-tail" style={{ width: width + HEADER_W }} />
         {snapLine.value !== null && <div class="snap-line" style={{ left: HEADER_W + snapLine.value * z }} />}
         {dropHint.value && <div class="drop-hint" style={{ left: HEADER_W + dropHint.value.x, top: dropHint.value.y, width: dropHint.value.w, height: dropHint.value.h }} />}

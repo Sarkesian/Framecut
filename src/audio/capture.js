@@ -22,7 +22,7 @@ export class Capture {
     this.source.connect(this.node);
     this.monitorGain = this.ctx.createGain(); this.monitorGain.gain.value = 0; this.source.connect(this.monitorGain).connect(this.ctx.destination);
     this.node.port.onmessage = ({ data }) => {
-      if (data.type === 'meter') { this.lastMeter = data; this.onMeter?.({ peakDb: db(data.peak), rmsDb: db(data.rms), clip: data.clip, channels: data.channels }); }
+      if (data.type === 'meter') { this.lastMeter = data; this.onMeter?.({ peakDb: db(data.peak), rmsDb: db(data.rms), clip: data.clip, channels: data.channels, wave: data.wave }); }
       if (data.type === 'pcm' && this.recId) { const id = this.recId; const body = data.data; this.bytes += body.byteLength; this.queue = this.queue.then(() => fetch(`/api/record/${id}/chunk`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body }).then(r => { if (!r.ok) throw Error('The recording could not be written to disk.'); })).catch(e => { this.error = e; }); }
       if (data.type === 'started') this._started?.(data);
       if (data.type === 'stopped') this._stopped?.();
@@ -66,6 +66,6 @@ export async function micCheck(capture, seconds = 3) {
     level: peak > -0.5 ? 'too-loud' : peak > -18 ? 'good' : peak > -30 ? 'quiet' : 'very-quiet',
     noisy: floor > -50,
     processing: { echoCancellation: capture.settings.echoCancellation, noiseSuppression: capture.settings.noiseSuppression, autoGainControl: capture.settings.autoGainControl },
-    format: `Device delivers ${capture.settings.sampleRate / 1000} kHz${capture.settings.sampleSize ? ` / ${capture.settings.sampleSize}-bit` : ""} ${capture.settings.channels === 1 ? "mono" : "stereo"} · saved losslessly as 24-bit WAV`,
+    format: capture.engine === 'native' ? `${{ exclusive: 'Exclusive (bit-perfect)', raw: 'Raw (no driver effects)', shared: 'Shared' }[capture.settings.mode] || 'Pro'} · ${capture.settings.sampleRate / 1000} kHz / ${capture.settings.sampleSize}-bit ${capture.settings.channels === 1 ? 'mono' : 'stereo'} · saved as WAV without conversion` : `Device delivers ${capture.settings.sampleRate / 1000} kHz${capture.settings.sampleSize ? ` / ${capture.settings.sampleSize}-bit` : ""} ${capture.settings.channels === 1 ? "mono" : "stereo"} · saved losslessly as 24-bit WAV`,
   };
 }
