@@ -13,7 +13,7 @@ export function loadImage(src) {
 }
 export const svgUrl = svg => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
 
-function fontString(s, px) { return `${s.italic ? 'italic ' : ''}${s.bold ? '700' : '400'} ${px}px "${String(s.font || 'Segoe UI').replace(/"/g, '')}", "Segoe UI Emoji", sans-serif`; }
+export function fontString(s, px) { return `${s.italic ? 'italic ' : ''}${s.bold ? '700' : '400'} ${px}px "${String(s.font || 'Segoe UI').replace(/"/g, '')}", "Segoe UI Emoji", sans-serif`; }
 
 // Lays out words into lines, honoring explicit newlines and an optional max width.
 function layout(ctx, text, maxWidth) {
@@ -32,6 +32,18 @@ function layout(ctx, text, maxWidth) {
 
 export function textKey(clip, H, variant) { return JSON.stringify([clip.text, clip.style, clip.caption, H, variant ?? null, clip.caption ? clip.words?.map(w => w.text) : null]); }
 
+// Padding around the glyphs inside a text raster (outline, shadow, background box). Shared with the
+// in-viewer text editor so its caret lines up with the rendered text.
+export function textMetrics(s, H) {
+  s = { ...TEXT_STYLE, ...s };
+  const px = Math.max(4, s.size * H);
+  const stroke = (s.strokeWidth || 0) * px, shadow = (s.shadowOpacity || 0) > 0 ? (s.shadowBlur || 0) * px * 0.6 + px * 0.08 : 0;
+  const box = (s.bgOpacity || 0) > 0;
+  const padX = box ? px * 0.38 : 0, padY = box ? px * 0.16 : 0;
+  const margin = Math.ceil(stroke + shadow + 2);
+  return { px, stroke, shadow, box, padX, padY, margin, lineH: px * (s.lineHeight || 1.15) };
+}
+
 // Returns {canvas, w, h} for a text clip at canvas height H. variant = index of highlighted word.
 export function renderText(clip, W, H, variant = null) {
   const key = textKey(clip, H, variant); if (cache.has(key)) return cache.get(key);
@@ -45,10 +57,7 @@ export function renderText(clip, W, H, variant = null) {
   const space = ctx.measureText(' ').width;
   const widths = lines.map(l => ctx.measureText(l.join(' ')).width);
   const blockW = Math.max(px * 0.5, ...widths), blockH = lines.length * lineH;
-  const stroke = (s.strokeWidth || 0) * px, shadow = (s.shadowOpacity || 0) > 0 ? (s.shadowBlur || 0) * px * 0.6 + px * 0.08 : 0;
-  const box = (s.bgOpacity || 0) > 0;
-  const padX = box ? px * 0.38 : 0, padY = box ? px * 0.16 : 0;
-  const margin = Math.ceil(stroke + shadow + 2);
+  const { stroke, shadow, box, padX, padY, margin } = textMetrics(s, H);
   const w = Math.ceil(blockW + padX * 2 + margin * 2), h = Math.ceil(blockH + padY * 2 + margin * 2);
   c.width = w; c.height = h; ctx = c.getContext('2d');
   ctx.font = fontString(s, px); ctx.letterSpacing = `${(s.letterSpacing || 0) * px}px`; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round'; ctx.miterLimit = 2;

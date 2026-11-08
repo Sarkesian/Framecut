@@ -150,3 +150,14 @@
 .kf-btn.on svg { fill: currentColor; }
 .key-nav { display: flex; align-items: center; gap: 6px; margin: 4px 0 10px; font-size: 12px; }
 .key-nav .select { width: auto; flex: 1; min-width: 0; }
+/* Viewer snapping guides, locks, multi-selection and in-viewer text editing */
+.snap-guide { position: absolute; pointer-events: none; z-index: 3; background: #ff4fd8; }
+.snap-guide.v { width: 1px; margin-left: -.5px; } .snap-guide.h { height: 1px; margin-top: -.5px; }
+.snap-guide.k-center { background: var(--accent); box-shadow: 0 0 3px var(--accent); }
+.snap-guide.k-safe { background: none; border-left: 1px dashed rgba(255,255,255,.7); } .snap-guide.h.k-safe { border-left: 0; border-top: 1px dashed rgba(255,255,255,.7); }
+.sel-outline { position: absolute; border: 1px dashed var(--accent-line); pointer-events: none; }
+.gizmo.locked { border-style: dashed; border-color: rgba(255,255,255,.5); cursor: not-allowed; }
+.gizmo-lock { position: absolute; right: -9px; top: -9px; width: 18px; height: 18px; border-radius: 50%; background: var(--bg-3); color: var(--text-2); display: grid; place-items: center; border: 1px solid var(--line-2); }
+.gizmo.editing { cursor: text; border-style: dashed; }
+.gizmo-edit { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; border: 0; outline: none; resize: none; overflow: hidden; background: transparent; color: transparent; caret-color: var(--accent); box-sizing: border-box; }
+.gizmo-edit::selection { background: rgba(182,243,106,.35); color: transparent; }

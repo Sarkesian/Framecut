@@ -1,10 +1,12 @@
 // Right panel: properties for whatever is selected.
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useState, useRef } from 'preact/hooks';
 import { useDraft } from './kit.jsx';
-import { FlipHorizontal2, FlipVertical2, RotateCcw, Trash2, Rewind, Snowflake, Gauge, Scissors, AudioLines, Unlink, Wand2, X, Plus, AlignLeft, AlignCenter, AlignRight, Bold, Italic, CaseUpper, Film, Type, Music, Sparkles, LoaderCircle, Scan, Layers } from 'lucide-preact';
+import { Lock, FlipHorizontal2, FlipVertical2, RotateCcw, Trash2, Rewind, Snowflake, Gauge, Scissors, AudioLines, Unlink, Wand2, X, Plus, AlignLeft, AlignCenter, AlignRight, Bold, Italic, CaseUpper, Film, Type, Music, Sparkles, LoaderCircle, Scan, Layers } from 'lucide-preact';
 import { project, primary, selection, time, toast, asset, media, player, commit, fonts, prefs } from '../lib/state.js';
 import { api, waitJob } from '../lib/api.js';
-import { updateClip, updateClips, setSpeed, detachAudio, splitAt, trackOf, freeTrack } from '../lib/edit.js';
+import { updateClip, updateClips, setSpeed, detachAudio, splitAt, trackOf, freeTrack, setClipText } from '../lib/edit.js';
+import { toggleLock } from '../lib/viewport.js';
+import { dimensions } from '../../shared/model.mjs';
 import { Slider, Toggle, Segmented, Select, Color, Section, Empty } from './kit.jsx';
 import { ANIMATIONS, EFFECTS, FILTERS, TRANSITIONS, effectDef, filterDef, TEXT_STYLE, CAPTION_STYLE } from '../../shared/catalog.mjs';
 import { RATIOS, RESOLUTIONS, FRAME_RATES, clipEnd, transitionPartner, maxTransition, newClip, DEFAULT_COLOR, DEFAULT_TRANSFORM } from '../../shared/model.mjs';
@@ -68,11 +70,13 @@ function KeyNav({ c }) {
 function BasicPanel({ c }) {
   const T = { ...DEFAULT_TRANSFORM, ...c.transform }, cr = c.crop || {};
   const tr = (k, label) => v => set(c, label, 'tr' + k, x => { x.transform[k] = v; });
+  // Position is shown and typed in project pixels from the frame centre; scale in percent.
+  const [PW, PH] = dimensions(project.value.settings.ratio, project.value.settings.resolution);
   return <>
-    <Section title="Position & size" right={<button class="btn ghost sm" onClick={() => set(c, 'Reset transform', 'trreset', x => { x.transform = { ...DEFAULT_TRANSFORM }; })}><RotateCcw size={12} />Reset</button>}>
-      <Keyed c={c} prop="scale" label="Scale" min={0.05} max={4} step={0.01} def={1} fmt={v => Math.round(v * 100) + '%'} />
-      <Keyed c={c} prop="x" label="X" min={-1} max={1} step={0.001} def={0} fmt={v => Math.round(v * 100) + '%'} />
-      <Keyed c={c} prop="y" label="Y" min={-1} max={1} step={0.001} def={0} fmt={v => Math.round(v * 100) + '%'} />
+    <Section title="Position & size" right={<span class="row" style={{ gap: 2 }}><button class={`icon-btn sm ${c.locked ? 'on' : ''}`} data-tip={c.locked ? 'Unlock position' : 'Lock position (prevents accidental moves)'} data-kbd="Ctrl+L" aria-pressed={!!c.locked} onClick={() => toggleLock([c.id])}><Lock size={13} /></button><button class="btn ghost sm" onClick={() => set(c, 'Reset transform', 'trreset', x => { x.transform = { ...DEFAULT_TRANSFORM }; delete x.keyframes; })}><RotateCcw size={12} />Reset</button></span>}>
+      <Keyed c={c} prop="scale" label="Scale" min={0.05} max={4} step={0.01} def={1} fmt={v => Math.round(v * 1000) / 10 + '%'} editScale={100} />
+      <Keyed c={c} prop="x" label="X" min={-1} max={1} step={1 / PW} def={0} fmt={v => Math.round(v * PW) + ' px'} editScale={PW} />
+      <Keyed c={c} prop="y" label="Y" min={-1} max={1} step={1 / PH} def={0} fmt={v => Math.round(v * PH) + ' px'} editScale={PH} />
       <Keyed c={c} prop="rotation" label="Rotation" min={-180} max={180} step={0.5} def={0} unit="°" />
       <Keyed c={c} prop="opacity" label="Opacity" min={0} max={1} step={0.01} def={1} fmt={v => Math.round(v * 100) + '%'} />
       <KeyNav c={c} />
@@ -211,6 +215,7 @@ async function splitScenes(c) {
 function TextPanel({ c }) {
   const s = { ...(c.caption ? CAPTION_STYLE : TEXT_STYLE), ...c.style };
   const [text, setText] = useDraft(c.text);
+  const session = useRef(Date.now());
   const [allCaps, setAllCaps] = useState(true);
   const st = (k, label) => v => {
     if (c.caption && allCaps) commit(label, p => { for (const x of p.clips) if (x.trackId === c.trackId) x.style = { ...x.style, [k]: v }; }, { key: 'ts' + k });
@@ -219,11 +224,12 @@ function TextPanel({ c }) {
   const fontList = [...new Set([...fonts.value.user.map(f => f.family), ...fonts.value.system])];
   return <div class="insp-text">
     <Section title={c.caption ? 'Caption text' : 'Text'}>
-      <textarea class="input" rows={3} value={text} onInput={e => setText(e.target.value)} onBlur={e => { const v = e.target.value; if (v !== c.text) updateClip(c.id, x => { x.text = v; x.name = v.split('\n')[0].slice(0, 40); if (x.words && x.words.length !== v.split(/\s+/).filter(Boolean).length) x.words = null; }, { label: 'Edit text' }); }} aria-label="Text content" />
+      {/* Every keystroke updates the preview; the whole typing session (focus → blur) is one undo step. */}
+      <textarea class="input" rows={3} value={text} onFocus={() => { session.current = Date.now(); }} onInput={e => { const v = e.target.value; setText(v); setClipText(c.id, v, session.current); }} aria-label="Text content" />
       {c.caption && <Toggle label="Apply style to all captions" on={allCaps} onChange={setAllCaps} />}
     </Section>
     <Section title="Font">
-      <div class="field"><input class="input" list="font-list" value={s.font} onChange={e => st('font', 'Font')(e.target.value)} aria-label="Font" style={{ fontFamily: s.font }} /><datalist id="font-list">{fontList.map(f => <option key={f} value={f} />)}</datalist></div>
+      <div class="field"><input class="input" list="font-list" value={s.font} onInput={e => e.target.value.trim() && st('font', 'Font')(e.target.value)} aria-label="Font" style={{ fontFamily: s.font }} /><datalist id="font-list">{fontList.map(f => <option key={f} value={f} />)}</datalist></div>
       <Slider label="Size" min={0.015} max={0.35} step={0.001} value={s.size} def={c.caption ? 0.052 : 0.075} fmt={v => Math.round(v * 1000) / 10 + '%'} onChange={st('size', 'Text size')} />
       <div class="row"><Segmented value={s.align} options={[['left', '', AlignLeft, 'Align left'], ['center', '', AlignCenter, 'Center'], ['right', '', AlignRight, 'Align right']]} onChange={st('align', 'Align')} />
         <button class={`icon-btn ${s.bold ? 'on' : ''}`} data-tip="Bold" onClick={() => st('bold', 'Bold')(!s.bold)}><Bold size={15} /></button>
