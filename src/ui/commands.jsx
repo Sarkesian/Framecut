@@ -1,6 +1,8 @@
 // Central command registry: menu bar, keyboard shortcuts and the shortcut reference.
 import { Scissors, Copy, ClipboardPaste, Trash2, Undo2, Redo2, Type, Upload, Mic, Captions, ZoomIn, ZoomOut, Maximize, Settings, Keyboard, Download, FolderOpen, Plus, Save, ArrowLeft, Magnet, Sparkles, Film, Blend } from 'lucide-preact';
-import { project, selection, player, time, undo, redo, toast, saveNow, closeProject, commit, zoom, libraryTab, duration, primary } from '../lib/state.js';
+import { project, selection, player, time, undo, redo, toast, saveNow, closeProject, commit, zoom, libraryTab, duration, primary, history, menu } from '../lib/state.js';
+import { effect } from '@preact/signals';
+import { isDragging, stopDrag } from '../lib/drag.js';
 import { api, native, pickMedia } from '../lib/api.js';
 import { splitAt, deleteClips, duplicateClips, copyClips, cutClips, pasteClips, selectAll, addText, addAssets, trimClip, applyTransition, updateClips, closeAllGaps } from '../lib/edit.js';
 import { clipEnd, mainTrack, trackClips, RATIOS, RESOLUTIONS, FRAME_RATES } from '../../shared/model.mjs';
@@ -76,8 +78,8 @@ export const ACTIONS = [
   { id: 'deselect', label: 'Clear selection', keys: ['Escape'], run: () => { if (ui.value.blade) { setUi({ blade: false }); return; } selection.value = []; clearKeys(); }, group: 'Edit' },
   { id: 'lock', label: 'Lock / unlock selected', keys: ['Ctrl+L'], run: () => toggleLock(), group: 'Edit' },
   { id: 'mute', label: 'Mute / unmute clip', keys: ['Ctrl+M'], run: toggleMute, group: 'Edit' },
-  { id: 'undo', label: 'Undo', keys: ['Ctrl+Z'], icon: Undo2, run: () => { const l = undo(); if (l) toast('Undid ' + l.toLowerCase()); }, group: 'Edit' },
-  { id: 'redo', label: 'Redo', keys: ['Ctrl+Y', 'Ctrl+Shift+Z'], icon: Redo2, run: () => { const l = redo(); if (l) toast('Redid ' + l.toLowerCase()); }, group: 'Edit' },
+  { id: 'undo', label: 'Undo', keys: ['Ctrl+Z'], icon: Undo2, run: () => { const l = undo(); toast(l ? 'Undid ' + l.toLowerCase() : 'Nothing left to undo.'); }, group: 'Edit' },
+  { id: 'redo', label: 'Redo', keys: ['Ctrl+Y', 'Ctrl+Shift+Z'], icon: Redo2, run: () => { const l = redo(); toast(l ? 'Redid ' + l.toLowerCase() : 'Nothing to redo.'); }, group: 'Edit' },
 
   { id: 'add-text', label: 'Add text', keys: ['T'], icon: Type, run: () => { addText(); libraryTab.value = 'text'; }, group: 'Insert' },
   { id: 'add-video', label: 'Import video & photos', keys: ['V'], icon: Upload, run: () => { libraryTab.value = 'media'; importMedia(); }, group: 'Insert' },
@@ -110,9 +112,29 @@ function keyName(e) {
   if (k.length === 1) k = k.toUpperCase();
   return [...parts, k].join('+');
 }
+// Undo / redo are universal: they work from anywhere — a focused search box, dropdown, slider value,
+// open menu or dialog. The only exception is a text box with typing that hasn't been applied to the
+// project yet; there the first Ctrl+Z undoes the typing, the way people expect from any text field.
+const HISTORY_KEYS = new Set(['CTRL+Z', 'CTRL+Y', 'CTRL+SHIFT+Z']);
+const TEXT_FIELD = 'textarea, [contenteditable], input:not([type]), input[type=text], input[type=search], input[type=number], input[type=email], input[type=url], input[type=password]';
+let pendingTyping = null; // the text field with typing not yet committed to the project
+effect(() => { history.value; pendingTyping = null; }); // any project change applies (or discards) pending typing
+function onTyping(e) { if (e.target.matches?.(TEXT_FIELD)) pendingTyping = e.target; }
+function historyKey(e, name, a) {
+  if (isDragging()) { e.preventDefault(); e.stopPropagation(); stopDrag('cancel'); return true; } // mid-drag: undo = cancel the drag in progress
+  const t = e.target, field = t.closest?.(TEXT_FIELD);
+  if (field && pendingTyping === field && document.activeElement === field) return false; // let the field undo its own typing
+  e.preventDefault(); e.stopPropagation();
+  if (menu.value) menu.value = null;
+  if (field || t.closest?.('select')) t.blur(); // the field re-reads the undone value
+  a.run(); return true;
+}
 export function installShortcuts() {
   const map = new Map(); for (const a of ACTIONS) for (const k of a.keys) map.set(k.toUpperCase(), a);
+  document.addEventListener('input', onTyping, true);
   const handler = e => {
+    const name0 = keyName(e).toUpperCase();
+    if (HISTORY_KEYS.has(name0)) { if (historyKey(e, name0, map.get(name0))) return; return; }
     if (document.querySelector('.backdrop, .menu')) return;
     const t = e.target; const typing = t.closest?.('input, textarea, select, [contenteditable]') && !(t.type === 'range');
     if (typing) { if ((e.ctrlKey || e.metaKey) && ['s', 'e'].includes(e.key.toLowerCase())) { e.preventDefault(); t.blur(); } else return; }
@@ -121,8 +143,8 @@ export function installShortcuts() {
     if (!a) return;
     e.preventDefault(); e.stopPropagation(); a.run();
   };
-  window.addEventListener('keydown', handler);
-  return () => window.removeEventListener('keydown', handler);
+  window.addEventListener('keydown', handler, true); // capture: fields and widgets can't swallow undo / redo
+  return () => { window.removeEventListener('keydown', handler, true); document.removeEventListener('input', onTyping, true); };
 }
 
 export function menus() {
