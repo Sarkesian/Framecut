@@ -10,7 +10,7 @@
     "start": "npm run build && electron .",
     "dev": "node desktop/server.cjs",
     "test": "node --test tests/*.test.cjs",
-    "test:ui": "npm run build && node tests/ui-journey.cjs && node tests/studio-journey.cjs",
+    "test:ui": "npm run build && node tests/ui-journey.cjs && node tests/studio-journey.cjs && node tests/qol-journey.cjs",
     "package": "npm run build && electron-builder --win portable --x64",
     "build:native": "node scripts/build-native.cjs",
     "build:icons": "electron scripts/build-icons.cjs",

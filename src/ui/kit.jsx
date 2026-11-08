@@ -114,7 +114,8 @@ export function useDraft(source) {
 }
 
 // ---------- Controls ----------
-export function Slider({ label, value, min, max, step = 0.01, onChange, onCommit, def, unit = '', fmt, disabled }) {
+// editScale: the typed number is value × editScale (e.g. 100 for percent, frame width for pixels).
+export function Slider({ label, value, min, max, step = 0.01, onChange, onCommit, def, unit = '', fmt, disabled, editScale = 1 }) {
   const v = Number.isFinite(+value) ? +value : def ?? min;
   const show = fmt ? fmt(v) : (Math.abs(step) >= 1 ? Math.round(v) : +v.toFixed(2)) + unit;
   const [edit, setEdit] = useState(null);
@@ -122,8 +123,8 @@ export function Slider({ label, value, min, max, step = 0.01, onChange, onCommit
   return <div class="slider">
     <div class="slider-head"><span class="ellipsis">{label}</span><span class="row" style={{ gap: 2 }}>
       {def !== undefined && Math.abs(v - def) > 1e-6 && <button class="icon-btn sm reset" data-tip="Reset" onClick={() => (onCommit || onChange)(def)}><RotateCcw size={12} /></button>}
-      <input class="val" value={edit ?? show} disabled={disabled} onFocus={e => { setEdit(String(+v.toFixed(3))); setTimeout(() => e.target.select()); }} onInput={e => setEdit(e.target.value)}
-        onBlur={() => { const n = parseFloat(edit); setEdit(null); if (Number.isFinite(n)) (onCommit || onChange)(Math.min(max, Math.max(min, n))); }} onKeyDown={e => e.key === 'Enter' && e.target.blur()} />
+      <input class="val" value={edit ?? show} disabled={disabled} aria-label={label + ' value'} onFocus={e => { setEdit(String(+(v * editScale).toFixed(editScale > 1 ? 2 : 3))); setTimeout(() => e.target.select()); }} onInput={e => setEdit(e.target.value)}
+        onBlur={() => { const n = parseFloat(edit); setEdit(null); if (Number.isFinite(n)) (onCommit || onChange)(Math.min(max, Math.max(min, n / editScale))); }} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { setEdit(null); e.stopPropagation(); setTimeout(() => e.target.blur()); } }} />
     </span></div>
     <input type="range" min={min} max={max} step={step} value={v} disabled={disabled} style={{ '--fill': pct + '%' }} aria-label={label}
       onInput={e => onChange(+e.target.value)} onChange={e => onCommit?.(+e.target.value)} onDblClick={() => def !== undefined && (onCommit || onChange)(def)} />

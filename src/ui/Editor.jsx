@@ -16,6 +16,7 @@ import { TaskIndicator } from './Tasks.jsx';
 import { studioOpen, focusMode, StudioPanel, FocusScript } from './Studio.jsx';
 import { WaveEditor } from './WaveEditor.jsx';
 import { applySavedOutput } from '../audio/devices.js';
+import { beginDrag } from '../lib/drag.js';
 
 function usePanelSize(key, initial, min, max) {
   const [size, setSize] = useState(() => { try { return Math.min(max, Math.max(min, +localStorage.getItem('fc:' + key) || initial)); } catch { return initial; } });
@@ -24,11 +25,13 @@ function usePanelSize(key, initial, min, max) {
 }
 function Splitter({ dir, onDrag, onReset, label }) {
   const start = e => {
-    e.preventDefault(); const el = e.currentTarget; el.setPointerCapture(e.pointerId); el.classList.add('active');
+    if (e.button !== 0) return; e.preventDefault(); const el = e.currentTarget; el.classList.add('active');
     let last = dir === 'v' ? e.clientX : e.clientY;
-    const move = ev => { const p = dir === 'v' ? ev.clientX : ev.clientY; onDrag(p - last); last = p; };
-    const up = () => { el.classList.remove('active'); el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); window.dispatchEvent(new Event('resize')); };
-    el.addEventListener('pointermove', move); el.addEventListener('pointerup', up);
+    beginDrag(e, {
+      cursor: dir === 'v' ? 'col-resize' : 'row-resize',
+      move: ev => { const p = dir === 'v' ? ev.clientX : ev.clientY; onDrag(p - last); last = p; },
+      end: () => { el.classList.remove('active'); window.dispatchEvent(new Event('resize')); },
+    });
   };
   return <div class={`splitter ${dir}`} role="separator" aria-label={label} onPointerDown={start} onDblClick={onReset} />;
 }

@@ -1,7 +1,8 @@
 // Application state (Preact signals), editing history and autosave.
-import { signal, computed, batch } from '@preact/signals';
+import { signal, computed, batch, effect } from '@preact/signals';
 import { normalizeProject, packMain, projectDuration } from '../../shared/model.mjs';
 import { api } from './api.js';
+import { ui, setUi } from './uiprefs.js';
 
 export const route = signal({ name: 'home' });
 export const prefs = signal({});
@@ -23,21 +24,32 @@ export const saveState = signal('saved'); // saved | saving | error | unsaved
 export const history = signal({ past: [], future: [] });
 export const drag = signal(null); // transient timeline drag/trim preview
 export const libraryTab = signal('media');
-export const zoom = signal(80); // timeline pixels per second
+export const zoom = signal(Math.min(800, Math.max(4, +ui.value.zoom || 80))); // timeline pixels per second
+effect(() => { const z = zoom.value; if (ui.peek().zoom !== z) setUi({ zoom: z }); });
 export const duration = computed(() => (project.value ? projectDuration(project.value) : 0));
 export const primary = computed(() => { const p = project.value, id = selection.value[0]; return p && id ? p.clips.find(c => c.id === id) || null : null; });
 export const player = { current: null };
 
-let coalesce = { key: null, at: 0 };
+// Pointer gestures: every commit made between a press and its release (plus that release's own handlers)
+// belongs to one gesture. Commits with the same key coalesce into ONE undo entry for the whole gesture —
+// however long the user pauses mid-drag — and two separate drags never merge. Keyboard/typing edits without
+// a gesture coalesce while they keep coming within `window` ms (default 1.2 s).
+const gesture = { id: 0, active: false };
+if (typeof window !== 'undefined') {
+  window.addEventListener('pointerdown', e => { if (!e.isTrusted) return; gesture.id++; gesture.active = true; }, true);
+  const release = e => { if (e.isTrusted) setTimeout(() => { gesture.active = false; }, 0); };
+  window.addEventListener('pointerup', release, true); window.addEventListener('pointercancel', release, true);
+}
+let coalesce = { key: null, at: 0, g: null };
 // Apply an edit: fn receives a draft copy; history records the previous version.
-export function commit(label, fn, { key = null, select } = {}) {
+export function commit(label, fn, { key = null, select, window: win = 1200 } = {}) {
   const prev = project.value; if (!prev) return;
   const draft = structuredClone(prev);
   const result = fn(draft); if (result === false) return;
   packMain(draft);
-  const now = Date.now();
-  const merge = key && coalesce.key === key && now - coalesce.at < 1200;
-  coalesce = { key, at: now };
+  const now = Date.now(), g = gesture.active ? gesture.id : null;
+  const merge = !!key && coalesce.key === key && (g !== null || coalesce.g !== null ? g === coalesce.g : now - coalesce.at < win);
+  coalesce = { key, at: now, g };
   batch(() => {
     const h = history.value;
     history.value = { past: merge ? h.past : [...h.past.slice(-149), { project: prev, label, selection: selection.value }], future: [] };
@@ -48,15 +60,17 @@ export function commit(label, fn, { key = null, select } = {}) {
   scheduleSave();
   player.current?.invalidate();
 }
+// Starts a new undo entry for the next commit even if its key matches the previous one.
+export const breakCoalesce = () => { coalesce = { key: null, at: 0, g: null }; };
 export function undo() {
   const h = history.value; const last = h.past.at(-1); if (!last) return null;
   batch(() => { history.value = { past: h.past.slice(0, -1), future: [{ project: project.value, label: last.label, selection: selection.value }, ...h.future] }; project.value = last.project; selection.value = last.selection.filter(id => last.project.clips.some(c => c.id === id)); });
-  coalesce = { key: null, at: 0 }; scheduleSave(); player.current?.invalidate(); return last.label;
+  coalesce = { key: null, at: 0, g: null }; scheduleSave(); player.current?.invalidate(); return last.label;
 }
 export function redo() {
   const h = history.value; const next = h.future[0]; if (!next) return null;
   batch(() => { history.value = { past: [...h.past, { project: project.value, label: next.label, selection: selection.value }], future: h.future.slice(1) }; project.value = next.project; selection.value = next.selection; });
-  scheduleSave(); player.current?.invalidate(); return next.label;
+  coalesce = { key: null, at: 0, g: null }; scheduleSave(); player.current?.invalidate(); return next.label;
 }
 
 let saveTimer, saving = Promise.resolve();

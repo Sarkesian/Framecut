@@ -6,6 +6,7 @@ import { project, primary, time, player, commit, toast, asset, selection } from 
 import { splitAt } from '../lib/edit.js';
 import { clipEnd, uid } from '../../shared/model.mjs';
 import { keyGain } from '../../shared/audio.mjs';
+import { beginDrag } from '../lib/drag.js';
 
 const peaksCache = new Map();
 export function WaveEditor() {
@@ -35,10 +36,13 @@ export function WaveEditor() {
   if (!a.audio) return <div class="wave-editor empty"><span class="muted">This clip has no sound.</span></div>;
   const toLocal = e => { const r = cv.current.getBoundingClientRect(); return Math.max(0, Math.min(c.duration, view.t0 + (e.clientX - r.left) / r.width * (view.t1 - view.t0))); };
   const down = e => {
-    const t0 = toLocal(e); cv.current.setPointerCapture(e.pointerId); let moved = false;
-    const mv = ev => { const t1 = toLocal(ev); if (Math.abs(t1 - t0) > 0.01) { moved = true; setSel([Math.min(t0, t1), Math.max(t0, t1)]); } };
-    const up = () => { cv.current.removeEventListener('pointermove', mv); cv.current.removeEventListener('pointerup', up); if (!moved) { setSel(null); player.current?.seek(c.start + t0); } };
-    cv.current.addEventListener('pointermove', mv); cv.current.addEventListener('pointerup', up);
+    if (e.button !== 0) return;
+    const t0 = toLocal(e);
+    beginDrag(e, {
+      threshold: 3,
+      move: ev => { const t1 = toLocal(ev); setSel([Math.min(t0, t1), Math.max(t0, t1)]); },
+      end: (_, { moved }) => { if (!moved) { setSel(null); player.current?.seek(c.start + t0); } },
+    });
   };
   const wheel = e => { if (!e.ctrlKey) { e.preventDefault(); setScroll(s => Math.max(0, Math.min(c.duration - c.duration / zoom, s + e.deltaY / 400 * (c.duration / zoom)))); return; } e.preventDefault(); const z2 = Math.max(1, Math.min(200, zoom * (e.deltaY < 0 ? 1.25 : 0.8))); const at = toLocal(e); setZoom(z2); setScroll(Math.max(0, Math.min(c.duration - c.duration / z2, at - (at - view.t0) * zoom / z2))); };
   const need = () => { if (!sel) { toast('Drag across the waveform to select a part first.', 'warn'); return false; } return true; };
