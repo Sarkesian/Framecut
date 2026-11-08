@@ -66,7 +66,12 @@ const shots = path.resolve('test-output');
     const box = page.locator('.lib-search input'); await box.fill(''); await box.type('heart');
     const pBefore = await snap(); await page.keyboard.press('Control+z');
     assert.equal(await snap(), pBefore, 'typing-only Ctrl+Z leaves the project alone'); assert.notEqual(await box.inputValue(), 'heart', 'and undoes the typing');
-    results.push('unsaved typing in a text box — Ctrl+Z undoes the typing first');
+    // …and pressing Ctrl+Z again keeps going: once the typing is undone, the project is next.
+    for (let i = 0; i < 8 && (await box.inputValue()) !== 'star'; i++) await page.keyboard.press('Control+z');
+    assert.equal(await box.inputValue(), 'star', 'typing fully undone, back to what the box held before'); const pTyped = await snap();
+    await page.keyboard.press('Control+z'); await page.waitForTimeout(200);
+    assert.notEqual(await snap(), pTyped, 'the next Ctrl+Z, still in the same box, undoes the project');
+    results.push('unsaved typing in a text box — Ctrl+Z undoes the typing first, then carries on undoing the project');
     for (const r of results) console.log('  ✓ ' + r);
     console.log('ERRORS', JSON.stringify(errors)); assert.deepEqual(errors, []);
     console.log('PASS: undo');

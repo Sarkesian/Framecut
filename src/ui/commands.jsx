@@ -117,13 +117,16 @@ function keyName(e) {
 // project yet; there the first Ctrl+Z undoes the typing, the way people expect from any text field.
 const HISTORY_KEYS = new Set(['CTRL+Z', 'CTRL+Y', 'CTRL+SHIFT+Z']);
 const TEXT_FIELD = 'textarea, [contenteditable], input:not([type]), input[type=text], input[type=search], input[type=number], input[type=email], input[type=url], input[type=password]';
-let pendingTyping = null; // the text field with typing not yet committed to the project
+let pendingTyping = null, typingBaseline = null; // the text field with typing not yet committed, and its value before
 effect(() => { history.value; pendingTyping = null; }); // any project change applies (or discards) pending typing
-function onTyping(e) { if (e.target.matches?.(TEXT_FIELD)) pendingTyping = e.target; }
+const fieldValue = el => (el.value ?? el.textContent ?? '');
+function onBeforeTyping(e) { const t = e.target; if (t.matches?.(TEXT_FIELD) && pendingTyping !== t && e.inputType !== 'historyUndo') { pendingTyping = t; typingBaseline = fieldValue(t); } }
+// Once the field's own undo has taken it back to where it started, Ctrl+Z goes back to undoing the project.
+function onTyping(e) { if (e.target === pendingTyping && fieldValue(e.target) === typingBaseline) pendingTyping = null; }
 function historyKey(e, name, a) {
   if (isDragging()) { e.preventDefault(); e.stopPropagation(); stopDrag('cancel'); return true; } // mid-drag: undo = cancel the drag in progress
   const t = e.target, field = t.closest?.(TEXT_FIELD);
-  if (field && pendingTyping === field && document.activeElement === field) return false; // let the field undo its own typing
+  if (field && pendingTyping === field && document.activeElement === field && fieldValue(field) !== typingBaseline) return false; // let the field undo its own typing
   e.preventDefault(); e.stopPropagation();
   if (menu.value) menu.value = null;
   if (field || t.closest?.('select')) t.blur(); // the field re-reads the undone value
@@ -131,7 +134,7 @@ function historyKey(e, name, a) {
 }
 export function installShortcuts() {
   const map = new Map(); for (const a of ACTIONS) for (const k of a.keys) map.set(k.toUpperCase(), a);
-  document.addEventListener('input', onTyping, true);
+  document.addEventListener('beforeinput', onBeforeTyping, true); document.addEventListener('input', onTyping, true);
   const handler = e => {
     const name0 = keyName(e).toUpperCase();
     if (HISTORY_KEYS.has(name0)) { if (historyKey(e, name0, map.get(name0))) return; return; }
@@ -144,7 +147,7 @@ export function installShortcuts() {
     e.preventDefault(); e.stopPropagation(); a.run();
   };
   window.addEventListener('keydown', handler, true); // capture: fields and widgets can't swallow undo / redo
-  return () => { window.removeEventListener('keydown', handler, true); document.removeEventListener('input', onTyping, true); };
+  return () => { window.removeEventListener('keydown', handler, true); document.removeEventListener('input', onTyping, true); document.removeEventListener('beforeinput', onBeforeTyping, true); };
 }
 
 export function menus() {
