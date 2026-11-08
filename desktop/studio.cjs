@@ -14,23 +14,6 @@ const { spawn } = require('node:child_process');
 const f = n => String(+(+n).toFixed(4));
 const progressFrom = (dur, progress) => d => { const m = [...String(d).matchAll(/out_time_us=(\d+)/g)].at(-1); if (m && dur > 0) progress(+m[1] / 1e6 / dur); };
 
-function audioFxFilter(fx = {}) {
-  const parts = [];
-  if (fx.denoise > 0) parts.push(`afftdn=nr=${f(6 + fx.denoise * 24)}:nf=-40`);
-  switch (fx.eq) {
-    case 'voice': parts.push('highpass=f=90', 'equalizer=f=250:t=q:w=1:g=-3', 'equalizer=f=3000:t=q:w=1:g=4'); break;
-    case 'bass': parts.push('bass=g=7'); break;
-    case 'treble': parts.push('treble=g=6'); break;
-    case 'warm': parts.push('equalizer=f=200:t=q:w=1:g=3', 'treble=g=-2'); break;
-    case 'phone': parts.push('highpass=f=400', 'lowpass=f=3200'); break;
-    case 'radio': parts.push('highpass=f=250', 'lowpass=f=5000', 'equalizer=f=1500:t=q:w=1:g=5'); break;
-  }
-  if (fx.pitch) parts.push(`rubberband=pitch=${f(Math.pow(2, fx.pitch / 12))}`);
-  if (fx.echo > 0) parts.push(`aecho=0.8:0.8:${Math.round(180 + fx.echo * 520)}:${f(0.2 + fx.echo * 0.4)}`);
-  if (fx.reverb > 0) { const r = fx.reverb; parts.push(`aecho=0.8:0.85:41|67|97|131:${f(0.32 * r)}|${f(0.25 * r)}|${f(0.18 * r)}|${f(0.12 * r)}`); }
-  if (fx.normalize) parts.push('loudnorm=I=-16:TP=-1.5:LRA=11');
-  return parts.join(',') || 'anull';
-}
 
 class Studio {
   constructor({ library, jobs, cacheDir, dataDir, prefs }) { this.library = library; this.jobs = jobs; this.cacheDir = cacheDir; this.dataDir = dataDir; this.prefs = prefs; }
@@ -217,4 +200,4 @@ function toSrt(project, range) {
     .filter(c => c.start + c.duration > from && c.start < to);
   return caps.map((c, i) => `${i + 1}\n${srtTime(Math.max(0, c.start - from))} --> ${srtTime(Math.min(to, c.start + c.duration) - from)}\n${c.text}\n`).join('\n');
 }
-module.exports = { Studio, audioFxFilter, toSrt };
+module.exports = { Studio, toSrt };

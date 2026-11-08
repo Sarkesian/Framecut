@@ -11,6 +11,8 @@ import { RATIOS, RESOLUTIONS, FRAME_RATES, clipEnd, transitionPartner, maxTransi
 import { shortTime } from '../lib/format.js';
 import { userLuts } from '../lib/state.js';
 import { AudioPanel } from './AudioPanel.jsx';
+import { KEY_PROPS, EASINGS, hasKeys, anyKeys, keyAt, propValue, setKey, removeKey, writeProp } from '../../shared/keys.mjs';
+import { Diamond, ChevronLeft, ChevronRight } from 'lucide-preact';
 
 const KIND = { video: ['Video', Film], image: ['Photo', Film], audio: ['Audio', Music], text: ['Text', Type], sticker: ['Sticker', Sparkles], adjust: ['Effect layer', Layers] };
 const TABS = { video: ['Basic', 'Color', 'Effects', 'Animation', 'Speed', 'Audio'], image: ['Basic', 'Color', 'Effects', 'Animation'], text: ['Text', 'Basic', 'Animation'], sticker: ['Basic', 'Animation'], audio: ['Audio', 'Speed'], adjust: ['Color', 'Effects'] };
@@ -32,15 +34,45 @@ export function Inspector() {
 const ids = () => selection.value;
 const set = (c, label, key, fn) => updateClips(ids().filter(id => project.value.clips.find(x => x.id === id)?.kind === c.kind || id === c.id), fn, { label, key: key + ':' + c.id });
 
+// A transform slider with a keyframe toggle. Animated properties show their value at the playhead,
+// and changing them adds or updates the keyframe there.
+function Keyed({ c, prop, label, ...rest }) {
+  const u = Math.min(Math.max(0, time.value - c.start), c.duration), animated = hasKeys(c, prop), on = !!keyAt(c, prop, u);
+  const inside = time.value >= c.start - 1e-6 && time.value <= clipEnd(c) + 1e-6;
+  const change = v => animated ? updateClip(c.id, x => writeProp(x, prop, v, u), { label: label + ' keyframe', key: 'kf' + prop + c.id + u.toFixed(3) })
+    : set(c, label, 'tr' + prop, x => { x.transform[prop] = v; });
+  const toggle = () => {
+    if (!inside) return toast('Move the playhead over this clip to add a keyframe.', 'warn');
+    updateClip(c.id, x => { if (on) removeKey(x, prop, u); else setKey(x, prop, u, propValue(x, prop, u)); }, { label: on ? 'Remove keyframe' : 'Add keyframe' });
+  };
+  return <div class="keyed"><Slider label={label} value={propValue(c, prop, u)} onChange={change} {...rest} />
+    <button class={`kf-btn ${on ? 'on' : animated ? 'part' : ''}`} data-tip={on ? 'Remove keyframe at playhead' : 'Add keyframe at playhead'} aria-pressed={on} onClick={toggle}><Diamond size={12} /></button></div>;
+}
+function KeyNav({ c }) {
+  if (!anyKeys(c)) return <p class="hint">Click a ◇ to add a keyframe at the playhead, then move the playhead and change the value to animate.</p>;
+  const times = [...new Set(KEY_PROPS.flatMap(p => (c.keyframes?.[p] || []).map(k => +k.t.toFixed(4))))].sort((a, b) => a - b);
+  const u = time.value - c.start, prev = times.filter(k => k < u - 1e-3).at(-1), next = times.find(k => k > u + 1e-3);
+  const go = k => player.current?.seek(c.start + k);
+  const here = KEY_PROPS.map(p => keyAt(c, p, u)).filter(Boolean);
+  return <div class="key-nav">
+    <button class="btn sm ghost" disabled={prev === undefined} data-tip="Previous keyframe" onClick={() => go(prev)}><ChevronLeft size={14} /></button>
+    <span class="muted">{times.length} keyframe{times.length === 1 ? '' : 's'}</span>
+    <button class="btn sm ghost" disabled={next === undefined} data-tip="Next keyframe" onClick={() => go(next)}><ChevronRight size={14} /></button>
+    {here.length > 0 && <Select value={here[0].e || 'smooth'} label="Easing" options={EASINGS.map(e => [e.id, e.name])} onChange={v => updateClip(c.id, x => { for (const p of KEY_PROPS) { const k = keyAt(x, p, u); if (k) k.e = v; } }, { label: 'Keyframe easing' })} />}
+    <button class="btn sm ghost" data-tip="Remove all keyframes" onClick={() => updateClip(c.id, x => { for (const p of KEY_PROPS) if (x.keyframes?.[p]?.length) { x.transform[p] = propValue(x, p, u); } delete x.keyframes; }, { label: 'Clear keyframes' })}><Trash2 size={13} /></button>
+  </div>;
+}
 function BasicPanel({ c }) {
   const T = { ...DEFAULT_TRANSFORM, ...c.transform }, cr = c.crop || {};
   const tr = (k, label) => v => set(c, label, 'tr' + k, x => { x.transform[k] = v; });
   return <>
     <Section title="Position & size" right={<button class="btn ghost sm" onClick={() => set(c, 'Reset transform', 'trreset', x => { x.transform = { ...DEFAULT_TRANSFORM }; })}><RotateCcw size={12} />Reset</button>}>
-      <Slider label="Scale" min={0.05} max={4} step={0.01} value={T.scale} def={1} fmt={v => Math.round(v * 100) + '%'} onChange={tr('scale', 'Scale')} />
-      <div class="field-row"><Slider label="X" min={-1} max={1} step={0.001} value={T.x} def={0} fmt={v => Math.round(v * 100) + '%'} onChange={tr('x', 'Move')} /><Slider label="Y" min={-1} max={1} step={0.001} value={T.y} def={0} fmt={v => Math.round(v * 100) + '%'} onChange={tr('y', 'Move')} /></div>
-      <Slider label="Rotation" min={-180} max={180} step={0.5} value={T.rotation} def={0} unit="°" onChange={tr('rotation', 'Rotate')} />
-      <Slider label="Opacity" min={0} max={1} step={0.01} value={T.opacity} def={1} fmt={v => Math.round(v * 100) + '%'} onChange={tr('opacity', 'Opacity')} />
+      <Keyed c={c} prop="scale" label="Scale" min={0.05} max={4} step={0.01} def={1} fmt={v => Math.round(v * 100) + '%'} />
+      <Keyed c={c} prop="x" label="X" min={-1} max={1} step={0.001} def={0} fmt={v => Math.round(v * 100) + '%'} />
+      <Keyed c={c} prop="y" label="Y" min={-1} max={1} step={0.001} def={0} fmt={v => Math.round(v * 100) + '%'} />
+      <Keyed c={c} prop="rotation" label="Rotation" min={-180} max={180} step={0.5} def={0} unit="°" />
+      <Keyed c={c} prop="opacity" label="Opacity" min={0} max={1} step={0.01} def={1} fmt={v => Math.round(v * 100) + '%'} />
+      <KeyNav c={c} />
       <div class="row"><button class={`btn sm ${T.flipH ? 'primary' : ''}`} onClick={() => set(c, 'Flip', 'flipH', x => { x.transform.flipH = !T.flipH; })}><FlipHorizontal2 size={14} />Flip</button><button class={`btn sm ${T.flipV ? 'primary' : ''}`} onClick={() => set(c, 'Flip', 'flipV', x => { x.transform.flipV = !T.flipV; })}><FlipVertical2 size={14} />Flip vertical</button></div>
     </Section>
     {(c.kind === 'video' || c.kind === 'image') && <Section title="Frame">

@@ -168,7 +168,7 @@ async function startServer({ dataDir = path.join(__dirname, '..', '.workspace'),
   app.post('/api/tools/speech', wrap(async (req, res) => {
     const { from = 0, to } = req.body; const a = studio.asset(req.body.mediaId); const end = to ?? a.duration;
     const { intervals } = await studio.silence({ mediaId: a.id, from, to: end, threshold: req.body.threshold ?? -40, minSilence: req.body.minSilence ?? 0.35 });
-    const speech = []; let cur = from; for (const s of intervals) { if (s.start - cur > 0.08) speech.push({ start: cur, end: s.start }); cur = Math.max(cur, s.end); } if (end - cur > 0.08) speech.push({ start: cur, end });
+    const speech = []; let cur = from; for (const s of intervals) { if (s.start - cur > 0.04) speech.push({ start: cur, end: s.start }); cur = Math.max(cur, s.end); } if (end - cur > 0.04) speech.push({ start: cur, end });
     res.json({ speech });
   }));
 

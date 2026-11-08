@@ -4,6 +4,7 @@ import { substitute, EASE, evaluate, fmtNum } from './expr.mjs';
 import { transitionDef, animDef, effectDef, fx } from './catalog.mjs';
 import { clipEnd, srcOut, isVisual, transitionPartner } from './model.mjs';
 import { needsProcessing, fxKey, keyGain, mergeKeys } from './audio.mjs';
+import { keyExpr as transformKeyExpr, baseValue } from './keys.mjs';
 
 const f = fmtNum;
 function bake(expr, { T0, D, start }) {
@@ -24,7 +25,7 @@ export function buildPlan(project, { W, H, media = () => null, sizes = () => nul
   const byTrack = id => project.clips.filter(c => c.trackId === id).sort((a, b) => a.start - b.start);
   const bg = project.settings.background || {};
   const motion = new Map(); // clipId -> {x:[], y:[], s:[], r:[], fades:[], steps:[]}
-  const M = id => { if (!motion.has(id)) motion.set(id, { x: [], y: [], s: [], r: [], fades: [], steps: [], vs: null, ve: null }); return motion.get(id); };
+  const M = id => { if (!motion.has(id)) motion.set(id, { x: [], y: [], s: [], r: [], fades: [], steps: [], vs: null, ve: null, alpha: null }); return motion.get(id); };
 
   // Pass 1: timing windows, transitions and animations.
   for (const c of project.clips) {
@@ -42,6 +43,16 @@ export function buildPlan(project, { W, H, media = () => null, sizes = () => nul
       if (def) { add(def, { T0, D: d, start: c.start }); if (def.alpha === 'ramp') m.fades.push({ dir: 'out', st: T0, d }); }
     }
     if (c.animLoop?.id && c.kind !== 'adjust') { const def = animDef('loop', c.animLoop.id); if (def) add(def, { start: c.start }); }
+    // Keyframes replace the static value: expressed as offsets/factors on top of the base transform.
+    if (c.keyframes && c.kind !== 'adjust') {
+      const K = p => (c.keyframes[p]?.length ? transformKeyExpr(c.keyframes[p], c.start) : null);
+      const kx = K('x'), ky = K('y'), ks = K('scale'), kr = K('rotation'), ko = K('opacity');
+      if (kx) m.x.push(`(${kx})-(${f(baseValue(c, 'x'))})`);
+      if (ky) m.y.push(`(${ky})-(${f(baseValue(c, 'y'))})`);
+      if (ks) m.s.push(`max(0.01,${ks})/${f(Math.max(0.01, baseValue(c, 'scale')))}`);
+      if (kr) m.r.push(`(${kr})-(${f(baseValue(c, 'rotation'))})`);
+      if (ko) m.alpha = `clip(${ko},0,1)`;
+    }
     for (const e of c.effects || []) if (e.id === 'shake') { m.x.push(bake(fx.shakeX(e.amount ?? 0.5), { start: c.start })); m.y.push(bake(fx.shakeY(e.amount ?? 0.5), { start: c.start })); }
   }
   const dips = [];
@@ -82,6 +93,7 @@ export function buildPlan(project, { W, H, media = () => null, sizes = () => nul
   const mediaLayer = (c, track) => {
     const m = M(c.id), a = media(c.mediaId) || {};
     const L = { id: c.id, type: isRaster(c) ? 'raster' : c.kind === 'adjust' ? 'adjust' : 'media', clip: c, trackId: track.id, vs: m.vs, ve: m.ve, ...geometry(c), motion: exprOf(m), fades: m.fades, steps: m.steps };
+    if (m.alpha) { L.alphaExpr = m.alpha; L.opacity = 1; }
     if (L.type === 'media') { L.mediaId = c.mediaId; L.image = c.kind === 'image' || a.kind === 'image'; L.srcDuration = a.duration || 0; }
     if (c.kind === 'text' && c.style?.highlight && c.words?.length) L.variants = c.words.map((w, i) => ({ key: 'w' + i, from: c.start + w.start, to: i + 1 < c.words.length ? c.start + c.words[i + 1].start : clipEnd(c) }));
     return L;
@@ -113,7 +125,7 @@ export function buildPlan(project, { W, H, media = () => null, sizes = () => nul
 // ----- Evaluation helpers used by the preview -----
 export function layerState(L, t) {
   const vars = { t };
-  let alpha = L.opacity ?? 1;
+  let alpha = L.alphaExpr ? Math.min(1, Math.max(0, evaluate(L.alphaExpr, vars))) : L.opacity ?? 1;
   for (const fd of L.fades) {
     const k = fd.d > 0 ? Math.min(1, Math.max(0, (t - fd.st) / fd.d)) : 1;
     alpha *= fd.dir === 'in' ? k : 1 - k;

@@ -136,6 +136,8 @@ function renderPlan(raw, { assets, rasters = {}, luts = {}, processedAudio = {},
       const post = [...cc.tail, 'format=rgba'];
       if ((L.opacity ?? 1) < 0.999) post.push(`colorchannelmixer=aa=${f(Math.max(0, L.opacity))}`);
       post.push(`setpts=PTS+${f(vs)}/TB`);
+      // Animated opacity: per-frame alpha multiply (geq evaluates T in timeline seconds after setpts).
+      if (L.alphaExpr) post.push(`geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*(${L.alphaExpr.replace(/\bt\b/g, 'T')})'`);
       for (const fd of L.fades) post.push(`fade=t=${fd.dir}:st=${f(fd.st)}:d=${f(Math.max(0.01, fd.d))}:alpha=1`);
       for (const s of L.steps) post.push(`fade=t=in:st=${f(s.at)}:d=${f(1 / fps)}:alpha=1`);
       const m = L.motion;

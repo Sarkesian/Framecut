@@ -2,10 +2,11 @@
 // live metering, mic check, takes/retakes, mistake markers, script reader and one-click cleanup.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { signal } from '@preact/signals';
-import { Mic, Square, RotateCcw, FileText, Wand2, X, Headphones, Speaker, Usb, Monitor, Pin, PinOff, Volume2, Check, TriangleAlert, Activity, Focus, ChevronDown, Flag, Repeat, Scale, Waves, LoaderCircle } from 'lucide-preact';
+import { Mic, Square, RotateCcw, FileText, Wand2, X, Headphones, Speaker, Usb, Monitor, Pin, PinOff, Volume2, Check, TriangleAlert, Activity, Focus, ChevronDown, Flag, Repeat, Scale, Waves, LoaderCircle, Captions } from 'lucide-preact';
 import { project, player, time, toast, prefs, savePrefs, commit, media, selection, playing, asset } from '../lib/state.js';
 import { api } from '../lib/api.js';
-import { freeTrack, addTrack, trackOf } from '../lib/edit.js';
+import { freeTrack, addTrack, trackOf, insertCaptions } from '../lib/edit.js';
+import { alignScript } from '../../shared/script.mjs';
 import { newClip, clipEnd } from '../../shared/model.mjs';
 import { profileFx, AUDIO_PROFILES, duckKeys } from '../../shared/audio.mjs';
 import { devices, refreshDevices, ensurePermission, setOutput, activeOutput, deviceLabel, iconFor, isSpeaker, testSpeaker, quickSwap } from '../audio/devices.js';
@@ -124,13 +125,34 @@ export async function autoBalance(onProgress) {
   commit('Auto balance', d => { for (const c of d.clips) if (gains[c.id]) c.volume = +gains[c.id].toFixed(3); });
   toast(`Balanced ${Object.keys(gains).length} clip${Object.keys(gains).length === 1 ? '' : 's'}: voices at ${p.settings.mix?.voiceTarget ?? -16} LUFS${voices.length && bgs.length ? `, background at ${p.settings.mix?.musicTarget ?? -26} LUFS` : ''}.`);
 }
+// Speech intervals (timeline seconds) of the given voice clips.
+async function voiceSpeech(voices, { minSilence = 0.35 } = {}) {
+  const speech = [];
+  for (const v of voices) {
+    try { const r = await api('/api/tools/speech', { mediaId: v.mediaId, from: v.in, to: v.in + v.duration * (v.speed || 1), threshold: -42, minSilence }); for (const s of r.speech) { const a = v.start + (s.start - v.in) / (v.speed || 1), b = v.start + (s.end - v.in) / (v.speed || 1); if (b > v.start && a < clipEnd(v)) speech.push({ start: Math.max(v.start, a), end: Math.min(clipEnd(v), b) }); } } catch {}
+  }
+  return speech.sort((a, b) => a.start - b.start);
+}
+// Turn the script into captions timed to the recorded voice (pause-based estimate).
+export async function scriptToCaptions() {
+  const p = project.value, text = p.script?.text || '';
+  if (!text.trim()) return toast('Write or import a script first.', 'warn');
+  const sel = selection.value.map(id => p.clips.find(c => c.id === id)).filter(c => c && trackOf(p, c.trackId)?.voice);
+  const voices = sel.length ? sel : voiceClips(p);
+  if (!voices.length) return toast('Record your voiceover first — captions are timed to your voice.', 'warn');
+  const speech = await voiceSpeech(voices, { minSilence: 0.25 });
+  if (!speech.length) return toast('No speech was detected in the voice track.', 'warn');
+  const range = [Math.min(...voices.map(v => v.start)), Math.max(...voices.map(clipEnd))];
+  const segs = alignScript(text, speech, { span: range });
+  if (!segs.length) return toast('Could not time the script to this recording.', 'warn');
+  insertCaptions(segs, { replaceRange: range });
+  toast(`Added ${segs.length} captions from your script, timed to your pauses. Check them on the Captions track — for word-exact timing use Auto captions.`);
+  return segs;
+}
 export async function applyDucking() {
   const p = project.value; const d0 = { on: true, amount: -12, speed: 'normal', ...(p.settings.ducking || {}) };
   const voices = voiceClips(p); if (!voices.length) { toast('Ducking needs a voice track. Record a voiceover, or right-click an audio track and mark it as a voice track.', 'warn'); return; }
-  const speech = [];
-  for (const v of voices) {
-    try { const r = await api('/api/tools/speech', { mediaId: v.mediaId, from: v.in, to: v.in + v.duration * (v.speed || 1), threshold: -42, minSilence: 0.35 }); for (const s of r.speech) { const a = v.start + (s.start - v.in) / (v.speed || 1), b = v.start + (s.end - v.in) / (v.speed || 1); if (b > v.start && a < clipEnd(v)) speech.push({ start: Math.max(v.start, a), end: Math.min(clipEnd(v), b) }); } } catch {}
-  }
+  const speech = await voiceSpeech(voices);
   const timing = { fast: { attack: 0.12, release: 0.35 }, normal: { attack: 0.25, release: 0.6 }, slow: { attack: 0.5, release: 1.2 } }[d0.speed] || { attack: 0.25, release: 0.6 };
   commit('Auto ducking', d => { d.settings.ducking = d0; for (const c of backgroundClips(d)) c.duckKeys = duckKeys(c, speech, { amount: d0.amount, ...timing }); });
   toast(`Background audio now dips ${Math.abs(d0.amount)} dB while you speak.`);
@@ -212,6 +234,7 @@ function Script() {
       <Slider label="Text size" min={16} max={64} step={1} value={sc.size} def={30} unit="px" onChange={v => save({ size: v })} />
       <div class="row"><Toggle label="Auto-scroll" on={sc.autoscroll} onChange={v => save({ autoscroll: v })} /><Toggle label="Focus line" on={sc.focus} onChange={v => save({ focus: v })} /></div>
       {sc.autoscroll && <Slider label="Scroll speed" min={0.3} max={3} step={0.05} value={sc.speed} def={1} unit="×" onChange={v => save({ speed: v })} />}
+      <button class="btn sm" onClick={scriptToCaptions} data-tip="Adds the script as captions timed to your recorded voice"><Captions size={13} />Captions from script</button>
       <div class="muted hint">~{Math.round(sc.text.split(/\s+/).filter(Boolean).length / 150 * 60)} s at a natural pace · progress {lines.length ? Math.round((line + 1) / lines.length * 100) : 0}%</div>
     </div>}
   </div>;

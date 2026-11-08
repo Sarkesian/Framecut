@@ -140,3 +140,13 @@
 .export-progress { display: flex; flex-direction: column; gap: 10px; padding: 10px 0; }
 .export-done { display: flex; gap: 14px; align-items: center; } .export-done div { display: flex; flex-direction: column; min-width: 0; }
 .done-badge { width: 30px; height: 30px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; }
+/* Keyframed sliders */
+.keyed { display: flex; align-items: flex-end; gap: 6px; }
+.keyed > :first-child { flex: 1; min-width: 0; }
+.kf-btn { width: 24px; height: 24px; margin-bottom: 4px; display: grid; place-items: center; border-radius: 6px; color: var(--text-3, #888); background: transparent; border: 1px solid transparent; cursor: pointer; }
+.kf-btn:hover { color: var(--text, #eee); background: rgba(255,255,255,.06); }
+.kf-btn.part { color: #ffd64d; }
+.kf-btn.on { color: #1a1a1a; background: #ffd64d; }
+.kf-btn.on svg { fill: currentColor; }
+.key-nav { display: flex; align-items: center; gap: 6px; margin: 4px 0 10px; font-size: 12px; }
+.key-nav .select { width: auto; flex: 1; min-width: 0; }

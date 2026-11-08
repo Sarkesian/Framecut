@@ -68,3 +68,38 @@ test('Service: legacy migration, import in place, derivatives, projects, tools a
     const denied = await fetch(s.url + '/api/projects', { headers: { Origin: 'https://evil.example' } }); assert.equal(denied.status, 403);
   } finally { await s?.close(); await fs.rm(dir, { recursive: true, force: true }).catch(() => {}); }
 });
+
+test('Proxies: 4K and unplayable files get playback copies; export still uses the originals', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'framecut-proxy-')); let s;
+  try {
+    const uhd = path.join(dir, 'Drone 4K.mp4'), avi = path.join(dir, 'Old camera.avi');
+    // Fine 2-pixel checkerboard over a test pattern: detail a downscaled proxy cannot carry.
+    const pat = path.join(dir, 'pattern.png');
+    await run(ffmpeg, ['-y', '-f', 'lavfi', '-i', 'testsrc2=s=3840x2160', '-frames:v', '1', '-vf', "geq=r='if(mod(floor(X/2)+floor(Y/2),2),r(X,Y),255-r(X,Y))':g='g(X,Y)':b='b(X,Y)'", pat]);
+    await run(ffmpeg, ['-y', '-loop', '1', '-framerate', '30', '-i', pat, '-t', '2', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '10', '-pix_fmt', 'yuv420p', uhd]);
+    await run(ffmpeg, ['-y', '-f', 'lavfi', '-i', 'testsrc2=s=640x360:r=25', '-f', 'lavfi', '-i', 'sine=frequency=330:sample_rate=44100', '-t', '2', '-c:v', 'mpeg4', '-c:a', 'pcm_s16le', avi]);
+    s = await startServer({ dataDir: path.join(dir, 'data') }); const call = api(s.url);
+    const { assets } = await call('/api/media/import', { paths: [uhd, avi] });
+    assert.equal(assets.length, 2); assert.ok(assets.every(a => a.needsProxy), 'both need a playback copy');
+    let list; for (let i = 0; i < 600; i++) { list = await call('/api/media'); if (list.every(a => a.proxyUrl)) break; await new Promise(r => setTimeout(r, 200)); }
+    for (const a of list) {
+      assert.ok(a.proxyUrl && !a.proxyPending, a.name + ' proxy ready');
+      const r = await fetch(s.url + a.proxyUrl, { headers: { Range: 'bytes=0-15' } }); assert.equal(r.status, 206, 'proxy streams with ranges');
+      const file = path.join(dir, 'p-' + a.id + '.mp4'); await fs.writeFile(file, Buffer.from(await (await fetch(s.url + a.proxyUrl)).arrayBuffer()));
+      const st = JSON.parse((await run(ffprobe, ['-v', 'quiet', '-show_streams', '-show_format', '-of', 'json', file])).out);
+      const v = st.streams.find(x => x.codec_type === 'video');
+      assert.equal(v.codec_name, 'h264'); assert.ok(v.width <= 1280, 'proxy is small: ' + v.width); assert.ok(Math.abs(+st.format.duration - 2) < 0.15);
+      if (a.name.startsWith('Old')) assert.ok(st.streams.some(x => x.codec_type === 'audio' && x.codec_name === 'aac'), 'proxy has browser-playable audio');
+    }
+    const big = list.find(a => a.width === 3840), p = await call('/api/projects', { name: 'Proxy', ratio: '16:9' });
+    p.settings.resolution = 2160; p.clips.push(newClip('video', { trackId: 'main', mediaId: big.id, start: 0, duration: 1, in: 0 }));
+    const output = path.join(dir, 'uhd.mp4');
+    const job = await waitJob(call, (await call('/api/export', { project: p, rasters: {}, settings: { format: 'mp4', codec: 'h264', resolution: 2160, fps: 30, quality: 'high', hardware: false, output } })).job, 180000);
+    assert.equal(job.status, 'done', job.error);
+    // Full-resolution export must match the 4K original closely (a 1280-wide proxy upscaled would not).
+    const psnrOf = async (file, pre = '') => { const { err } = await run(ffmpeg, ['-hide_banner', '-i', file, '-i', uhd, '-frames:v', '10', '-lavfi', `[0:v]${pre}format=yuv420p[a];[1:v]format=yuv420p[b];[a][b]psnr`, '-f', 'null', '-']); return +/average:([\d.]+|inf)/.exec(err)[1].replace('inf', '99'); };
+    const exported = await psnrOf(output), viaProxy = await psnrOf(path.join(dir, 'p-' + big.id + '.mp4'), 'scale=3840:2160:flags=bicubic,');
+    console.log(`  PSNR vs 4K original: export ${exported.toFixed(1)} dB, upscaled proxy ${viaProxy.toFixed(1)} dB`);
+    assert.ok(exported > viaProxy + 4, 'export rendered from the original, not the proxy');
+  } finally { await s?.close(); await fs.rm(dir, { recursive: true, force: true }).catch(() => {}); }
+});

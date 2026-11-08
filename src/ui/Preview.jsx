@@ -5,6 +5,7 @@ import { project, media, time, playing, player, selection, primary, commit, toas
 import { Player } from '../engine/player.js';
 import { dimensions, RATIOS } from '../../shared/model.mjs';
 import { layerState } from '../../shared/plan.mjs';
+import { propValue, writeProp } from '../../shared/keys.mjs';
 import { openMenu } from './kit.jsx';
 import { timecode } from '../lib/format.js';
 import { addAssets, addText, addSticker, applyEffect, applyFilter } from '../lib/edit.js';
@@ -92,21 +93,21 @@ function Gizmo({ cw, ch, W, H }) {
   const w = L.baseW * st.s * k, h = L.baseH * st.s * k, cx = (L.cx + st.dx) * k, cy = (L.cy + st.dy) * k;
   const begin = (e, mode) => {
     e.preventDefault(); e.stopPropagation(); const el = e.currentTarget; el.setPointerCapture(e.pointerId);
-    const start = structuredClone(c.transform), sx = e.clientX, sy = e.clientY;
+    const u = t - c.start, start = { x: propValue(c, 'x', u), y: propValue(c, 'y', u), scale: propValue(c, 'scale', u), rotation: propValue(c, 'rotation', u) }, sx = e.clientX, sy = e.clientY;
     const rect = el.closest('.stage').getBoundingClientRect(); const ox = rect.left + cx, oy = rect.top + cy;
     const a0 = Math.atan2(sy - oy, sx - ox), d0 = Math.hypot(sx - ox, sy - oy);
     const move = ev => {
       commit(mode === 'move' ? 'Move' : mode === 'rotate' ? 'Rotate' : 'Resize', p => {
-        const x = p.clips.find(q => q.id === c.id); if (!x) return false; const T = x.transform;
+        const x = p.clips.find(q => q.id === c.id); if (!x) return false; const put = (k2, v) => writeProp(x, k2, v, u);
         if (mode === 'move') {
           let nx = start.x + (ev.clientX - sx) / cw, ny = start.y + (ev.clientY - sy) / ch;
           if (!ev.altKey) { if (Math.abs(nx) < 0.012) nx = 0; if (Math.abs(ny) < 0.012) ny = 0; }
-          T.x = nx; T.y = ny;
+          put('x', nx); put('y', ny);
         } else if (mode === 'rotate') {
           let r = start.rotation + (Math.atan2(ev.clientY - oy, ev.clientX - ox) - a0) * 180 / Math.PI;
           if (ev.shiftKey) r = Math.round(r / 15) * 15; else for (const snap of [0, 90, -90, 180, -180]) if (Math.abs(r - snap) < 3) r = snap;
-          T.rotation = Math.round(r * 10) / 10;
-        } else T.scale = Math.max(0.02, Math.min(10, start.scale * Math.hypot(ev.clientX - ox, ev.clientY - oy) / Math.max(4, d0)));
+          put('rotation', Math.round(r * 10) / 10);
+        } else put('scale', Math.max(0.02, Math.min(10, start.scale * Math.hypot(ev.clientX - ox, ev.clientY - oy) / Math.max(4, d0))));
       }, { key: 'gizmo:' + mode + c.id });
     };
     const up = () => { el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); };

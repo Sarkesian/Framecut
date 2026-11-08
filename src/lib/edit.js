@@ -1,4 +1,5 @@
 // Editing commands. Each runs inside commit(), so everything is undoable and autosaved.
+import { shiftKeys } from '../../shared/keys.mjs';
 import { newClip, uid, clipEnd, srcOut, trackClips, mainTrack, transitionPartner, maxTransition, hasMedia, trackKindFor } from '../../shared/model.mjs';
 import { CAPTION_STYLE, TEXT_STYLE, effectDef } from '../../shared/catalog.mjs';
 import { commit, project, selection, time, asset, toast, player } from './state.js';
@@ -118,6 +119,7 @@ export function splitAt(t = time.value, ids) {
       const r = structuredClone(c); r.id = uid(); r.start = t; r.duration = c.duration - local; r.transition = null; r.animIn = null;
       if (hasMedia(c)) r.in = c.in + local * (c.speed || 1);
       if (c.words) { r.words = c.words.filter(w => w.start >= local).map(w => ({ ...w, start: w.start - local, end: w.end - local })); c.words = c.words.filter(w => w.start < local); }
+      if (c.keyframes) { shiftKeys(r, local, r.duration); shiftKeys(c, 0, local); }
       c.duration = local; c.animOut = null; c.fadeOut = 0; r.fadeIn = 0;
       p.clips.push(r); right.push(r.id);
     }
@@ -193,6 +195,7 @@ export function trimClip(id, edge, t, { ripple = false } = {}) {
       ns = Math.max(0, ns);
       const d = ns - c.start;
       if (hasMedia(c)) c.in = Math.max(0, c.in + d * speed);
+      if (c.keyframes) shiftKeys(c, d, end - ns);
       c.start = ns; c.duration = end - ns;
       if (c.words) c.words = c.words.map(w => ({ ...w, start: w.start - d, end: w.end - d })).filter(w => w.end > 0);
     } else {
@@ -206,7 +209,8 @@ export function trimClip(id, edge, t, { ripple = false } = {}) {
 export function setSpeed(id, speed) {
   commit('Change speed', p => {
     const c = p.clips.find(x => x.id === id); if (!c) return false;
-    const srcLen = c.duration * (c.speed || 1); c.speed = speed; c.duration = srcLen / speed;
+    const srcLen = c.duration * (c.speed || 1), k = (c.speed || 1) / speed; c.speed = speed; c.duration = srcLen / speed;
+    if (c.keyframes) for (const p2 of Object.keys(c.keyframes)) c.keyframes[p2] = c.keyframes[p2].map(x => ({ ...x, t: x.t * k }));
     if (!trackOf(p, c.trackId).main) { const ignore = new Set([c.id]); if (overlaps(p, c.trackId, c.start, clipEnd(c), ignore)) c.trackId = freeTrack(p, trackKindFor(c.kind), c.start, clipEnd(c), { ignore }).id; }
   }, { key: 'speed:' + id });
 }

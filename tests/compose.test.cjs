@@ -87,3 +87,42 @@ test('Version 1 projects migrate to the multitrack format', () => {
   assert.equal(p.clips.find(c => c.kind === 'audio').start, 1);
   assert.deepEqual(migrateV1(v1).mediaIds, ['m']);
 });
+
+test('Keyframes: position, scale and opacity animate identically in the plan and the export', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'framecut-keys-'));
+  try {
+    const { assets } = await fixtures(dir);
+    const { buildPlan, layerState } = await import('../shared/plan.mjs');
+    const p = newProject({ ratio: '16:9', resolution: 480 });
+    p.settings.background = { type: 'color', color: '#000000' };
+    // A red box moves from left to right, grows and fades out over 4 s.
+    const c = newClip('video', { trackId: 'main', mediaId: 'red', start: 0, duration: 4, fit: 'contain', transform: { scale: 0.25 } });
+    c.keyframes = { x: [{ t: 0.5, v: -0.3, e: 'linear' }, { t: 3.5, v: 0.3, e: 'linear' }], scale: [{ t: 0, v: 0.2, e: 'smooth' }, { t: 4, v: 0.4 }], opacity: [{ t: 2.5, v: 1, e: 'linear' }, { t: 3.5, v: 0.2 }] };
+    p.clips.push(c);
+    const plan = renderPlan(p, { assets, rasters: {}, luts: {}, settings: { format: 'mp4', resolution: 480, fps: 30, quality: 'balanced' } });
+    await fs.writeFile(path.join(dir, 'graph.txt'), plan.graph);
+    const out = path.join(dir, 'keys.mp4');
+    await run(ffmpeg, [...plan.args, out], { cwd: dir });
+    const W = 854, H = 480, pp = buildPlan(p, { W, H, media: id => assets.get(id) }), L = pp.layers.find(l => l.id === c.id);
+    for (const t of [0.5, 2, 3.5]) {
+      const st = layerState(L, t), buf = await frameRGB(out, t, W, H);
+      let sx = 0, n = 0, maxR = 0;
+      for (let i = 0; i < W * H; i++) { const r = buf[i * 3]; if (r > 40) { sx += i % W; n++; } if (r > maxR) maxR = r; }
+      const cx = sx / n, expectX = L.cx + st.dx, expectW = L.baseW * st.s;
+      const width = n / (L.baseH * st.s);
+      assert.ok(Math.abs(cx - expectX) < 4, `t=${t} centre ${cx.toFixed(1)} vs ${expectX.toFixed(1)}`);
+      assert.ok(Math.abs(width - expectW) / expectW < 0.06, `t=${t} width ${width.toFixed(1)} vs ${expectW.toFixed(1)}`);
+      assert.ok(Math.abs(maxR / 255 - st.alpha * 0.92) < 0.12, `t=${t} brightness ${maxR} vs alpha ${st.alpha.toFixed(2)}`);
+    }
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('Keyframes survive split, trim and speed changes without jumps', async () => {
+  const { shiftKeys, propValue } = await import('../shared/keys.mjs');
+  const c = newClip('video', { start: 0, duration: 4, transform: { x: 0 } });
+  c.keyframes = { x: [{ t: 0, v: -0.5, e: 'linear' }, { t: 4, v: 0.5, e: 'linear' }] };
+  const before = propValue(c, 'x', 1.5);
+  const right = structuredClone(c); shiftKeys(right, 1, 3); right.duration = 3;
+  assert.ok(Math.abs(propValue(right, 'x', 0.5) - before) < 1e-9, 'value preserved after trimming 1 s from the start');
+  assert.ok(Math.abs(propValue(right, 'x', 3) - 0.5) < 1e-9, 'end value preserved');
+});

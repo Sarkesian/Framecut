@@ -62,7 +62,13 @@ export class Player {
   step(frames) { const fps = this.getPlan()?.fps || 30; this.pause(); this.seek(Math.round(this.t * fps + frames) / fps); }
   setRate(r) { this.rate = r; if (this.playing) { this.clockT = this.t; this.clockNow = performance.now(); } }
 
-  requestDraw() { if (this.playing || this.drawRequested) return; this.drawRequested = true; requestAnimationFrame(() => { this.drawRequested = false; this.frame(); }); }
+  // rAF is paused while the window is occluded or hidden; a timer fallback keeps paused-frame redraws
+  // (seeks, edits, snapshots) working there too, whichever fires first wins.
+  requestDraw() {
+    if (this.playing || this.drawRequested) return; this.drawRequested = true;
+    const run = () => { if (!this.drawRequested) return; this.drawRequested = false; clearTimeout(this.drawTimer); this.frame(); };
+    requestAnimationFrame(run); this.drawTimer = setTimeout(run, 100);
+  }
   loop() {
     if (!this.playing) return;
     const plan = this.getPlan();
@@ -83,7 +89,9 @@ export class Player {
       if (L.image) { el = new Image(); el.decoding = 'async'; el.onload = () => this.requestDraw(); el.src = src; }
       else {
         el = document.createElement('video'); el.preload = 'auto'; el.playsInline = true; el.disablePictureInPicture = true; el.src = src; el.muted = false;
-        el.addEventListener('seeked', () => { e.stamp++; this.requestDraw(); });
+        // 'seeked' can fire before the decoded frame is uploadable, and detached videos don't reliably get
+        // frame callbacks, so redraw again shortly after to pick up the settled frame.
+        el.addEventListener('seeked', () => { e.stamp++; this.requestDraw(); for (const ms of [40, 120, 300]) setTimeout(() => { if (!el.seeking) { e.stamp++; this.requestDraw(); } }, ms); });
         el.addEventListener('loadeddata', () => { e.stamp++; this.requestDraw(); });
         el.addEventListener('error', () => { e.failed = true; this.onError?.(`“${a.name}” can't be previewed yet${a.proxyPending ? ' — FrameCut is preparing a playback copy.' : '.'} It will still export normally.`); });
         const tick = () => { e.stamp++; if (!this.playing) this.requestDraw(); el.requestVideoFrameCallback(tick); };

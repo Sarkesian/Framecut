@@ -45,3 +45,13 @@
 .marquee { position: absolute; border: 1px solid var(--accent); background: rgba(182,243,106,.08); z-index: 9; pointer-events: none; }
 .tl-tail { height: 60px; }
 .tl-empty { position: absolute; left: 50%; top: 55%; transform: translate(-30%, -50%); display: flex; gap: 12px; align-items: center; color: var(--text-3); pointer-events: none; } .tl-empty div { display: flex; flex-direction: column; } .tl-empty b { color: var(--text-2); }
+.clip-key { position: absolute; bottom: 3px; width: 9px; height: 9px; margin-left: -4.5px; background: #ffd64d; border: 1px solid #1a1a1a; transform: rotate(45deg); z-index: 3; cursor: pointer; }
+.clip-key:hover { background: #fff; }
+/* Volume envelope */
+.envelope { position: absolute; left: 0; right: 0; top: 16px; bottom: 2px; pointer-events: none; z-index: 2; }
+.envelope.on { pointer-events: auto; }
+.envelope svg { position: absolute; inset: 0; overflow: visible; }
+.envelope polyline { fill: none; stroke: #ffd64d; stroke-width: 1.5; opacity: .55; }
+.envelope.on polyline { opacity: 1; }
+.env-pt { position: absolute; width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px; border-radius: 50%; background: #ffd64d; border: 1.5px solid #1a1a1a; cursor: grab; }
+.env-pt:hover { transform: scale(1.3); }

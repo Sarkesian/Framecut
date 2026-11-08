@@ -127,6 +127,39 @@ function TrackRow({ t, z, width }) {
   </div>;
 }
 
+// Volume envelope: drag points to shape the level, double-click the line to add one, double-click a point to remove it.
+const ENV_MAX = 2; // +6 dB at the top
+let lastPress = null;
+const db = v => (v <= 0.0005 ? '−∞' : (20 * Math.log10(v) >= 0 ? '+' : '') + (20 * Math.log10(v)).toFixed(1)) + ' dB';
+function Envelope({ c, w, z, sel }) {
+  const keys = c.volumeKeys || [], ref = useRef(null);
+  const H = () => ref.current?.getBoundingClientRect().height || 40;
+  const yOf = v => (1 - Math.min(ENV_MAX, v) / ENV_MAX) * 100;
+  const pts = keys.length ? [{ t: 0, v: keys[0].v }, ...keys, { t: c.duration, v: keys.at(-1).v }] : [{ t: 0, v: 1 }, { t: c.duration, v: 1 }];
+  const path = pts.map(k => `${(k.t * z).toFixed(1)},${yOf(k.v).toFixed(2)}`).join(' ');
+  const vAt = (e) => { const r = ref.current.getBoundingClientRect(); return { t: Math.min(c.duration, Math.max(0, (e.clientX - r.left) / z)), v: Math.max(0, Math.min(ENV_MAX, (1 - (e.clientY - r.top) / r.height) * ENV_MAX)) }; };
+  const save = (fn, label, key) => commit(label, d => { const x = d.clips.find(q => q.id === c.id); if (!x) return false; x.volumeKeys = x.volumeKeys ? [...x.volumeKeys] : []; fn(x); x.volumeKeys.sort((a, b) => a.t - b.t); if (!x.volumeKeys.length) delete x.volumeKeys; }, { key });
+  const add = e => { e.stopPropagation(); if (e.target.classList.contains('env-pt')) return; const p = vAt(e); const g = keys.length ? keyGainAt(keys, p.t) : 1; save(x => { x.volumeKeys.push({ t: p.t, v: g }); }, 'Add volume point'); };
+  const dragPt = (e, i) => {
+    e.stopPropagation(); e.preventDefault(); if (e.button !== 0) return;
+    const el = e.currentTarget; el.setPointerCapture(e.pointerId); const lo = i > 0 ? keys[i - 1].t + 0.01 : 0, hi = i < keys.length - 1 ? keys[i + 1].t - 0.01 : c.duration;
+    const move = ev => { const p = vAt(ev); save(x => { x.volumeKeys[i] = { t: Math.min(hi, Math.max(lo, p.t)), v: ev.shiftKey ? keys[i].v : Math.round(p.v * 1000) / 1000 }; }, 'Move volume point', 'env:' + c.id + i); el.dataset.tip = db(p.v); };
+    const up = () => { el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); };
+    el.addEventListener('pointermove', move); el.addEventListener('pointerup', up);
+  };
+  // The clip captures the pointer on press, so a double-click is detected from two quick presses here.
+  const down = e => {
+    if (!sel || e.button !== 0 || e.target.classList.contains('env-pt')) return;
+    const now = performance.now(), last = lastPress;
+    lastPress = { at: now, x: e.clientX, y: e.clientY, id: c.id };
+    if (last && last.id === c.id && now - last.at < 400 && Math.hypot(e.clientX - last.x, e.clientY - last.y) < 6) { lastPress = null; e.preventDefault(); add(e); }
+  };
+  return <div class={`envelope ${sel ? 'on' : ''}`} ref={ref} onPointerDown={down}>
+    <svg width={w} height="100%" viewBox={`0 0 ${w} 100`} preserveAspectRatio="none"><polyline points={path} vector-effect="non-scaling-stroke" /></svg>
+    {sel && keys.map((k, i) => <span key={i} class="env-pt" style={{ left: k.t * z, top: yOf(k.v) + '%' }} data-tip={db(k.v)} onPointerDown={e => dragPt(e, i)} onDblClick={e => { e.stopPropagation(); save(x => { x.volumeKeys.splice(i, 1); }, 'Remove volume point'); }} />)}
+  </div>;
+}
+function keyGainAt(k, t) { if (t <= k[0].t) return k[0].v; if (t >= k.at(-1).t) return k.at(-1).v; for (let i = 1; i < k.length; i++) if (t <= k[i].t) { const a = k[i - 1], b = k[i]; return a.v + (b.v - a.v) * (t - a.t) / Math.max(1e-6, b.t - a.t); } return 1; }
 function Clip({ c, t, z }) {
   const sel = selection.value.includes(c.id); const d = drag.value;
   let start = c.start, dur = c.duration, shiftY = 0;
@@ -145,6 +178,7 @@ function Clip({ c, t, z }) {
     onPointerDown={e => clipDown(e, c, t, z)} onContextMenu={e => clipMenu(e, c, t)} onDblClick={() => { if (c.kind === 'text') setTimeout(() => document.querySelector('.insp-text textarea')?.focus(), 30); }}>
     {(c.kind === 'video' || c.kind === 'image') && a && <Filmstrip c={c} a={a} start={start} w={w} z={z} h={trackH(t) - 18} />}
     {(c.kind === 'audio' || (c.kind === 'video' && t.main)) && a?.audio && !c.muted && <Wave c={c} a={a} start={start} w={w} z={z} tall={c.kind === 'audio'} />}
+    {((c.kind === 'audio') || (c.kind === 'video' && a?.audio)) && !c.muted && (sel || c.volumeKeys?.length > 0) && <Envelope c={c} w={w} z={z} sel={sel} />}
     <div class="clip-label">
       {c.speed && c.speed !== 1 && <span class="badge"><Gauge size={10} />{+c.speed.toFixed(2)}×</span>}
       {c.muted && <VolumeX size={11} />}
@@ -154,6 +188,7 @@ function Clip({ c, t, z }) {
       <span class="ellipsis">{label}</span>
       {w > 90 && c.kind !== 'text' && <span class="dur">{shortTime(dur)}</span>}
     </div>
+    {c.keyframes && [...new Set(Object.values(c.keyframes).flat().map(k => +k.t.toFixed(3)))].filter(k => k <= c.duration).map(k => <span key={'k' + k} class="clip-key" style={{ left: k * z }} data-tip="Keyframe · click to jump" onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); selection.value = [c.id]; player.current?.seek(c.start + k); }} />)}
     {c.markers?.map((m, i) => <span key={i} class="clip-marker" style={{ left: ((m.t - (c.in || 0)) / (c.speed || 1)) * z }} data-tip={m.label || 'Mistake marker'} />)}
     {partner && <button class={`tr-mark ${c.transition ? 'on' : ''}`} style={{ left: -9 }} data-tip={c.transition ? transitionDef(c.transition.id)?.name + ' · click to edit' : 'Add a transition'} onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); selection.value = [c.id]; if (!c.transition) applyTransition('dissolve', c.id); else libraryTab.value = 'transitions'; }}><Blend size={10} /></button>}
     {!trackOf(p, c.trackId)?.locked && <><span class="edge l" onPointerDown={e => edgeDown(e, c, 'start', z)} /><span class="edge r" onPointerDown={e => edgeDown(e, c, 'end', z)} /></>}
