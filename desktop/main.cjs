@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, shell, ipcMain, screen } = require('electron');
+const { app, BrowserWindow, dialog, shell, ipcMain, screen, safeStorage } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { startServer } = require('./server.cjs');
@@ -42,12 +42,22 @@ function registerIpc() {
   ipcMain.handle('set-title-colors', (_e, { color, symbolColor }) => { try { win.setTitleBarOverlay({ color, symbolColor, height: 40 }); } catch {} });
   ipcMain.handle('toggle-fullscreen', () => win.setFullScreen(!win.isFullScreen()));
 }
+// Provider credentials, encrypted with the OS credential store (DPAPI on Windows). Never in the UI bundle.
+function secretStore() {
+  const file = path.join(app.getPath('userData'), 'secrets.bin');
+  const read = () => { try { return JSON.parse(safeStorage.decryptString(fs.readFileSync(file))); } catch { return {}; } };
+  return {
+    available: () => { try { return safeStorage.isEncryptionAvailable(); } catch { return false; } },
+    get: name => read()[name] ?? null,
+    set(name, value) { const all = read(); if (value === null || value === undefined) delete all[name]; else all[name] = value; fs.writeFileSync(file, safeStorage.encryptString(JSON.stringify(all))); },
+  };
+}
 function defaults() { const ud = app.getPath('userData'); return { dataDir: path.join(ud, 'workspace'), cacheDir: path.join(ud, 'workspace', 'cache') }; }
 
 app.whenReady().then(async () => {
   registerIpc();
   const cfg = { ...defaults(), ...readConfig() };
-  service = await startServer({ dataDir: cfg.dataDir, cacheDir: cfg.cacheDir, native: true });
+  service = await startServer({ dataDir: cfg.dataDir, cacheDir: cfg.cacheDir, native: true, secrets: secretStore() });
   const bounds = cfg.window && screen.getAllDisplays().some(d => { const a = d.workArea; return cfg.window.x >= a.x - 50 && cfg.window.y >= a.y - 50 && cfg.window.x < a.x + a.width && cfg.window.y < a.y + a.height; }) ? cfg.window : { width: 1560, height: 960 };
   win = new BrowserWindow({
     ...bounds, show: false, minWidth: 1100, minHeight: 700, backgroundColor: '#0e0f13', title: 'FrameCut Studio', icon: path.join(__dirname, 'icon.ico'),

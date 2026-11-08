@@ -2,7 +2,7 @@
 export async function api(url, body, method = body !== undefined ? 'POST' : 'GET') {
   const r = await fetch(url, { method, headers: body !== undefined ? { 'Content-Type': 'application/json' } : {}, body: body !== undefined ? JSON.stringify(body) : undefined });
   let data = null; try { data = await r.json(); } catch {}
-  if (!r.ok) throw Error(data?.error || `Request failed (${r.status})`);
+  if (!r.ok) throw Object.assign(Error(data?.error || `Request failed (${r.status})`), { code: data?.code || null, retryAfter: data?.retryAfter || null, status: r.status });
   return data;
 }
 export const native = typeof window !== 'undefined' && window.framecut?.native ? window.framecut : null;

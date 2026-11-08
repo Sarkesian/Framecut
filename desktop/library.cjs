@@ -11,6 +11,10 @@ const PLAYABLE_A = new Set(['aac', 'mp3', 'opus', 'vorbis', 'flac', 'pcm_s16le',
 const PLAYABLE_EXT = new Set(['.mp4', '.m4v', '.mov', '.webm', '.mkv', '.mp3', '.wav', '.m4a', '.aac', '.ogg', '.oga', '.opus', '.flac', '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg']);
 const MEDIA_EXT = /\.(mp4|m4v|mov|avi|mkv|webm|flv|wmv|mpg|mpeg|ts|mts|m2ts|3gp|mxf|mp3|wav|aac|ogg|oga|opus|flac|m4a|wma|aif|aiff|jpg|jpeg|png|gif|bmp|webp|svg|tif|tiff)$/i;
 
+// Provenance shown to the UI: who made it, where it came from and under which license (no internal URLs).
+const SOURCE_FIELDS = ['provider', 'sourceId', 'kind', 'title', 'creator', 'creatorUrl', 'sourcePageUrl', 'sourceName', 'license', 'licenseVersion', 'licenseUrl', 'attribution', 'holder', 'rights', 'importedAt', 'metadataCheckedAt', 'licenseEvidenceUrl', 'glyph', 'durationMs'];
+const publicSource = s => Object.fromEntries(SOURCE_FIELDS.filter(k => s[k] !== undefined && s[k] !== null).map(k => [k, s[k]]));
+
 class Library {
   constructor({ dataDir, cacheDir, jobs, prefs }) {
     this.dataDir = dataDir; this.cacheDir = cacheDir; this.jobs = jobs; this.prefs = prefs;
@@ -40,6 +44,7 @@ class Library {
       url: `/media/${a.id}?v=${v}`, proxyUrl: a.proxy ? `/proxy/${a.id}?v=${v}` : null, thumb: a.thumb ? `/cache/thumbs/${path.basename(a.thumb)}?v=${v}` : null,
       strip: a.strip ? { url: `/cache/filmstrips/${path.basename(a.strip.file)}?v=${v}`, count: a.strip.count, w: a.strip.w, h: a.strip.h, interval: a.strip.interval } : null,
       wave: a.wave ? `/cache/waveforms/${path.basename(a.wave)}?v=${v}` : null, needsProxy: !!a.needsProxy, proxyPending: !!a.needsProxy && !a.proxy,
+      role: a.role || null, animated: !!a.animated, source: a.source ? publicSource(a.source) : null,
     };
   }
   list() { return [...this.assets.values()].map(a => this.public(a)); }

@@ -12,12 +12,13 @@ const { Library } = require('./library.cjs');
 const { Projects } = require('./projects.cjs');
 const { Studio } = require('./studio.cjs');
 const { Recorder } = require('./recorder.cjs');
+const { Creative } = require('./creative.cjs');
 const { audioFx: fxOf, audioChain } = require('../shared/audio.mjs');
 const { num } = require('../shared/model.mjs');
 
 const DEFAULT_PREFS = { proxies: 'auto', hardware: 'auto', autosave: true, accent: 'aurora', captionEngine: 'whisper-web', captionModel: 'base', snapping: true, showTips: true, exportFolder: null, ai: { preset: 'ollama', baseUrl: 'http://127.0.0.1:11434/v1', model: '', speechModel: 'whisper-1' } };
 
-async function startServer({ dataDir = path.join(__dirname, '..', '.workspace'), cacheDir, port = 0, native = null } = {}) {
+async function startServer({ dataDir = path.join(__dirname, '..', '.workspace'), cacheDir, port = 0, native = null, secrets = null, creative: creativeOptions = {} } = {}) {
   cacheDir ||= path.join(dataDir, 'cache');
   for (const d of [dataDir, cacheDir, path.join(dataDir, 'fonts'), path.join(dataDir, 'luts'), path.join(dataDir, 'media', 'recordings'), path.join(dataDir, 'templates')]) await fsp.mkdir(d, { recursive: true });
   const prefsPath = path.join(dataDir, 'preferences.json');
@@ -29,6 +30,7 @@ async function startServer({ dataDir = path.join(__dirname, '..', '.workspace'),
   const projects = new Projects({ dataDir }); await projects.init();
   const studio = new Studio({ library, jobs, cacheDir, dataDir, prefs: getPrefs });
   const recorder = new Recorder({ dir: path.join(dataDir, 'media', 'recordings'), library }); await recorder.init();
+  const creative = new Creative({ dataDir, cacheDir, library, jobs, secrets, ...creativeOptions }); await creative.init();
   let provider = { baseUrl: prefs.ai?.baseUrl || '', key: '', model: prefs.ai?.model || '', speechModel: prefs.ai?.speechModel || 'whisper-1' };
 
   const app = express();
@@ -92,6 +94,27 @@ async function startServer({ dataDir = path.join(__dirname, '..', '.workspace'),
   app.get('/media/:id', sendAsset('path'));
   app.get('/proxy/:id', sendAsset('proxy'));
   app.use('/cache', express.static(cacheDir, { dotfiles: 'deny', maxAge: '1d' }));
+
+  // ---------- Creative Library (music, sound effects, stickers) ----------
+  app.get('/api/creative/status', (_req, res) => res.json(creative.status()));
+  app.get('/api/creative/search', wrap(async (req, res) => res.json(await creative.search(String(req.query.provider || ''), { ...req.query }))));
+  app.get('/api/creative/lists', (req, res) => res.json(creative.lists(String(req.query.kind || ''))));
+  app.post('/api/creative/favorite', wrap(async (req, res) => { const r = req.body.record || {}; if (!creative.providers[r.provider] || !r.sourceId) throw Error('Unknown item.'); res.json(creative.toggleFavorite(await creative.record(r.provider, String(r.sourceId)).catch(() => r), !!req.body.on)); }));
+  app.get('/api/creative/preview/:provider/:id', wrap(async (req, res) => creative.preview(req.params.provider, req.params.id, req, res)));
+  app.post('/api/creative/import', wrap(async (req, res) => res.json(creative.importAsset({ provider: String(req.body.provider), id: String(req.body.id), kind: req.body.kind, usage: req.body.usage }))));
+  app.post('/api/creative/stickers/import', wrap(async (req, res) => res.json(await creative.importStickers((req.body.paths || []).map(String)))));
+  const stickerUpload = multer({ dest: path.join(cacheDir, 'creative', 'uploads'), limits: { fileSize: 60 * 1024 ** 2, files: 50 } });
+  app.post('/api/creative/stickers/upload', stickerUpload.array('files', 50), wrap(async (req, res) => {
+    const dir = path.join(dataDir, 'media', 'library', 'local-stickers'); await fsp.mkdir(dir, { recursive: true }); const paths = [];
+    for (const f of req.files || []) { const dest = path.join(dir, `${Date.now()}-${path.basename(f.originalname).replace(/[^\w.\- ]+/g, '').slice(0, 80) || 'sticker'}`); await fsp.rename(f.path, dest); paths.push(dest); }
+    res.json(await creative.importStickers(paths));
+  }));
+  app.get('/api/creative/local/:token', (req, res) => { try { res.sendFile(creative.localFile(req.params.token), { headers: { 'Cache-Control': 'no-store' } }); } catch (e) { res.status(404).json({ error: e.message }); } });
+  app.post('/api/creative/bake/start', wrap(async (req, res) => res.json(creative.bakeStart(req.body))));
+  app.post('/api/creative/bake/:id/frame/:index', express.raw({ type: 'image/png', limit: '24mb' }), wrap(async (req, res) => res.json(await creative.bakeFrame(req.params.id, +req.params.index, req.body))));
+  app.post('/api/creative/bake/:id/finish', wrap(async (req, res) => jobReply(res, creative.bakeFinish(req.params.id))));
+  app.delete('/api/creative/bake/:id', (req, res) => { creative.bakeCancel(req.params.id); res.json({ ok: true }); });
+  app.put('/api/creative/credentials/:provider', wrap(async (req, res) => res.json(creative.setCredentials(req.params.provider, req.body))));
 
   // ---------- Jobs ----------
   app.get('/api/jobs', (_req, res) => res.json(jobs.list()));
@@ -232,11 +255,11 @@ async function startServer({ dataDir = path.join(__dirname, '..', '.workspace'),
   // ---------- UI ----------
   const dist = path.join(__dirname, '..', 'dist');
   app.use(express.static(dist, { index: 'index.html' }));
-  app.use((err, _req, res, _next) => res.status(400).json({ error: err.message || 'Something went wrong.' }));
+  app.use((err, _req, res, _next) => { if (res.headersSent) return res.end(); res.status(400).json({ error: err.message || 'Something went wrong.', code: err.code || null, retryAfter: err.retryAfter || null }); });
 
   const server = await new Promise(resolve => { const s = app.listen(port, '127.0.0.1', () => resolve(s)); });
   const url = 'http://127.0.0.1:' + server.address().port;
-  return { url, library, projects, jobs, studio, async close() { for (const j of jobs.jobs.values()) jobs.cancel(j.id); await library.flush().catch(() => {}); server.close(); } };
+  return { url, library, projects, jobs, studio, creative, async close() { for (const j of jobs.jobs.values()) jobs.cancel(j.id); await library.flush().catch(() => {}); await creative.flush().catch(() => {}); server.close(); } };
 }
 if (require.main === module) startServer({ port: +process.env.PORT || 0 }).then(s => console.log('FRAMECUT_URL=' + s.url));
 module.exports = { startServer, run, ffmpeg, ffprobe, num };
