@@ -81,7 +81,7 @@ export const openverseLicenseFilter = (usage, kind) => {
 // One credit line per source (assets used more than once are listed once).
 export function creditLine(src) {
   if (!src) return '';
-  if (src.attribution) return src.attribution.replace(/\s+To view a copy of this license, visit \S+\.?$/, '').trim() + (src.licenseUrl ? ` (${src.licenseUrl})` : '') + (src.sourcePageUrl ? ` — ${src.sourcePageUrl}` : '');
+  if (src.attribution) return src.attribution.replace(/\s+To view a copy of this license, visit \S+\.?$/, '').trim().replace(/\.$/, '') + (src.licenseUrl ? ` (${src.licenseUrl})` : '') + (src.sourcePageUrl ? ` — ${src.sourcePageUrl}` : '');
   const by = src.creator ? ` by ${src.creator}` : '';
   const lic = licenseName(src.license, src.licenseVersion);
   if (src.license === 'mit') return `“${src.title}”${by} — ${lic}${src.holder ? `, © ${src.holder}` : ''}${src.licenseUrl ? ` (${src.licenseUrl})` : ''}`;
