@@ -2,7 +2,8 @@
 // both consume this plan, so positioning, timing, transitions and animations are computed once.
 import { substitute, EASE, evaluate, fmtNum } from './expr.mjs';
 import { transitionDef, animDef, effectDef, fx } from './catalog.mjs';
-import { clipEnd, srcOut, isVisual, transitionPartner, DEFAULT_AUDIO_FX } from './model.mjs';
+import { clipEnd, srcOut, isVisual, transitionPartner } from './model.mjs';
+import { needsProcessing, fxKey, keyGain, mergeKeys } from './audio.mjs';
 
 const f = fmtNum;
 function bake(expr, { T0, D, start }) {
@@ -12,8 +13,9 @@ function bake(expr, { T0, D, start }) {
   return substitute(s, map);
 }
 
-export const hasAudioFx = c => { const a = c.audioFx || {}; return !!(a.denoise || a.normalize || (a.eq && a.eq !== 'none') || a.echo || a.reverb || a.pitch); };
-export const audioFxKey = c => { const a = { ...DEFAULT_AUDIO_FX, ...(c.audioFx || {}) }; return [a.denoise, a.normalize ? 1 : 0, a.eq, a.echo, a.reverb, a.pitch].join('_'); };
+export const hasAudioFx = c => needsProcessing(c);
+// Short stable key for the processed-audio cache.
+export function audioFxKey(c) { const str = fxKey(c); let h1 = 0x811c9dc5, h2 = 0; for (let i = 0; i < str.length; i++) { h1 = Math.imul(h1 ^ str.charCodeAt(i), 16777619) >>> 0; h2 = (h2 * 31 + str.charCodeAt(i)) >>> 0; } return h1.toString(36) + h2.toString(36); }
 
 export function buildPlan(project, { W, H, media = () => null, sizes = () => null, fps = project.settings.fps } = {}) {
   const layers = [], audio = [];
@@ -102,7 +104,7 @@ export function buildPlan(project, { W, H, media = () => null, sizes = () => nul
     const track = tracks.find(t => t.id === c.trackId); if (!track || track.muted || c.muted) continue;
     if (!(c.kind === 'video' || c.kind === 'audio') || !(c.volume > 0)) continue;
     const a = media(c.mediaId); if (a && !a.audio) continue;
-    audio.push({ id: c.id, clip: c, mediaId: c.mediaId, processed: hasAudioFx(c) ? audioFxKey(c) : null, srcIn: c.in, srcOut: srcOut(c), start: c.start, duration: c.duration, speed: c.speed || 1, volume: c.volume, fadeIn: Math.min(c.fadeIn || 0, c.duration / 2), fadeOut: Math.min(c.fadeOut || 0, c.duration / 2) });
+    audio.push({ id: c.id, clip: c, mediaId: c.mediaId, processed: hasAudioFx(c) ? audioFxKey(c) : null, keys: mergeKeys(c.volumeKeys, c.duckKeys), srcIn: c.in, srcOut: srcOut(c), start: c.start, duration: c.duration, speed: c.speed || 1, volume: c.volume, fadeIn: Math.min(c.fadeIn || 0, c.duration / 2), fadeOut: Math.min(c.fadeOut || 0, c.duration / 2) });
   }
   const duration = Math.max(0, ...project.clips.map(clipEnd));
   return { W, H, fps, duration, layers, audio };
@@ -134,7 +136,7 @@ export function sourceTime(L, t) {
 }
 export function audioGain(A, t) {
   const local = t - A.start, rem = A.duration - local, edge = 0.012;
-  let g = A.volume;
+  let g = A.volume * keyGain(A.keys, local);
   g *= Math.min(1, local / Math.max(edge, A.fadeIn || 0), rem / Math.max(edge, A.fadeOut || 0));
   return Math.max(0, g);
 }

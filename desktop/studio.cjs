@@ -8,6 +8,7 @@ const { renderPlan } = require('./compose.cjs');
 const { normalizeProject } = require('../shared/model.mjs');
 const { lutCube, filterDef } = require('../shared/catalog.mjs');
 const { buildPlan, hasAudioFx, audioFxKey } = require('../shared/plan.mjs');
+const { audioFx: fxOf, audioChain } = require('../shared/audio.mjs');
 const { spawn } = require('node:child_process');
 
 const f = n => String(+(+n).toFixed(4));
@@ -37,12 +38,24 @@ class Studio {
   async videoEncoder() { const e = await detectEncoders(); return e.nvenc && this.prefs().hardware !== 'off' ? ['-c:v', 'h264_nvenc', '-preset', 'p5', '-cq', '18', '-b:v', '0'] : ['-c:v', 'libx264', '-preset', 'fast', '-crf', '17']; }
   asset(id) { const a = this.library.get(id); if (!a) throw Error('That media is no longer in your library.'); if (a.missing) throw Error(`“${a.name}” is missing. Relink it first.`); return a; }
 
-  processedAudioPath(a, clip) { return path.join(this.library.dirs.audio, `${this.library.key(a)}_${audioFxKey(clip).replace(/[^a-z0-9_.-]/gi, '')}.wav`); }
+  processedAudioPath(a, clip) { return path.join(this.library.dirs.audio, `${this.library.key(a)}_${audioFxKey(clip)}.wav`); }
+  // Render the clip's audio chain for the whole source file. Loudness normalisation is a measured second pass.
   async ensureProcessedAudio(a, clip, { signal, progress } = {}) {
     const file = this.processedAudioPath(a, clip); if (fs.existsSync(file)) return file;
-    const tmp = file + '.part.wav';
-    await run(ffmpeg, ['-y', '-v', 'error', '-i', a.path, '-vn', '-af', audioFxFilter(clip.audioFx), '-ar', '48000', '-ac', '2', '-c:a', 'pcm_s16le', '-progress', 'pipe:1', tmp], { signal, onStdout: progress && progressFrom(a.duration, progress) });
+    const fx = fxOf(clip), tmp = file + '.part.wav';
+    const pass = (chain, out, p0, p1) => run(ffmpeg, ['-y', '-v', 'error', '-i', a.path, '-vn', '-af', chain, '-ar', '48000', '-ac', '2', '-c:a', 'pcm_f32le', '-progress', 'pipe:1', out], { signal, onStdout: progress && progressFrom(a.duration, p => progress(p0 + p * (p1 - p0))) });
+    if (fx.level.on && fx.level.mode === 'loudness') {
+      const lufs = await this.measureLoudness(a.path, audioChain({ ...fx, limiter: { on: false } }), { signal });
+      const gain = Number.isFinite(lufs) ? Math.max(-30, Math.min(30, fx.level.target - lufs)) : 0;
+      await pass(audioChain({ ...fx, limiter: { on: true, ceiling: fx.limiter.on ? fx.limiter.ceiling : -1 } }, { levelGain: gain }), tmp, 0.3, 1);
+    } else await pass(audioChain(fx), tmp, 0, 1);
     await fsp.rename(tmp, file); return file;
+  }
+  async measureLoudness(file, chain = 'anull', { signal, from, to } = {}) {
+    const range = from !== undefined ? ['-ss', f(from), '-t', f(Math.max(0.05, to - from))] : [];
+    const { err } = await run(ffmpeg, ['-hide_banner', '-nostats', ...range, '-i', file, '-vn', '-af', `${chain},ebur128=peak=true`, '-f', 'null', '-'], { signal });
+    const i = [...err.matchAll(/I:\s+(-?[\d.]+) LUFS/g)].at(-1); const pk = [...err.matchAll(/Peak:\s+(-?[\d.]+|-inf) dBFS/g)].at(-1);
+    this.lastPeak = pk ? +pk[1] : null; return i ? +i[1] : NaN;
   }
   audioFx({ mediaId, clip }) {
     const a = this.asset(mediaId);

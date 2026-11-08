@@ -4,6 +4,7 @@ const { buildPlan } = require('../shared/plan.mjs');
 const { dimensions, normalizeProject } = require('../shared/model.mjs');
 const { fx, filterDef } = require('../shared/catalog.mjs');
 const { fmtNum: f } = require('../shared/expr.mjs');
+const { keyExpr } = require('../shared/audio.mjs');
 
 const tempo = speed => { const parts = []; let s = speed; while (s > 2) { parts.push('atempo=2'); s /= 2; } while (s < 0.5) { parts.push('atempo=0.5'); s *= 2; } parts.push('atempo=' + f(s)); return parts.join(','); };
 const even = n => Math.max(2, Math.round(n / 2) * 2);
@@ -61,7 +62,7 @@ function renderPlan(raw, { assets, rasters = {}, luts = {}, processedAudio = {},
 
   if (spec.video) {
     const bg = project.settings.background || {};
-    filters.push(`color=c=${bg.type === 'color' ? hex(bg.color) : '0x000000'}:s=${W}x${H}:r=${fps}:d=${f(total)},format=yuv420p,setsar=1[base0]`);
+    filters.push(`color=c=${bg.type === 'color' ? hex(bg.color) : '0x000000'}:s=${W}x${H}:r=${fps}:d=${f(total)},format=gbrp,setsar=1[base0]`);
     for (const L of plan.layers) {
       const vs = L.vs, ve = L.ve, dur = ve - vs; if (dur <= 0.001) continue;
       const enable = `enable='gte(t,${f(vs)})*lt(t,${f(ve)})'`;
@@ -74,20 +75,20 @@ function renderPlan(raw, { assets, rasters = {}, luts = {}, processedAudio = {},
         filters.push(`${b}${chain.concat(cc.lut && cc.lut.intensity < 0.999 ? [] : cc.tail).join(',') || 'null'}${o}`);
         let src = o;
         if (cc.lut && cc.lut.intensity < 0.999) { const x = `[adj${n}x]`, y = `[adj${n}y]`, l = `[adj${n}l]`, m = `[adj${n}m]`; filters.push(`${o}split${x}${y}`, `${y}lut3d=file=${cc.lut.file}${l}`, `${x}${l}blend=all_mode=normal:all_opacity=${f(cc.lut.intensity)}${cc.tail.length ? ',' + cc.tail.join(',') : ''}${m}`); src = m; }
-        const out = next(); filters.push(`${a}${src}overlay=0:0:${enable}${out}`); base = out; continue;
+        const out = next(); filters.push(`${a}${src}overlay=0:0:format=gbrp:${enable}${out}`); base = out; continue;
       }
       if (L.type === 'dip') {
         const lab = `[dip${n}]`;
         filters.push(`color=c=${hex(L.color)}:s=${W}x${H}:r=${fps}:d=${f(dur)},format=rgba,setpts=PTS+${f(vs)}/TB,${L.fades.map(fd => `fade=t=${fd.dir}:st=${f(fd.st)}:d=${f(Math.max(0.01, fd.d))}:alpha=1`).join(',')}${lab}`);
-        const out = next(); filters.push(`${base}${lab}overlay=0:0:eof_action=pass:repeatlast=0:${enable}${out}`); base = out; continue;
+        const out = next(); filters.push(`${base}${lab}overlay=0:0:eof_action=pass:repeatlast=0:format=gbrp:${enable}${out}`); base = out; continue;
       }
       let idx, chain = [];
       if (L.type === 'raster') {
-        const variants = L.variants?.length ? L.variants : [null];
+        const variants = L.variants?.length ? [...(L.variants[0].from > vs + 0.001 ? [{ key: null, from: vs, to: L.variants[0].from }] : []), ...L.variants] : [null];
         // Text variants (word highlight) become separate windows of the same layer.
         for (const v of variants) {
           const r = rasters[L.id]; if (!r) throw Error('Text could not be prepared for export. Try again.');
-          const file = v ? r.variants?.[v.key] || r.file : r.file;
+          const file = v?.key ? r.variants?.[v.key] || r.file : r.file;
           const wvs = v ? Math.max(vs, v.from) : vs, wve = v ? Math.min(ve, v.to) : ve; if (wve - wvs <= 0.001) continue;
           const i = addInput(['-loop', '1', '-framerate', String(fps), '-t', f(wve - wvs + 0.1), '-i', file]);
           emit(L, i, wvs, wve, [`setpts=PTS-STARTPTS`, `scale=${even(L.baseW)}:${even(L.baseH)}`]);
@@ -103,6 +104,7 @@ function renderPlan(raw, { assets, rasters = {}, luts = {}, processedAudio = {},
         const srcA = Math.min(Math.max(0, rawA), maxT), srcB = Math.min(Math.max(srcA + 0.04, rawB), Math.max(srcA + 0.04, maxT + 0.04));
         const pre = Math.max(0, (0 - rawA) / speed), post = Math.max(0, (rawB - (maxT + 0.04)) / speed);
         idx = addInput([...(a.alpha ? ['-c:v', 'libvpx-vp9'] : []), '-ss', f(srcA), '-t', f(srcB - srcA + 0.25), '-i', a.path]);
+        if (!a.colorspace || a.colorspace === 'unknown') chain.push('setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv');
         chain.push(`trim=duration=${f(srcB - srcA)}`, `setpts=(PTS-STARTPTS)/${f(speed)}`, `fps=${fps}`);
         if (pre > 0.001 || post > 0.001) chain.push(`tpad=start_duration=${f(pre)}:stop_duration=${f(post + 0.1)}:start_mode=clone:stop_mode=clone`);
         else chain.push(`tpad=stop_duration=0.1:stop_mode=clone`);
@@ -110,9 +112,9 @@ function renderPlan(raw, { assets, rasters = {}, luts = {}, processedAudio = {},
       if (L.image) chain.push('setpts=PTS-STARTPTS');
       if (L.type === 'bgblur') {
         const k = 4, s = Math.max(0.5, L.blur / k);
-        chain.push(`scale=${even(W / k)}:${even(H / k)}:force_original_aspect_ratio=increase`, `crop=${even(W / k)}:${even(H / k)}`, `gblur=sigma=${f(s)}`, `scale=${W}:${H}`, 'setsar=1', 'format=yuv420p', `setpts=PTS+${f(vs)}/TB`);
+        chain.push(`scale=${even(W / k)}:${even(H / k)}:force_original_aspect_ratio=increase`, `crop=${even(W / k)}:${even(H / k)}`, `gblur=sigma=${f(s)}`, `scale=${W}:${H}`, 'setsar=1', 'format=gbrp', `setpts=PTS+${f(vs)}/TB`);
         const lab = `[l${n}]`; filters.push(`[${idx}:v:0]${chain.join(',')}${lab}`);
-        const out = next(); filters.push(`${base}${lab}overlay=0:0:eof_action=pass:repeatlast=0:${enable}${out}`); base = out; continue;
+        const out = next(); filters.push(`${base}${lab}overlay=0:0:eof_action=pass:repeatlast=0:format=gbrp:${enable}${out}`); base = out; continue;
       }
       const cr = c.crop || {};
       if (cr.l || cr.t || cr.r || cr.b) chain.push(`crop=iw*${f(1 - (cr.l || 0) - (cr.r || 0))}:ih*${f(1 - (cr.t || 0) - (cr.b || 0))}:iw*${f(cr.l || 0)}:ih*${f(cr.t || 0)}`);
@@ -143,7 +145,7 @@ function renderPlan(raw, { assets, rasters = {}, luts = {}, processedAudio = {},
       const out = `[v${n}_${Math.random().toString(36).slice(2, 7)}]`;
       filters.push(`${src}${[...chain, ...post].join(',')}${out}`);
       const x = `${f(L.cx)}${m.x ? '+' + m.x : ''}-w/2`, y = `${f(L.cy)}${m.y ? '+' + m.y : ''}-h/2`;
-      const nb = next(); filters.push(`${base}${out}overlay=x='${x}':y='${y}':eval=frame:eof_action=pass:repeatlast=0:format=auto:enable='gte(t,${f(vs)})*lt(t,${f(ve)})'${nb}`); base = nb;
+      const nb = next(); filters.push(`${base}${out}overlay=x='${x}':y='${y}':eval=frame:eof_action=pass:repeatlast=0:format=gbrp:enable='gte(t,${f(vs)})*lt(t,${f(ve)})'${nb}`); base = nb;
     }
   }
 
@@ -157,11 +159,12 @@ function renderPlan(raw, { assets, rasters = {}, luts = {}, processedAudio = {},
     const i = addInput(['-ss', f(A.srcIn), '-t', f(len + 0.25), '-i', file]);
     const fi = Math.max(0.012, A.fadeIn || 0), fo = Math.max(0.012, A.fadeOut || 0);
     const lab = `[a${i}]`;
-    filters.push(`[${i}:a:0]atrim=duration=${f(len)},asetpts=PTS-STARTPTS,${tempo(A.speed)},aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,volume=${f(A.volume)},afade=t=in:st=0:d=${f(fi)},afade=t=out:st=${f(Math.max(0, A.duration - fo))}:d=${f(fo)},atrim=duration=${f(A.duration)},adelay=${Math.round(A.start * 1000)}:all=1${lab}`);
+    filters.push(`[${i}:a:0]atrim=duration=${f(len)},asetpts=PTS-STARTPTS,${tempo(A.speed)},aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,volume=${f(A.volume)},${A.keys?.length ? `volume='${keyExpr(A.keys)}':eval=frame,` : ''}afade=t=in:st=0:d=${f(fi)},afade=t=out:st=${f(Math.max(0, A.duration - fo))}:d=${f(fo)},atrim=duration=${f(A.duration)},adelay=${Math.round(A.start * 1000)}:all=1${lab}`);
     mix.push(lab);
   }
   if (wantAudio) filters.push(`${mix.join('')}amix=inputs=${mix.length}:duration=first:dropout_transition=0:normalize=0,alimiter=limit=0.98:level=false:attack=2:release=40[amix]`);
 
+  if (spec.video) { filters.push(`${base}scale=out_color_matrix=bt709:out_range=tv,format=${fmt === 'gif' ? 'rgb24' : settings.codec === 'prores' ? 'yuv422p10le' : 'yuv420p'},setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709${fmt === 'gif' ? '' : ':range=tv'}[vfinal]`); base = '[vfinal]'; }
   let vout = base, aout = '[amix]';
   if (range.from > 0 || range.to < total) {
     if (spec.video) { filters.push(`${base}trim=start=${f(range.from)}:end=${f(range.to)},setpts=PTS-STARTPTS[vr]`); vout = '[vr]'; }
@@ -173,7 +176,9 @@ function renderPlan(raw, { assets, rasters = {}, luts = {}, processedAudio = {},
   if (spec.video) out.push('-map', vout);
   if (fmt !== 'gif') out.push('-map', aout);
   out.push('-t', f(range.to - range.from));
-  out.push(...encoderArgs(fmt, settings), '-progress', 'pipe:1', '-nostats');
+  out.push(...encoderArgs(fmt, settings));
+  if (spec.video && fmt !== 'gif') out.push('-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-color_range', 'tv');
+  out.push('-progress', 'pipe:1', '-nostats');
   return { args: out, graph: filters.join(';\n'), duration: range.to - range.from, width: W, height: H, fps, ext: spec.ext, plan };
 }
 

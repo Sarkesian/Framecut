@@ -56,7 +56,7 @@ async function probeMedia(file) {
   const fr = String(video?.avg_frame_rate || video?.r_frame_rate || '0/1').split('/').map(Number);
   return {
     kind: video ? 'video' : 'audio', video: !!video, audio: !!audio, duration, width, height,
-    fps: fr[1] ? +(fr[0] / fr[1]).toFixed(3) : 0, vcodec: video?.codec_name || null, acodec: audio?.codec_name || null,
+    fps: fr[1] ? +(fr[0] / fr[1]).toFixed(3) : 0, vcodec: video?.codec_name || null, colorspace: video?.color_space || null, acodec: audio?.codec_name || null,
     alpha: /yuva|rgba|argb|bgra/.test(video?.pix_fmt || '') || video?.tags?.alpha_mode === '1' || video?.tags?.ALPHA_MODE === '1',
     sampleRate: +(audio?.sample_rate || 0), channels: +(audio?.channels || 0), bitrate: +(data.format?.bit_rate || 0),
   };

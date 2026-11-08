@@ -11,6 +11,8 @@ const { JobQueue } = require('./jobs.cjs');
 const { Library } = require('./library.cjs');
 const { Projects } = require('./projects.cjs');
 const { Studio } = require('./studio.cjs');
+const { Recorder } = require('./recorder.cjs');
+const { audioFx: fxOf, audioChain } = require('../shared/audio.mjs');
 const { num } = require('../shared/model.mjs');
 
 const DEFAULT_PREFS = { proxies: 'auto', hardware: 'auto', autosave: true, accent: 'aurora', captionEngine: 'whisper-web', captionModel: 'base', snapping: true, showTips: true, exportFolder: null, ai: { preset: 'ollama', baseUrl: 'http://127.0.0.1:11434/v1', model: '', speechModel: 'whisper-1' } };
@@ -26,6 +28,7 @@ async function startServer({ dataDir = path.join(__dirname, '..', '.workspace'),
   const library = new Library({ dataDir, cacheDir, jobs, prefs: getPrefs }); await library.init();
   const projects = new Projects({ dataDir }); await projects.init();
   const studio = new Studio({ library, jobs, cacheDir, dataDir, prefs: getPrefs });
+  const recorder = new Recorder({ dir: path.join(dataDir, 'media', 'recordings'), library }); await recorder.init();
   let provider = { baseUrl: prefs.ai?.baseUrl || '', key: '', model: prefs.ai?.model || '', speechModel: prefs.ai?.speechModel || 'whisper-1' };
 
   const app = express();
@@ -152,6 +155,29 @@ async function startServer({ dataDir = path.join(__dirname, '..', '.workspace'),
     }
     res.json(out);
   }));
+
+  // Loudness of a clip as it will sound (after its audio chain), for Auto Balance.
+  app.post('/api/tools/loudness', wrap(async (req, res) => {
+    const a = studio.asset(req.body.mediaId); const clip = req.body.clip || {};
+    const { hasAudioFx } = require('../shared/plan.mjs');
+    const file = hasAudioFx(clip) ? await studio.ensureProcessedAudio(a, clip) : a.path;
+    const lufs = await studio.measureLoudness(file, 'anull', { from: req.body.from, to: req.body.to });
+    res.json({ lufs: Number.isFinite(lufs) ? lufs : null, peak: studio.lastPeak });
+  }));
+  // Speech activity (timeline-independent source times) for ducking and silence trimming.
+  app.post('/api/tools/speech', wrap(async (req, res) => {
+    const { from = 0, to } = req.body; const a = studio.asset(req.body.mediaId); const end = to ?? a.duration;
+    const { intervals } = await studio.silence({ mediaId: a.id, from, to: end, threshold: req.body.threshold ?? -40, minSilence: req.body.minSilence ?? 0.35 });
+    const speech = []; let cur = from; for (const s of intervals) { if (s.start - cur > 0.08) speech.push({ start: cur, end: s.start }); cur = Math.max(cur, s.end); } if (end - cur > 0.08) speech.push({ start: cur, end });
+    res.json({ speech });
+  }));
+
+  // ---------- Recording (24-bit WAV streamed to disk) ----------
+  app.get('/api/record/recovered', (_req, res) => { res.json(recorder.recovered || []); recorder.recovered = []; });
+  app.post('/api/record/start', wrap(async (req, res) => res.json(await recorder.start(req.body))));
+  app.post('/api/record/:id/chunk', express.raw({ type: 'application/octet-stream', limit: '64mb' }), wrap(async (req, res) => res.json(await recorder.chunk(req.params.id, req.body))));
+  app.post('/api/record/:id/finish', wrap(async (req, res) => res.json(await recorder.finish(req.params.id))));
+  app.delete('/api/record/:id', wrap(async (req, res) => { await recorder.discard(req.params.id); res.json({ ok: true }); }));
 
   // ---------- Export ----------
   app.post('/api/export', wrap(async (req, res) => {
