@@ -11,7 +11,10 @@
     "dev": "node desktop/server.cjs",
     "test": "node --test tests/*.test.cjs",
     "test:ui": "npm run build && node tests/ui-journey.cjs && node tests/studio-journey.cjs",
-    "package": "npm run build && electron-builder --win portable --x64"
+    "package": "npm run build && electron-builder --win portable --x64",
+    "build:native": "node scripts/build-native.cjs",
+    "build:icons": "electron scripts/build-icons.cjs",
+    "test:native": "npm run build && node tests/native-journey.cjs"
   },
   "dependencies": {
     "@preact/signals": "^2.11.4",
@@ -40,18 +43,22 @@
       "shared/**/*",
       "dist/**/*",
       "desktop/**/*",
-      "package.json"
+      "package.json",
+      "desktop/icon.png"
     ],
     "asarUnpack": [
       "node_modules/ffmpeg-static/**/*",
-      "node_modules/ffprobe-static/**/*"
+      "node_modules/ffprobe-static/**/*",
+      "desktop/bin/**/*"
     ],
     "win": {
       "target": "portable",
-      "signAndEditExecutable": false
+      "signAndEditExecutable": false,
+      "icon": "build/icon.ico"
     },
     "portable": {
       "artifactName": "FrameCut-Studio.exe"
-    }
+    },
+    "icon": "build/icon.png"
   }
 }
