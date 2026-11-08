@@ -4,10 +4,11 @@ env.allowLocalModels = false;
 env.backends.onnx.wasm.wasmPaths = '/ort/';
 env.backends.onnx.wasm.numThreads = 1;
 const loaded = new Map();
-let last = 0;
+let last = 0, sawTotal = false;
 async function load(model, post) {
   if (loaded.has(model)) return loaded.get(model);
-  const progress_callback = p => { if (Date.now() - last < 250) return; last = Date.now(); post({ type: 'progress', stage: 'download', progress: p.status === 'progress' ? (p.progress || 0) / 100 : null, message: p.status === 'progress' ? `Downloading speech model · ${Math.round(p.progress || 0)}%` : 'Preparing speech model…' }); };
+  // transformers.js reports aggregate download progress as 'progress_total' (per-file 'progress' events are skipped).
+  const progress_callback = p => { const total = p.status === 'progress_total'; if (p.status === 'progress' || (!total && sawTotal) || (total && Date.now() - last < 250 && p.progress < 100)) return; if (total) sawTotal = true; last = Date.now(); post({ type: 'progress', stage: 'download', progress: total ? (p.progress || 0) / 100 : null, message: total && p.progress >= 100 ? 'Loading the model…' : total ? `Downloading speech model · ${Math.round(p.progress || 0)}%${p.total ? ` of ${Math.round(p.total / 1048576)} MB` : ''}` : 'Preparing speech model…' }); };
   let pipe, device = 'wasm';
   if (self.navigator?.gpu) {
     try { pipe = await pipeline('automatic-speech-recognition', model, { device: 'webgpu', dtype: { encoder_model: 'fp32', decoder_model_merged: 'q4' }, progress_callback }); device = 'webgpu'; } catch { pipe = null; }

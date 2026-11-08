@@ -5,11 +5,12 @@ env.allowLocalModels = false;
 env.backends.onnx.wasm.wasmPaths = '/ort/';
 env.backends.onnx.wasm.numThreads = Math.min(4, self.navigator?.hardwareConcurrency || 2);
 const MODEL_ID = 'Xenova/modnet';
-let model = null, device = null, last = 0, prev = null;
+let model = null, device = null, last = 0, prev = null, sawTotal = false;
 
 async function load(post) {
   if (model) return;
-  const progress_callback = p => { if (Date.now() - last < 250) return; last = Date.now(); post({ type: 'progress', stage: 'download', progress: p.status === 'progress' ? (p.progress || 0) / 100 : null, message: p.status === 'progress' ? `Downloading background removal model · ${Math.round(p.progress || 0)}%` : 'Preparing background removal…' }); };
+  // transformers.js reports aggregate download progress as 'progress_total' (per-file 'progress' events are skipped).
+  const progress_callback = p => { const total = p.status === 'progress_total'; if (p.status === 'progress' || (!total && sawTotal) || (total && Date.now() - last < 250 && p.progress < 100)) return; if (total) sawTotal = true; last = Date.now(); post({ type: 'progress', stage: 'download', progress: total ? (p.progress || 0) / 100 : null, message: total && p.progress >= 100 ? 'Loading the model…' : total ? `Downloading background removal model · ${Math.round(p.progress || 0)}%${p.total ? ` of ${Math.round(p.total / 1048576)} MB` : ''}` : 'Preparing background removal…' }); };
   if (self.navigator?.gpu) { try { model = await AutoModel.from_pretrained(MODEL_ID, { device: 'webgpu', dtype: 'fp32', progress_callback }); device = 'webgpu'; } catch { model = null; } }
   if (!model) { model = await AutoModel.from_pretrained(MODEL_ID, { device: 'wasm', dtype: 'fp32', progress_callback }); device = 'wasm'; }
 }
