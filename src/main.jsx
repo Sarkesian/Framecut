@@ -14,8 +14,12 @@ import { Editor } from './ui/Editor.jsx';
 import * as stateMod from './lib/state.js';
 import * as editMod from './lib/edit.js';
 import * as studioMod from './ui/Studio.jsx';
+import * as dragMod from './lib/drag.js';
+import * as keysMod from './lib/keyedit.js';
+import * as viewportMod from './lib/viewport.js';
+import * as uiMod from './lib/uiprefs.js';
 // Automation hooks used by the end-to-end tests.
-window.__fc = { state: stateMod, edit: editMod, studio: studioMod, api };
+window.__fc = { state: stateMod, edit: editMod, studio: studioMod, api, drag: dragMod, keys: keysMod, viewport: viewportMod, ui: uiMod };
 
 function App() {
   useEffect(() => {

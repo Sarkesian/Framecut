@@ -1,5 +1,6 @@
 // Editing commands. Each runs inside commit(), so everything is undoable and autosaved.
 import { shiftKeys } from '../../shared/keys.mjs';
+import { spanTo } from '../../shared/snap.mjs';
 import { newClip, uid, clipEnd, srcOut, trackClips, mainTrack, transitionPartner, maxTransition, hasMedia, trackKindFor } from '../../shared/model.mjs';
 import { CAPTION_STYLE, TEXT_STYLE, effectDef } from '../../shared/catalog.mjs';
 import { commit, project, selection, time, asset, toast, player } from './state.js';
@@ -148,11 +149,14 @@ export function duplicateClips(ids = selection.value) {
     }
   }, { select: out });
 }
-let clipboard = null;
-export function copyClips(ids = selection.value) { const p = project.value; const src = p.clips.filter(c => ids.includes(c.id)); if (!src.length) return false; const base = Math.min(...src.map(c => c.start)); clipboard = src.map(c => ({ ...structuredClone(c), _offset: c.start - base, _kind: trackOf(p, c.trackId)?.kind, _main: !!trackOf(p, c.trackId)?.main })); return true; }
+let clipboard = null, clipboardBase = 0;
+export const hasClipboard = () => !!clipboard?.length;
+export function copyClips(ids = selection.value) { const p = project.value; const src = p.clips.filter(c => ids.includes(c.id)); if (!src.length) return false; const base = Math.min(...src.map(c => c.start)); clipboardBase = base; clipboard = src.map(c => ({ ...structuredClone(c), _offset: c.start - base, _kind: trackOf(p, c.trackId)?.kind, _main: !!trackOf(p, c.trackId)?.main })); return true; }
 export function cutClips() { if (copyClips()) deleteClips(); }
-export function pasteClips(at = time.value) {
+// Paste at the playhead (default) or, with inPlace, at the time the clips were copied from.
+export function pasteClips(at = time.value, { inPlace = false } = {}) {
   if (!clipboard?.length) return toast('Nothing to paste yet. Copy a clip with Ctrl+C.', 'warn');
+  if (inPlace) at = clipboardBase;
   const out = [];
   commit('Paste', p => {
     for (const s of clipboard) {
@@ -182,29 +186,63 @@ export function placeClips(moves, { label = 'Move clip' } = {}) {
     for (const c of p.clips) if (c.transition && !transitionPartner(p, c)) c.transition = null;
   });
 }
+// Where an edge can go: media clips can't reveal source before 0 or past the file's end; every clip keeps ≥ 0.05 s.
+export function trimLimits(c, a = c.mediaId ? asset(c.mediaId) : null) {
+  const speed = c.speed || 1, end = clipEnd(c), media = hasMedia(c) && c.kind !== 'image';
+  return {
+    minStart: Math.max(0, media ? c.start - c.in / speed : 0), maxStart: end - 0.05,
+    minEnd: c.start + 0.05, maxEnd: media && a ? c.start + (a.duration - c.in) / speed : Infinity,
+  };
+}
 // Trim an edge to a new timeline time.
-export function trimClip(id, edge, t, { ripple = false } = {}) {
-  commit('Trim', p => {
-    const c = p.clips.find(x => x.id === id); if (!c) return false;
-    const a = c.mediaId ? asset(c.mediaId) : null, speed = c.speed || 1;
-    const maxSrc = a && c.kind !== 'image' ? a.duration : Infinity;
-    const end = clipEnd(c);
-    if (edge === 'start') {
-      let ns = Math.min(t, end - 0.05);
-      if (hasMedia(c) && c.kind !== 'image') ns = Math.max(ns, c.start - c.in / speed);
-      ns = Math.max(0, ns);
-      const d = ns - c.start;
-      if (hasMedia(c)) c.in = Math.max(0, c.in + d * speed);
-      if (c.keyframes) shiftKeys(c, d, end - ns);
-      c.start = ns; c.duration = end - ns;
-      if (c.words) c.words = c.words.map(w => ({ ...w, start: w.start - d, end: w.end - d })).filter(w => w.end > 0);
-    } else {
-      let ne = Math.max(t, c.start + 0.05);
-      if (hasMedia(c) && c.kind !== 'image') ne = Math.min(ne, c.start + (maxSrc - c.in) / speed);
-      const delta = ne - end; c.duration = ne - c.start;
-      if (ripple) for (const x of p.clips) if (x.trackId === c.trackId && x.id !== c.id && x.start >= end - EPS) x.start += delta;
+export function trimClip(id, edge, t, { ripple = false, key } = {}) { return trimClips([{ id, edge, t }], { ripple, key: key === undefined ? 'trim:' + id + edge : key }); }
+// Trim several edges in one undo entry. Ripple shifts later clips on the same track by the length change.
+export function trimClips(list, { ripple = false, key = null, label = 'Trim' } = {}) {
+  commit(list.length > 1 ? label + ' clips' : label, p => {
+    let any = false;
+    for (const { id, edge, t } of list) {
+      const c = p.clips.find(x => x.id === id); if (!c) continue; any = true;
+      const L = trimLimits(c), speed = c.speed || 1, end = clipEnd(c);
+      if (edge === 'start') {
+        const ns = Math.min(L.maxStart, Math.max(L.minStart, t));
+        const d = ns - c.start;
+        if (hasMedia(c)) c.in = Math.max(0, c.in + d * speed);
+        if (c.keyframes) shiftKeys(c, d, end - ns);
+        if (c.words) c.words = c.words.map(w => ({ ...w, start: w.start - d, end: w.end - d })).filter(w => w.end > 0);
+        if (c.volumeKeys) { c.volumeKeys = c.volumeKeys.map(k => ({ ...k, t: k.t - d })).filter(k => k.t >= 0 && k.t <= end - ns); if (!c.volumeKeys.length) delete c.volumeKeys; }
+        if (ripple && !trackOf(p, c.trackId)?.main) {
+          // Ripple: the clip keeps its position and later clips close up (or make room).
+          c.duration = end - ns;
+          for (const x of p.clips) if (x.trackId === c.trackId && x.id !== c.id && x.start >= end - EPS && !list.some(l => l.id === x.id)) x.start = Math.max(0, x.start - d);
+        } else { c.start = ns; c.duration = spanTo(ns, end); }
+      } else {
+        const ne = Math.max(L.minEnd, Math.min(L.maxEnd, t));
+        const delta = ne - end; c.duration = spanTo(c.start, ne);
+        if (ripple) for (const x of p.clips) if (x.trackId === c.trackId && x.id !== c.id && x.start >= end - EPS && !list.some(l => l.id === x.id)) x.start += delta;
+      }
     }
-  }, { key: 'trim:' + id + edge });
+    if (!any) return false;
+    for (const x of p.clips) if (x.transition && !transitionPartner(p, x)) x.transition = null;
+  }, { key });
+}
+// The other half of a video whose sound was separated (kept in sync while linking is on).
+export function partnerOf(p, c) {
+  if (!c) return null;
+  if (c.detachedAudio) return p.clips.find(x => x.id === c.detachedAudio) || null;
+  return p.clips.find(x => x.detachedAudio === c.id) || null;
+}
+export function unlinkClip(id) { commit('Unlink audio', p => { const c = p.clips.find(x => x.id === id); const o = partnerOf(p, c); if (!o) return false; const v = c.detachedAudio ? c : o; delete v.detachedAudio; }); }
+// Gaps between clips on a track (and before the first clip), in timeline seconds.
+export function trackGaps(p, trackId, min = 1e-3) {
+  const out = []; let t = 0;
+  for (const c of trackClips(p, trackId)) { if (c.start - t > min) out.push({ start: t, end: c.start }); t = Math.max(t, clipEnd(c)); }
+  return out;
+}
+export function closeGap(trackId, at) {
+  commit('Close gap', p => {
+    const g = trackGaps(p, trackId).find(x => at >= x.start - EPS && at <= x.end + EPS); if (!g) return false;
+    const d = g.end - g.start; for (const c of p.clips) if (c.trackId === trackId && c.start >= g.end - EPS) c.start = Math.max(0, c.start - d);
+  });
 }
 export function setSpeed(id, speed) {
   commit('Change speed', p => {
@@ -231,8 +269,12 @@ export function setTrack(trackId, patch, label = 'Track change') { commit(label,
 export function removeTrack(trackId) {
   commit('Delete track', p => { const t = trackOf(p, trackId); if (!t || t.main) return false; p.clips = p.clips.filter(c => c.trackId !== trackId); p.tracks = p.tracks.filter(x => x.id !== trackId); });
 }
-export function updateClip(id, fn, { label = 'Edit clip', key } = {}) { commit(label, p => { const c = p.clips.find(x => x.id === id); if (!c) return false; return fn(c, p); }, { key }); }
-export function updateClips(ids, fn, { label = 'Edit clips', key } = {}) { commit(label, p => { for (const c of p.clips) if (ids.includes(c.id)) fn(c, p); }, { key }); }
+export function updateClip(id, fn, { label = 'Edit clip', key, window } = {}) { commit(label, p => { const c = p.clips.find(x => x.id === id); if (!c) return false; return fn(c, p); }, { key, window }); }
+export function updateClips(ids, fn, { label = 'Edit clips', key, window } = {}) { commit(label, p => { for (const c of p.clips) if (ids.includes(c.id)) fn(c, p); }, { key, window }); }
+// Live text edit: every keystroke updates the clip (and the preview); one undo entry per editing session.
+export function setClipText(id, v, session) {
+  updateClip(id, x => { if (x.text === v) return false; x.text = v; x.name = v.split('\n')[0].slice(0, 40); if (x.words && x.words.length !== v.split(/\s+/).filter(Boolean).length) x.words = null; }, { label: 'Edit text', key: 'text:' + id + ':' + session, window: Infinity });
+}
 
 export function insertCaptions(segments, { replaceRange, trackName = 'Captions', style } = {}) {
   commit('Add captions', p => {

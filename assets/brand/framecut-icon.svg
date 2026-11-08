@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- FrameCut Studio app icon: an "F" assembled from three timeline clips, with a cut through the top clip. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#262b36"/>
+      <stop offset="1" stop-color="#0d0f14"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".16"/>
+      <stop offset=".45" stop-color="#ffffff" stop-opacity=".03"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="lime" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#d6fb8a"/>
+      <stop offset="1" stop-color="#9fe868"/>
+    </linearGradient>
+    <linearGradient id="mint" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8ef0cf"/>
+      <stop offset="1" stop-color="#4fd1a8"/>
+    </linearGradient>
+    <radialGradient id="glow" cx=".42" cy=".46" r=".55">
+      <stop offset="0" stop-color="#b6f36a" stop-opacity=".16"/>
+      <stop offset="1" stop-color="#b6f36a" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="lift" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#000" flood-opacity=".38"/>
+    </filter>
+    <mask id="cut">
+      <rect width="1024" height="1024" fill="#fff"/>
+      <!-- the cut: a clean diagonal slit through the top clip -->
+      <path d="M 612 236 L 652 236 L 600 436 L 560 436 Z" fill="#000"/>
+    </mask>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="208" fill="url(#bg)"/>
+  <rect x="64" y="64" width="896" height="896" rx="208" fill="url(#glow)"/>
+  <rect x="65.5" y="65.5" width="893" height="893" rx="206.5" fill="none" stroke="url(#rim)" stroke-width="3"/>
+  <g filter="url(#lift)">
+    <!-- stem clip -->
+    <rect x="300" y="268" width="128" height="488" rx="44" fill="url(#lime)"/>
+    <!-- top clip, cut -->
+    <rect x="452" y="268" width="296" height="128" rx="44" fill="url(#lime)" mask="url(#cut)"/>
+    <!-- middle clip (second track) -->
+    <rect x="452" y="452" width="200" height="120" rx="42" fill="url(#mint)"/>
+  </g>
+</svg>
