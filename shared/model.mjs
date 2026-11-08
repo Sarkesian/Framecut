@@ -45,6 +45,8 @@ const KIND_TRACK = { video: 'video', image: 'video', audio: 'audio', text: 'text
 export const trackKindFor = kind => KIND_TRACK[kind] || 'video';
 export const isVisual = c => c.kind !== 'audio';
 export const hasMedia = c => ['video', 'image', 'audio'].includes(c.kind);
+// A sticker from the Creative Library or the user's files: an image or looping transparent video asset.
+export const stickerMedia = c => c.kind === 'sticker' && c.sticker?.type === 'media' && !!c.mediaId;
 export const clipEnd = c => c.start + c.duration;
 export const srcOut = c => c.in + c.duration * (c.speed || 1);
 

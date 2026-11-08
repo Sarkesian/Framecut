@@ -107,13 +107,16 @@ export async function renderSvgImage(url, W, H) {
 }
 
 // Raster for any raster clip; resolves async resources first.
+const isMediaSticker = c => c.kind === 'sticker' && c.sticker?.type === 'media';
 export async function rasterFor(clip, W, H, media, variant = null) {
   if (clip.kind === 'text') return renderText(clip, W, H, variant);
+  if (isMediaSticker(clip)) return renderSvgImage(media(clip.mediaId).url, H, H);
   if (clip.kind === 'sticker') return renderSticker(clip, W, H);
   const a = media(clip.mediaId); return renderSvgImage(a.url, W, H);
 }
-export function rasterSync(clip, W, H, variant = null) {
+export function rasterSync(clip, W, H, variant = null, media = null) {
   if (clip.kind === 'text') return renderText(clip, W, H, variant);
+  if (isMediaSticker(clip)) { const a = media?.(clip.mediaId); return a ? cache.get(JSON.stringify(['svg', a.url, H, H])) || null : null; }
   const st = clip.sticker || {};
   const key = clip.kind === 'sticker' ? JSON.stringify(['st', st, H]) : null;
   return key ? cache.get(key) || null : null;
@@ -124,7 +127,7 @@ export async function exportRasters(project, W, H, media) {
   const out = {};
   for (const c of project.clips) {
     const a = c.mediaId && media(c.mediaId);
-    if (!(c.kind === 'text' || c.kind === 'sticker' || (c.kind === 'image' && a?.svg))) continue;
+    if (!(c.kind === 'text' || (c.kind === 'sticker' && !isMediaSticker(c)) || ((c.kind === 'image' || isMediaSticker(c)) && a?.svg))) continue;
     const r = await rasterFor(c, W, H, media);
     const entry = { w: r.w, h: r.h, png: r.canvas.toDataURL('image/png'), variants: {} };
     if (c.kind === 'text' && c.style?.highlight && c.words?.length) c.words.forEach((_, i) => { entry.variants['w' + i] = renderText(c, W, H, i).canvas.toDataURL('image/png'); });

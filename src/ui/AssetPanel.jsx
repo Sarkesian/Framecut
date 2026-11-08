@@ -15,6 +15,7 @@ import { shortTime, bytes } from '../lib/format.js';
 import { transcribe, groupWords } from '../lib/whisper.js';
 import { freeTrack } from '../lib/edit.js';
 import { openStudio } from './Studio.jsx';
+import { AudioLibrary, StickerLibrary } from './Library.jsx';
 
 const TABS = [['media', 'Media', Film], ['audio', 'Audio', Music], ['text', 'Text', Type], ['stickers', 'Stickers', Smile], ['effects', 'Effects', Sparkles], ['transitions', 'Transitions', Blend], ['filters', 'Filters', Palette], ['captions', 'Captions', Captions], ['templates', 'Templates', LayoutTemplate]];
 export const dragPayload = (e, data) => { e.dataTransfer.setData('application/x-framecut', JSON.stringify(data)); e.dataTransfer.effectAllowed = 'copy'; window.__fcDrag = data; };
@@ -23,7 +24,7 @@ export function AssetPanel() {
   const tab = libraryTab.value;
   return <div class="assets">
     <nav class="asset-rail" aria-label="Asset categories">{TABS.map(([id, label, Icon]) => <button key={id} class={`rail-btn ${tab === id ? 'on' : ''}`} onClick={() => (libraryTab.value = id)} aria-pressed={tab === id}><Icon size={18} /><span>{label}</span></button>)}</nav>
-    <div class="asset-content">{{ media: <MediaTab />, audio: <AudioTab />, text: <TextTab />, stickers: <StickerTab />, effects: <EffectsTab />, transitions: <TransitionsTab />, filters: <FiltersTab />, captions: <CaptionsTab />, templates: <TemplatesTab /> }[tab]}</div>
+    <div class="asset-content">{{ media: <MediaTab />, audio: <AudioLibrary />, text: <TextTab />, stickers: <StickerLibrary />, effects: <EffectsTab />, transitions: <TransitionsTab />, filters: <FiltersTab />, captions: <CaptionsTab />, templates: <TemplatesTab /> }[tab]}</div>
   </div>;
 }
 const Head = ({ title, children }) => <div class="asset-head"><h2>{title}</h2><div class="grow" />{children}</div>;
@@ -32,7 +33,7 @@ const SearchBox = ({ value, onInput, placeholder = 'Search' }) => <div class="se
 // ---------------- Media ----------------
 function MediaTab() {
   const p = project.value; const [q, setQ] = useState(''), [kind, setKind] = useState('all'), [scope, setScope] = useState('project'), [over, setOver] = useState(false), [busy, setBusy] = useState(false);
-  const all = [...media.value.values()];
+  const all = [...media.value.values()].filter(a => a.role !== 'sticker' && a.role !== 'library-audio');
   const list = all.filter(a => (scope === 'all' || p.mediaIds.includes(a.id)) && (kind === 'all' || (kind === 'fav' ? p.favorites.includes(a.id) : a.kind === kind)) && a.name.toLowerCase().includes(q.toLowerCase()) && a.kind !== 'audio' || (a.kind === 'audio' && kind === 'audio' && (scope === 'all' || p.mediaIds.includes(a.id)) && a.name.toLowerCase().includes(q.toLowerCase())));
   const missing = all.filter(a => a.missing && p.mediaIds.includes(a.id));
   const drop = async e => {
@@ -93,33 +94,7 @@ function MediaCard({ a, fav, used }) {
   </div>;
 }
 
-// ---------------- Audio ----------------
-function AudioTab() {
-  const p = project.value; const [q, setQ] = useState(''), [playingId, setPlayingId] = useState(null); const audioRef = useRef(null);
-  const list = [...media.value.values()].filter(a => a.audio && (p.mediaIds.includes(a.id)) && a.name.toLowerCase().includes(q.toLowerCase())).sort((a, b) => (a.kind === 'audio' ? -1 : 1) - (b.kind === 'audio' ? -1 : 1));
-  const preview = a => { if (!audioRef.current) audioRef.current = new Audio(); const el = audioRef.current; if (playingId === a.id) { el.pause(); setPlayingId(null); return; } el.src = a.url; el.currentTime = 0; el.play().catch(() => {}); el.onended = () => setPlayingId(null); setPlayingId(a.id); };
-  useEffect(() => () => audioRef.current?.pause(), []);
-  return <div class="tab-body">
-    <Head title="Audio"><button class="btn primary sm" onClick={() => importMedia()}><Upload size={14} />Import</button></Head>
-    <Recorder />
-    <div class="asset-tools"><SearchBox value={q} onInput={setQ} placeholder="Search sounds" /></div>
-    {!list.length ? <Empty icon={Music} title="No audio yet" text="Import music or sound effects, record a voiceover, or drag a video with sound onto an audio track." />
-      : <div class="audio-list">{list.map(a => <div key={a.id} class="audio-row" draggable onDragStart={e => dragPayload(e, { type: 'media', id: a.id, asAudio: true })} onDblClick={() => addAudio(a)}>
-        <button class="icon-btn" aria-label={playingId === a.id ? 'Stop preview' : 'Preview'} onClick={() => preview(a)}>{playingId === a.id ? <Pause size={15} /> : <Play size={15} />}</button>
-        <div class="grow ellipsis"><div class="ellipsis">{a.name}</div><small class="muted">{shortTime(a.duration)} · {a.kind === 'audio' ? 'Audio' : 'From video'}</small></div>
-        <button class="icon-btn" data-tip="Add at playhead" onClick={() => addAudio(a)}><Plus size={16} /></button>
-      </div>)}</div>}
-  </div>;
-}
-function addAudio(a) {
-  if (a.kind === 'audio') return addAssets([a]);
-  // Sound from a video file goes onto an audio track.
-  const c = newClip('audio', { mediaId: a.id, name: a.name.replace(/\.[^.]+$/, '') + ' (audio)', start: time.value, duration: a.duration });
-  commit('Add audio', p => { c.trackId = freeTrack(p, 'audio', c.start, clipEnd(c)).id; p.clips.push(c); }, { select: [c.id] });
-}
-function Recorder() {
-  return <button class="studio-entry" onClick={openStudio}><span class="dot" /><div><b>Record voiceover</b><small>Studio-quality WAV · script reader · auto cleanup</small></div></button>;
-}
+// Audio and Stickers live in Library.jsx (the Creative Library).
 
 // ---------------- Text ----------------
 function TextPreview({ style, text = 'Aa' }) {
@@ -140,19 +115,6 @@ function TextTab() {
 export function addTextTemplate(t, at = time.value) {
   const clips = textTemplateClips(t, at);
   commit('Add ' + t.name.toLowerCase(), p => { for (const c of clips) { const tr = p.tracks.find(x => x.kind === 'text' && !x.captions && !x.locked && !p.clips.some(o => o.trackId === x.id && o.start < clipEnd(c) && clipEnd(o) > c.start)); c.trackId = (tr || freeTrack(p, 'text', c.start, clipEnd(c))).id; p.clips.push(c); } }, { select: clips.map(c => c.id) });
-}
-
-// ---------------- Stickers ----------------
-function StickerTab() {
-  const [cat, setCat] = useState('Shapes');
-  const cats = ['Shapes', ...Object.keys(EMOJI)];
-  return <div class="tab-body">
-    <Head title="Stickers" />
-    <div class="filter-chips">{cats.map(c => <button key={c} class={`fchip ${cat === c ? 'on' : ''}`} onClick={() => setCat(c)}>{c}</button>)}</div>
-    {cat === 'Shapes' ? <div class="tile-grid">{SHAPE_STICKERS.map(s => <button key={s.id} class="tile sticker-tile" data-tip={s.name} draggable onDragStart={e => dragPayload(e, { type: 'sticker', sticker: { type: 'shape', value: s.id } })} onClick={() => addSticker({ type: 'shape', value: s.id, name: s.name })}><img src={svgUrl(s.svg)} alt={s.name} draggable={false} /></button>)}</div>
-      : <div class="emoji-grid">{EMOJI[cat].map(e => <button key={e} class="emoji" draggable onDragStart={ev => dragPayload(ev, { type: 'sticker', sticker: { type: 'emoji', value: e } })} onClick={() => addSticker({ type: 'emoji', value: e })}>{e}</button>)}</div>}
-    <p class="muted hint">Stickers can bounce, pulse or spin — select one and open <b>Animation</b>.</p>
-  </div>;
 }
 
 // ---------------- Effects / Filters / Transitions ----------------

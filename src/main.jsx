@@ -5,6 +5,7 @@ import './styles/home.css';
 import './styles/editor.css';
 import './styles/timeline.css';
 import './styles/studio.css';
+import './styles/library.css';
 import { route, prefs, health, fonts, userLuts, refreshMedia, openProject, media, jobs, toast } from './lib/state.js';
 import { api } from './lib/api.js';
 import { installTooltips, TooltipHost, MenuHost, DialogHost, ToastHost } from './ui/kit.jsx';

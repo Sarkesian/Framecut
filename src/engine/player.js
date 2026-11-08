@@ -29,7 +29,7 @@ export class Player {
     return this.plan;
   }
   raster(c, W, H, variant = null) {
-    const r = rasterSync(c, W, H, variant);
+    const r = rasterSync(c, W, H, variant, id => this.getMedia(id));
     if (r) return r;
     const key = c.id + JSON.stringify(c.sticker || c.mediaId);
     if (!this.pendingRasters.has(key)) { this.pendingRasters.add(key); rasterFor(c, W, H, id => this.getMedia(id)).then(() => { this.pendingRasters.delete(key); this.svgDone ||= new Map(); this.invalidate(); }).catch(() => {}); }
@@ -88,7 +88,7 @@ export class Player {
       let el;
       if (L.image) { el = new Image(); el.decoding = 'async'; el.onload = () => this.requestDraw(); el.src = src; }
       else {
-        el = document.createElement('video'); el.preload = 'auto'; el.playsInline = true; el.disablePictureInPicture = true; el.src = src; el.muted = false;
+        el = document.createElement('video'); el.preload = 'auto'; el.playsInline = true; el.disablePictureInPicture = true; el.src = src; el.muted = false; el.loop = !!L.loop;
         // 'seeked' can fire before the decoded frame is uploadable, and detached videos don't reliably get
         // frame callbacks, so redraw again shortly after to pick up the settled frame.
         el.addEventListener('seeked', () => { e.stamp++; this.requestDraw(); for (const ms of [40, 120, 300]) setTimeout(() => { if (!el.seeking) { e.stamp++; this.requestDraw(); } }, ms); });
@@ -141,8 +141,8 @@ export class Player {
       const e = this.element(L); if (!e) continue; seen.add(L.clip.id);
       if (L.image || L.type === 'bgblur') continue;
       const at = isActive ? t : L.vs;
-      const raw = L.clip.in + (at - L.clip.start) * (L.clip.speed || 1), desired = sourceTime(L, at);
-      this.syncEl(e.el, desired, isActive, L.clip.speed || 1, Math.abs(raw - desired) > 0.001);
+      const raw = (L.clip.in || 0) + (at - L.clip.start) * (L.clip.speed || 1), desired = sourceTime(L, at);
+      this.syncEl(e.el, desired, isActive, L.clip.speed || 1, !L.loop && Math.abs(raw - desired) > 0.001);
     }
     // Audio
     for (const A of plan.audio) {

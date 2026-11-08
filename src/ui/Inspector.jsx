@@ -15,7 +15,9 @@ import { signal } from '@preact/signals';
 import { removeBackground, matteStatus, MATTE_MODEL } from '../lib/matte.js';
 import { confirm, Progress } from './kit.jsx';
 import { KEY_PROPS, EASINGS, hasKeys, anyKeys, keyAt, propValue, setKey, removeKey, writeProp } from '../../shared/keys.mjs';
-import { Diamond, ChevronLeft, ChevronRight } from 'lucide-preact';
+import { Diamond, ChevronLeft, ChevronRight, ExternalLink, Copy, Crosshair } from 'lucide-preact';
+import { assessRights, creditLine, PROVIDERS } from '../../shared/rights.mjs';
+import { trimClip } from '../lib/edit.js';
 
 const KIND = { video: ['Video', Film], image: ['Photo', Film], audio: ['Audio', Music], text: ['Text', Type], sticker: ['Sticker', Sparkles], adjust: ['Effect layer', Layers] };
 const TABS = { video: ['Basic', 'Color', 'Effects', 'Animation', 'Speed', 'Audio'], image: ['Basic', 'Color', 'Effects', 'Animation'], text: ['Text', 'Basic', 'Animation'], sticker: ['Basic', 'Animation'], audio: ['Audio', 'Speed'], adjust: ['Color', 'Effects'] };
@@ -31,7 +33,7 @@ export function Inspector() {
     <div class="insp-tabs" role="tablist">{tabs.map(t => <button key={t} role="tab" aria-selected={active === t} class={active === t ? 'on' : ''} onClick={() => setTab({ ...tab, [c.kind]: t })}>{t}</button>)}</div>
     <div class="insp-scroll">{
       active === 'Basic' ? <BasicPanel c={c} /> : active === 'Color' ? <ColorPanel c={c} /> : active === 'Effects' ? <EffectsPanel c={c} /> : active === 'Animation' ? <AnimPanel c={c} />
-        : active === 'Speed' ? <SpeedPanel c={c} /> : active === 'Audio' ? <AudioPanel c={c} /> : active === 'Text' ? <TextPanel c={c} /> : null}</div>
+        : active === 'Speed' ? <SpeedPanel c={c} /> : active === 'Audio' ? <AudioPanel c={c} /> : active === 'Text' ? <TextPanel c={c} /> : null}<SourceSection c={c} /></div>
   </div>;
 }
 const ids = () => selection.value;
@@ -65,10 +67,45 @@ function KeyNav({ c }) {
     <button class="btn sm ghost" data-tip="Remove all keyframes" onClick={() => updateClip(c.id, x => { for (const p of KEY_PROPS) if (x.keyframes?.[p]?.length) { x.transform[p] = propValue(x, p, u); } delete x.keyframes; }, { label: 'Clear keyframes' })}><Trash2 size={13} /></button>
   </div>;
 }
+// Library / imported stickers: loop, animation speed and duration, independent of size and position.
+function StickerPlayback({ c }) {
+  const a = asset(c.mediaId); if (!a) return null;
+  const animated = a.kind === 'video', speed = c.speed || 1, once = a.duration / speed;
+  return <Section title="Sticker">
+    {animated ? <>
+      <Toggle label="Loop animation" on={c.loop !== false} onChange={v => updateClip(c.id, x => { x.loop = v; }, { label: v ? 'Loop sticker' : 'Play sticker once' })} hint="When off, the animation plays once and holds its last frame." />
+      <Slider label="Animation speed" value={speed} min={0.25} max={4} step={0.05} def={1} fmt={v => v.toFixed(2) + '×'} onChange={v => updateClip(c.id, x => { x.speed = v; }, { label: 'Sticker speed', key: 'stspeed' + c.id })} />
+    </> : <p class="muted hint">Still sticker · transparency kept.</p>}
+    <Slider label="Duration" value={c.duration} min={0.2} max={Math.max(30, c.duration)} step={0.05} def={3} fmt={v => v.toFixed(1) + ' s'} onChange={v => trimClip(c.id, 'end', c.start + v)} />
+    <div class="row">
+      {animated && <button class="btn sm" data-tip="Make the clip exactly one play of the animation" onClick={() => trimClip(c.id, 'end', c.start + once)}>One play · {shortTime(once)}</button>}
+      <button class="btn sm" onClick={() => updateClip(c.id, x => { x.transform = { ...x.transform, x: 0, y: 0 }; }, { label: 'Center sticker' })}><Crosshair size={13} />Center</button>
+    </div>
+    {animated && <small class="muted">{shortTime(a.duration)} animation · {Math.round(a.fps || 0)} fps · {a.width}×{a.height}</small>}
+  </Section>;
+}
+// Where a library asset came from and what its license asks for.
+function SourceSection({ c }) {
+  const a = c.mediaId && asset(c.mediaId); const s = a?.source; if (!s || s.provider === 'local') return null;
+  const r = assessRights({ provider: s.provider, license: s.license, licenseVersion: s.licenseVersion, kind: s.kind, usage: project.value.usageMode === 'personal' ? 'personal' : 'commercial' });
+  const credit = creditLine(s);
+  return <Section title="Source & license" open={r.level === 'blocked' || r.level === 'caution'}>
+    <div class="src-card">
+      <div><b>{s.title}</b>{s.creator ? <> · {s.creatorUrl ? <a href={s.creatorUrl} target="_blank" rel="noreferrer">{s.creator}</a> : s.creator}</> : null}</div>
+      <div class="row"><span class={`lic lic-${r.level}`}>{r.badge}</span>{s.licenseUrl && <a href={s.licenseUrl} target="_blank" rel="noreferrer">{r.name || 'License'} <ExternalLink size={11} /></a>}</div>
+      <div>{r.summary}</div>
+      {r.details.length > 0 && <ul class="muted" style={{ margin: 0, paddingLeft: 16 }}>{r.details.map(d => <li key={d}>{d}</li>)}</ul>}
+      {(r.attribution || s.license === 'mit') && <div class="credit-box"><p>{credit}</p><button class="btn sm ghost" onClick={() => navigator.clipboard.writeText(credit).then(() => toast('Credit copied.'))}><Copy size={12} />Copy credit</button></div>}
+      <small class="muted">Via {PROVIDERS[s.provider]?.name || s.provider}{s.sourceName ? ' · ' + s.sourceName : ''}{s.importedAt ? ' · saved ' + new Date(s.importedAt).toLocaleDateString() : ''}. Stored in this computer's project media, so it works offline.</small>
+      {s.sourcePageUrl && <a href={s.sourcePageUrl} target="_blank" rel="noreferrer">Open the original page <ExternalLink size={11} /></a>}
+    </div>
+  </Section>;
+}
 function BasicPanel({ c }) {
   const T = { ...DEFAULT_TRANSFORM, ...c.transform }, cr = c.crop || {};
   const tr = (k, label) => v => set(c, label, 'tr' + k, x => { x.transform[k] = v; });
   return <>
+    {c.kind === 'sticker' && c.sticker?.type === 'media' && <StickerPlayback c={c} />}
     <Section title="Position & size" right={<button class="btn ghost sm" onClick={() => set(c, 'Reset transform', 'trreset', x => { x.transform = { ...DEFAULT_TRANSFORM }; })}><RotateCcw size={12} />Reset</button>}>
       <Keyed c={c} prop="scale" label="Scale" min={0.05} max={4} step={0.01} def={1} fmt={v => Math.round(v * 100) + '%'} />
       <Keyed c={c} prop="x" label="X" min={-1} max={1} step={0.001} def={0} fmt={v => Math.round(v * 100) + '%'} />

@@ -2,7 +2,10 @@
 // both consume this plan, so positioning, timing, transitions and animations are computed once.
 import { substitute, EASE, evaluate, fmtNum } from './expr.mjs';
 import { transitionDef, animDef, effectDef, fx } from './catalog.mjs';
-import { clipEnd, srcOut, isVisual, transitionPartner } from './model.mjs';
+import { clipEnd, srcOut, isVisual, transitionPartner, stickerMedia } from './model.mjs';
+
+// Library stickers start at this fraction of the canvas height (longest side), before the clip's scale.
+export const STICKER_BOX = 0.36;
 import { needsProcessing, fxKey, keyGain, mergeKeys } from './audio.mjs';
 import { keyExpr as transformKeyExpr, baseValue } from './keys.mjs';
 
@@ -70,16 +73,17 @@ export function buildPlan(project, { W, H, media = () => null, sizes = () => nul
   }
 
   // Pass 2: geometry and stacking. Text, stickers and vector images are drawn from rasters.
-  const isRaster = c => c.kind === 'text' || c.kind === 'sticker' || (c.kind === 'image' && !!media(c.mediaId)?.svg);
+  // Library stickers (sticker.type 'media') are image / looping-video layers; SVG ones are rasterized.
+  const isRaster = c => c.kind === 'text' || (c.kind === 'sticker' && !stickerMedia(c)) || ((c.kind === 'image' || stickerMedia(c)) && !!media(c.mediaId)?.svg);
   const geometry = c => {
     const t = c.transform || {};
     let nw, nh;
-    if (isRaster(c)) { const s = sizes(c.id) || { w: W * 0.3, h: H * 0.1 }; nw = s.w; nh = s.h; }
+    if (isRaster(c)) { const s = sizes(c.id) || { w: W * 0.3, h: H * 0.1 }; nw = s.w; nh = s.h; if (stickerMedia(c)) { const k = STICKER_BOX * H / Math.max(1, nw, nh); nw *= k; nh *= k; } }
     else if (c.kind === 'adjust') { nw = W; nh = H; }
     else {
       const a = media(c.mediaId) || {}; const cr = c.crop || {};
       nw = Math.max(2, (a.width || W) * (1 - (cr.l || 0) - (cr.r || 0))); nh = Math.max(2, (a.height || H) * (1 - (cr.t || 0) - (cr.b || 0)));
-      const k = c.fit === 'cover' ? Math.max(W / nw, H / nh) : Math.min(W / nw, H / nh); nw *= k; nh *= k;
+      const k = stickerMedia(c) ? STICKER_BOX * H / Math.max(nw, nh) : c.fit === 'cover' ? Math.max(W / nw, H / nh) : Math.min(W / nw, H / nh); nw *= k; nh *= k;
     }
     const scale = c.kind === 'adjust' ? 1 : Math.max(0.01, t.scale ?? 1);
     return { baseW: nw * scale, baseH: nh * scale, cx: W / 2 + (t.x || 0) * W, cy: H / 2 + (t.y || 0) * H, rot0: t.rotation || 0, opacity: t.opacity ?? 1, flipH: !!t.flipH, flipV: !!t.flipV };
@@ -94,7 +98,7 @@ export function buildPlan(project, { W, H, media = () => null, sizes = () => nul
     const m = M(c.id), a = media(c.mediaId) || {};
     const L = { id: c.id, type: isRaster(c) ? 'raster' : c.kind === 'adjust' ? 'adjust' : 'media', clip: c, trackId: track.id, vs: m.vs, ve: m.ve, ...geometry(c), motion: exprOf(m), fades: m.fades, steps: m.steps };
     if (m.alpha) { L.alphaExpr = m.alpha; L.opacity = 1; }
-    if (L.type === 'media') { L.mediaId = c.mediaId; L.image = c.kind === 'image' || a.kind === 'image'; L.srcDuration = a.duration || 0; }
+    if (L.type === 'media') { L.mediaId = c.mediaId; L.image = c.kind === 'image' || a.kind === 'image'; L.srcDuration = a.duration || 0; if (stickerMedia(c) && !L.image) L.loop = c.loop !== false; }
     if (c.kind === 'text' && c.style?.highlight && c.words?.length) L.variants = c.words.map((w, i) => ({ key: 'w' + i, from: c.start + w.start, to: i + 1 < c.words.length ? c.start + c.words[i + 1].start : clipEnd(c) }));
     return L;
   };
@@ -143,7 +147,8 @@ export const activeLayers = (plan, t) => plan.layers.filter(L => t >= L.vs - 1e-
 // Source time for a media layer at timeline time t (frozen at the source's edges for transition handles).
 export function sourceTime(L, t) {
   const c = L.clip; if (L.image) return 0;
-  const raw = c.in + (t - c.start) * (c.speed || 1);
+  const raw = (c.in || 0) + (t - c.start) * (c.speed || 1);
+  if (L.loop && L.srcDuration > 0) { const d = L.srcDuration; return ((raw % d) + d) % d; }
   return Math.min(Math.max(0, raw), Math.max(0, (L.srcDuration || Infinity) - 0.04));
 }
 export function audioGain(A, t) {

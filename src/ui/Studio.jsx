@@ -10,6 +10,7 @@ import { alignScript } from '../../shared/script.mjs';
 import { newClip, clipEnd } from '../../shared/model.mjs';
 import { profileFx, AUDIO_PROFILES, duckKeys } from '../../shared/audio.mjs';
 import { devices, refreshDevices, ensurePermission, setOutput, activeOutput, deviceLabel, iconFor, isSpeaker, testSpeaker, quickSwap } from '../audio/devices.js';
+import { setRecordingCheck, stopPreview } from '../lib/creative.js';
 import { Capture, micCheck } from '../audio/capture.js';
 import { openMenu, Toggle, Slider, Segmented, Select, Section } from './kit.jsx';
 import { shortTime } from '../lib/format.js';
@@ -20,6 +21,7 @@ export const scriptVisible = signal(false);
 const ICONS = { headphones: Headphones, usb: Usb, monitor: Monitor, speaker: Speaker };
 let capture = null, headphoneHinted = false;
 const recState = signal('idle'); // idle | count | rec | saving
+setRecordingCheck(() => recState.value !== 'idle');
 const meter = signal({ peakDb: -Infinity, rmsDb: -Infinity, clip: false });
 const lastRecording = signal(null); // clip id
 const markers = signal([]);
@@ -47,6 +49,7 @@ export async function startRecording({ retake = false } = {}) {
   // Where the take lands: a retake reuses the last recording's position.
   const prev = retake && lastRecording.value && p.clips.find(c => c.id === lastRecording.value);
   const at = prev ? prev.start : time.value;
+  stopPreview(); // library previews never play into a take
   if (o.countdown) { recState.value = 'count'; for (let i = 3; i > 0; i--) { countdown.value = i; await new Promise(r => setTimeout(r, 800)); if (recState.value !== 'count') return; } }
   const pre = o.playVideo ? Math.min(o.preroll || 0, at) : 0;
   markers.value = [];

@@ -1,7 +1,7 @@
 // Builds the FFmpeg command for an export from the shared layer plan (shared/plan.mjs).
 const path = require('node:path');
 const { buildPlan } = require('../shared/plan.mjs');
-const { dimensions, normalizeProject } = require('../shared/model.mjs');
+const { dimensions, normalizeProject, stickerMedia } = require('../shared/model.mjs');
 const { fx, filterDef } = require('../shared/catalog.mjs');
 const { fmtNum: f } = require('../shared/expr.mjs');
 const { keyExpr } = require('../shared/audio.mjs');
@@ -51,7 +51,7 @@ function renderPlan(raw, { assets, rasters = {}, luts = {}, processedAudio = {},
   const media = id => assets.get(id);
   const sizes = id => rasters[id] ? { w: rasters[id].w, h: rasters[id].h } : null;
   const plan = buildPlan(project, { W, H, media, sizes, fps });
-  for (const c of project.clips) if ((c.kind === 'video' || c.kind === 'image' || c.kind === 'audio') && !media(c.mediaId)) throw Error(`“${c.name || 'A clip'}” is missing its media file. Relink it, then export again.`);
+  for (const c of project.clips) if ((c.kind === 'video' || c.kind === 'image' || c.kind === 'audio' || stickerMedia(c)) && !media(c.mediaId)) throw Error(`“${c.name || 'A clip'}” is missing its media file. Relink it, then export again.`);
   if (!plan.duration) throw Error('Your timeline is empty. Add a clip before exporting.');
   const range = settings.range && settings.range.to > settings.range.from ? settings.range : { from: 0, to: plan.duration };
   const total = plan.duration;
@@ -98,9 +98,16 @@ function renderPlan(raw, { assets, rasters = {}, luts = {}, processedAudio = {},
       // media (video / image) and blurred canvas background
       const a = media(L.mediaId); const c = L.clip;
       if (L.image) idx = addInput(['-loop', '1', '-framerate', String(fps), '-t', f(dur + 0.1), '-i', a.path]);
+      else if (L.loop) {
+        // Looping sticker: the source repeats endlessly and is cut to the window, at the same phase the preview uses.
+        const speed = c.speed || 1, d = Math.max(0.04, a.duration || 1), rawA = (c.in || 0) + (vs - c.start) * speed, phase = ((rawA % d) + d) % d;
+        idx = addInput([...(a.alpha ? ['-c:v', 'libvpx-vp9'] : []), '-stream_loop', '-1', '-i', a.path]);
+        if (!a.colorspace || a.colorspace === 'unknown') chain.push('setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv');
+        chain.push(`trim=start=${f(phase)}:duration=${f(dur * speed + 0.1)}`, `setpts=(PTS-STARTPTS)/${f(speed)}`, `fps=${fps}`, 'tpad=stop_duration=0.1:stop_mode=clone');
+      }
       else {
         const speed = c.speed || 1, maxT = Math.max(0, (a.duration || 0) - 0.04);
-        const rawA = c.in + (vs - c.start) * speed, rawB = c.in + (ve - c.start) * speed;
+        const rawA = (c.in || 0) + (vs - c.start) * speed, rawB = (c.in || 0) + (ve - c.start) * speed;
         const srcA = Math.min(Math.max(0, rawA), maxT), srcB = Math.min(Math.max(srcA + 0.04, rawB), Math.max(srcA + 0.04, maxT + 0.04));
         const pre = Math.max(0, (0 - rawA) / speed), post = Math.max(0, (rawB - (maxT + 0.04)) / speed);
         idx = addInput([...(a.alpha ? ['-c:v', 'libvpx-vp9'] : []), '-ss', f(srcA), '-t', f(srcB - srcA + 0.25), '-i', a.path]);

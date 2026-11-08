@@ -42,6 +42,7 @@ export function Preview() {
     if (d.type === 'media') { const a = asset(d.id); if (a) addAssets([a], { overlay: project.value.clips.some(c => c.start <= time.value && c.start + c.duration > time.value && c.kind !== 'audio') && a.kind !== 'audio' }); }
     if (d.type === 'text') addText({ style: d.style });
     if (d.type === 'sticker') addSticker(d.sticker);
+    if (d.type === 'library') d.drop({});
     if (d.type === 'effect') applyEffect(d.id);
     if (d.type === 'filter') applyFilter(d.id, d.name);
     if (d.type === 'textTemplate') addTextTemplate(TEXT_TEMPLATES.find(t => t.id === d.id));

@@ -337,7 +337,7 @@ function useDrop(sc, z) {
     onDragOver: e => {
       const d = window.__fcDrag; if (!d && !e.dataTransfer.types.includes('Files')) return; e.preventDefault();
       const { t, over } = locate(e); const lane = over?.el.querySelector('.track-lane'); const el = sc.current;
-      if (over && lane) { const lr = lane.getBoundingClientRect(), sr = el.getBoundingClientRect(); dropHint.value = { x: t * z, y: lr.top - sr.top + el.scrollTop, w: Math.max(30, ((d?.type === 'media' && asset(d.id)?.duration) || 3) * z), h: lr.height }; }
+      if (over && lane) { const lr = lane.getBoundingClientRect(), sr = el.getBoundingClientRect(); dropHint.value = { x: t * z, y: lr.top - sr.top + el.scrollTop, w: Math.max(30, (d?.duration || (d?.type === 'media' && asset(d.id)?.duration) || 3) * z), h: lr.height }; }
       else dropHint.value = null;
     },
     onDragLeave: e => { if (!e.currentTarget.contains(e.relatedTarget)) dropHint.value = null; },
@@ -358,6 +358,7 @@ function useDrop(sc, z) {
       if (d.type === 'text') addText({ style: d.style, at: t });
       if (d.type === 'textTemplate') addTextTemplate(TEXT_TEMPLATES.find(x => x.id === d.id), t);
       if (d.type === 'sticker') addSticker(d.sticker, { at: t });
+      if (d.type === 'library') d.drop({ at: t, track });
       if (d.type === 'transition') { const target = p.clips.filter(c => c.kind !== 'audio' && (!track || c.trackId === track.id) && transitionPartner(p, c)).sort((a2, b2) => Math.abs(a2.start - t) - Math.abs(b2.start - t))[0]; applyTransition(d.id, target?.id); }
       const onClip = () => { const el = document.elementFromPoint(e.clientX, e.clientY)?.closest('.clip'); return el?.dataset.clip; };
       if (d.type === 'effect') { const id = onClip(); if (id) { selection.value = [id]; applyEffect(d.id); } else { selection.value = []; player.current?.seek(t); applyEffect(d.id); } }

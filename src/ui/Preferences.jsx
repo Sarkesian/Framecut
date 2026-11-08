@@ -1,7 +1,8 @@
 // Preferences: storage locations, performance, captions engine, optional AI connection.
 import { matteStatus, deleteMatteModel, MATTE_MODEL } from '../lib/matte.js';
 import { useEffect, useState } from 'preact/hooks';
-import { HardDrive, Cpu, Captions, Bot, FolderOpen, Trash2, Check, TriangleAlert } from 'lucide-preact';
+import { HardDrive, Cpu, Captions, Bot, FolderOpen, Trash2, Check, TriangleAlert, Library as LibraryIcon, KeyRound, Ban } from 'lucide-preact';
+import { loadStatus, libStatus } from '../lib/creative.js';
 import { prefs, savePrefs, health, toast } from '../lib/state.js';
 import { api, native } from '../lib/api.js';
 import { showDialog, Modal, Select, Toggle, Segmented, confirm } from './kit.jsx';
@@ -12,11 +13,36 @@ export const openPreferences = () => showDialog(() => <Preferences />);
 
 function Preferences() {
   const [tab, setTab] = useState('general');
-  const tabs = [['general', 'General', Cpu], ['storage', 'Storage', HardDrive], ['captions', 'Captions & AI', Captions], ['assistant', 'Writing assistant', Bot]];
+  const tabs = [['general', 'General', Cpu], ['storage', 'Storage', HardDrive], ['library', 'Library', LibraryIcon], ['captions', 'Captions & AI', Captions], ['assistant', 'Writing assistant', Bot]];
   return <Modal title="Preferences" size="wide">
     <div class="prefs"><nav>{tabs.map(([id, label, Icon]) => <button key={id} class={`nav-item ${tab === id ? 'on' : ''}`} onClick={() => setTab(id)}><Icon size={16} />{label}</button>)}</nav>
-      <div class="prefs-body">{tab === 'general' ? <General /> : tab === 'storage' ? <Storage /> : tab === 'captions' ? <CaptionsAi /> : <Assistant />}</div></div>
+      <div class="prefs-body">{tab === 'general' ? <General /> : tab === 'storage' ? <Storage /> : tab === 'library' ? <LibraryPrefs /> : tab === 'captions' ? <CaptionsAi /> : <Assistant />}</div></div>
   </Modal>;
+}
+// Creative Library: sources, optional Openverse credentials (kept in the Windows credential store).
+function LibraryPrefs() {
+  const [id, setId] = useState(''), [secret, setSecret] = useState(''), [busy, setBusy] = useState(false);
+  useEffect(() => { loadStatus(); }, []);
+  const st = libStatus.value; const ov = st?.openverse || {};
+  const save = async clear => {
+    setBusy(true);
+    try { const r = await api('/api/creative/credentials/openverse', clear ? {} : { clientId: id, clientSecret: secret }, 'PUT'); setId(''); setSecret(''); await loadStatus(); toast(clear ? 'Openverse credentials removed.' : r.persistent ? 'Saved securely in the Windows credential store.' : 'Saved for this session only (secure storage is unavailable).'); }
+    catch (e) { toast(e.message, 'error'); } finally { setBusy(false); }
+  };
+  return <>
+    <h3>Sources</h3>
+    <div class="col">{(st?.providers || []).filter(p => p.id !== 'local').map(p => <div key={p.id} class="row" style={{ alignItems: 'flex-start' }}>
+      {p.enabled ? <Check size={15} class="accentc" style={{ marginTop: 2 }} /> : <Ban size={15} class="muted" style={{ marginTop: 2 }} />}
+      <div class="grow"><b>{p.name}</b> <span class="muted">· {p.kinds.map(k => ({ music: 'music', sfx: 'sound effects', sticker: 'stickers' })[k]).join(', ')}</span><br /><small class="muted">{p.enabled ? p.note : 'Not enabled — ' + p.reason}</small></div>
+    </div>)}</div>
+    <h3>Openverse access</h3>
+    <p class="muted">Searching works without an account (about 20 searches a minute, 200 a day). For more, register a free Openverse API application and paste its credentials here. They are encrypted by Windows and never shown again.</p>
+    <div class="row"><KeyRound size={15} class="muted" /><span>{ov.credentials ? 'Credentials saved' : 'Using anonymous access'}{ov.blockedFor ? ` · paused for ${ov.blockedFor}s` : ''}</span>{ov.credentials && <button class="btn sm ghost" disabled={busy} onClick={() => save(true)}>Remove</button>}</div>
+    <div class="field-row"><div class="field"><label>Client ID</label><input class="input mono" value={id} onInput={e => setId(e.target.value)} autocomplete="off" spellcheck={false} /></div><div class="field"><label>Client secret</label><input class="input mono" type="password" value={secret} onInput={e => setSecret(e.target.value)} autocomplete="off" /></div></div>
+    <button class="btn sm" disabled={busy || !id || !secret} onClick={() => save(false)}>Save credentials</button>
+    <h3>Where library files go</h3>
+    <p class="muted">Music, sounds and stickers you add are saved once in your FrameCut data folder (Storage tab) under <span class="mono">media\library</span>, with their source and license, so projects reopen offline. Previews use a temporary cache capped at 250 MB.</p>
+  </>;
 }
 function General() {
   const p = prefs.value, enc = health.value.encoders || {};

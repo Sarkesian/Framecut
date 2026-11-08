@@ -231,8 +231,11 @@ class Studio {
         catch (e) { if (!hw || e.cancelled) throw e; progress(0, 'Hardware encoder unavailable, using software encoder…'); plan = await attempt(null); }
         await fsp.rm(output, { force: true }); await fsp.rename(tmp, output);
         if (settings.subtitles === 'srt') await fsp.writeFile(output.replace(/(\.[^.]+)?$/, '.srt'), toSrt(project, settings.range));
+        // Credits for licensed library assets (CC BY etc.), saved next to the video when asked.
+        let creditsFile = null;
+        if (typeof settings.credits === 'string' && settings.credits.trim()) { creditsFile = output.replace(/(\.[^.]+)?$/, ' - credits.txt'); await fsp.writeFile(creditsFile, settings.credits.slice(0, 200000).replace(/\r?\n/g, '\r\n')); }
         const st = await fsp.stat(output);
-        return { output, bytes: st.size, duration: plan.duration, width: plan.width, height: plan.height };
+        return { output, bytes: st.size, duration: plan.duration, width: plan.width, height: plan.height, creditsFile };
       } catch (e) {
         await fsp.rm(output.replace(/(\.[^.]+)?$/, `.framecut-part.${path.extname(output).slice(1) || 'mp4'}`), { force: true }).catch(() => {});
         throw e;

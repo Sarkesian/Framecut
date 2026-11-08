@@ -117,7 +117,7 @@ export function splitAt(t = time.value, ids) {
       const c = p.clips.find(x => x.id === t0.id); if (trackOf(p, c.trackId)?.locked) continue;
       const local = t - c.start;
       const r = structuredClone(c); r.id = uid(); r.start = t; r.duration = c.duration - local; r.transition = null; r.animIn = null;
-      if (hasMedia(c)) r.in = c.in + local * (c.speed || 1);
+      if (hasMedia(c) || c.sticker?.type === 'media') r.in = (c.in || 0) + local * (c.speed || 1);
       if (c.words) { r.words = c.words.filter(w => w.start >= local).map(w => ({ ...w, start: w.start - local, end: w.end - local })); c.words = c.words.filter(w => w.start < local); }
       if (c.keyframes) { shiftKeys(r, local, r.duration); shiftKeys(c, 0, local); }
       c.duration = local; c.animOut = null; c.fadeOut = 0; r.fadeIn = 0;
