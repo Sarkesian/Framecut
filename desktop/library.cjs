@@ -36,7 +36,7 @@ class Library {
     const v = a.version || 0;
     return {
       id: a.id, name: a.name, kind: a.kind, duration: a.duration, width: a.width, height: a.height, fps: a.fps, video: a.video, audio: a.audio, alpha: !!a.alpha, svg: !!a.svg,
-      bytes: a.bytes, imported: a.imported, missing: !!a.missing, derivedFrom: a.derivedFrom || null, derivedKind: a.derivedKind || null, folder: path.dirname(a.path),
+      bytes: a.bytes, imported: a.imported, fileName: path.basename(a.path), recording: a.recording || null, missing: !!a.missing, derivedFrom: a.derivedFrom || null, derivedKind: a.derivedKind || null, folder: path.dirname(a.path),
       url: `/media/${a.id}?v=${v}`, proxyUrl: a.proxy ? `/proxy/${a.id}?v=${v}` : null, thumb: a.thumb ? `/cache/thumbs/${path.basename(a.thumb)}?v=${v}` : null,
       strip: a.strip ? { url: `/cache/filmstrips/${path.basename(a.strip.file)}?v=${v}`, count: a.strip.count, w: a.strip.w, h: a.strip.h, interval: a.strip.interval } : null,
       wave: a.wave ? `/cache/waveforms/${path.basename(a.wave)}?v=${v}` : null, needsProxy: !!a.needsProxy, proxyPending: !!a.needsProxy && !a.proxy,

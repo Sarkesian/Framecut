@@ -8,7 +8,7 @@ let permitted = false, listening = false;
 
 export async function ensurePermission() {
   if (permitted) return true;
-  try { const s = await navigator.mediaDevices.getUserMedia({ audio: true }); s.getTracks().forEach(t => t.stop()); permitted = true; await refreshDevices(); return true; }
+  try { const s = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }); s.getTracks().forEach(t => t.stop()); permitted = true; await refreshDevices(); return true; }
   catch { return false; }
 }
 export async function refreshDevices() {

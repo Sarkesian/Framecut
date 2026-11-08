@@ -10,6 +10,7 @@ import { timecode } from '../lib/format.js';
 import { addAssets, addText, addSticker, applyEffect, applyFilter } from '../lib/edit.js';
 import { addTextTemplate } from './AssetPanel.jsx';
 import { TEXT_TEMPLATES } from '../../shared/templates.mjs';
+import { DeviceBar } from './Studio.jsx';
 
 export function Preview() {
   const p = project.value;
@@ -128,6 +129,7 @@ function Transport() {
     <button class="icon-btn" data-tip="Next frame" data-kbd="→" onClick={() => player.current?.step(1)}><SkipForward size={17} /></button>
     <div class="grow" />
     <button class="btn ghost sm mono" data-tip="Playback speed" onClick={e => openMenu(e, [0.25, 0.5, 1, 1.5, 2].map(r => ({ text: r + '×', checked: (player.current?.rate || 1) === r, onClick: () => { player.current?.setRate(r); force(x => x + 1); } })), { align: 'below' })}>{player.current?.rate || 1}×</button>
+    <DeviceBar />
     <button class="icon-btn" data-tip="Full screen" data-kbd="Shift+F" onClick={() => document.querySelector('.preview')?.requestFullscreen?.()}><Maximize size={16} /></button>
   </div>;
 }

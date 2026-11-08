@@ -141,7 +141,7 @@ export class Player {
       const isActive = t >= A.start && t < A.start + A.duration, soon = !isActive && A.start > t && A.start - t < 2;
       let e, gainNode;
       const asset = this.getMedia(A.mediaId);
-      const procUrl = A.processed ? this.processedUrl(A) : null;
+      const procUrl = A.processed && !this.bypass?.has(A.id) ? this.processedUrl(A) : null;
       if (A.clip.kind === 'video' && !procUrl) {
         const L = plan.layers.find(l => l.clip.id === A.id && l.type === 'media');
         if (!L) { if (!isActive && !soon) continue; e = this.audioElement(A, asset?.proxyUrl || asset?.url); }

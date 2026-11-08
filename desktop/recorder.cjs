@@ -44,7 +44,9 @@ class Recorder {
   }
   async chunk(id, body) {
     const s = this.sessions.get(id); if (!s) throw Error('That recording is no longer active.');
-    const f32 = new Float32Array(body.buffer, body.byteOffset, Math.floor(body.byteLength / 4));
+    const n = Math.floor(body.byteLength / 4);
+    // Request bodies may start at any byte offset; Float32Array needs 4-byte alignment.
+    const f32 = body.byteOffset % 4 === 0 ? new Float32Array(body.buffer, body.byteOffset, n) : new Float32Array(Uint8Array.prototype.slice.call(body, 0, n * 4).buffer);
     const { buf, clipped, peak } = toInt24(f32); s.clipped += clipped; s.peak = Math.max(s.peak, peak); s.bytes += buf.length;
     await new Promise((res, rej) => s.stream.write(buf, e => (e ? rej(e) : res())));
     return { bytes: s.bytes };

@@ -7,6 +7,7 @@ let service, win;
 const testDir = process.env.FRAMECUT_TEST_DIR;
 if (testDir) app.setPath('userData', testDir);
 if (process.env.FRAMECUT_FAKE_MEDIA) { app.commandLine.appendSwitch('use-fake-device-for-media-stream'); app.commandLine.appendSwitch('use-fake-ui-for-media-stream'); }
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 if (!testDir && !app.requestSingleInstanceLock()) app.quit();
 
 const configPath = () => path.join(app.getPath('userData'), 'framecut-config.json');

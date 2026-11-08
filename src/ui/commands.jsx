@@ -8,6 +8,7 @@ import { showDialog, closeDialog, Modal, Select, Segmented, Color, Slider, Kbd }
 import { openExport } from './ExportDialog.jsx';
 import { openPreferences } from './Preferences.jsx';
 import { createProject } from './Home.jsx';
+import { studioKeys, openStudio } from './Studio.jsx';
 
 const fps = () => project.value?.settings.fps || 30;
 const seek = t => player.current?.seek(t);
@@ -83,6 +84,7 @@ export function installShortcuts() {
     if (document.querySelector('.backdrop, .menu')) return;
     const t = e.target; const typing = t.closest?.('input, textarea, select, [contenteditable]') && !(t.type === 'range');
     if (typing) { if ((e.ctrlKey || e.metaKey) && ['s', 'e'].includes(e.key.toLowerCase())) { e.preventDefault(); t.blur(); } else return; }
+    if (!e.ctrlKey && !e.altKey && studioKeys(e)) { e.preventDefault(); e.stopPropagation(); return; }
     const name = keyName(e); const a = map.get(name.toUpperCase()) || (e.key === '?' ? byId.shortcuts : null);
     if (!a) return;
     e.preventDefault(); e.stopPropagation(); a.run();
@@ -98,7 +100,7 @@ export function menus() {
     File: () => [item('new'), item('open', { text: 'Back to projects', icon: ArrowLeft }), { divider: true }, { text: 'Import media…', icon: Upload, sc: 'V', onClick: () => importMedia() }, { text: 'Save project as file…', onClick: saveAsFile }, { text: 'Project settings…', icon: Settings, onClick: openProjectSettings }, { divider: true }, item('save'), item('export'), { divider: true }, { text: 'Preferences…', onClick: openPreferences }],
     Edit: () => [item('undo'), item('redo'), { divider: true }, item('cut', { disabled: !sel() }), item('copy', { disabled: !sel() }), item('paste'), item('duplicate', { disabled: !sel() }), item('delete', { disabled: !sel() }), item('ripple-delete', { disabled: !sel() }), { divider: true }, item('split'), item('trim-start'), item('trim-end'), item('select-all')],
     View: () => [item('zoom-in'), item('zoom-out'), item('zoom-fit'), { divider: true }, { text: 'Snapping', checked: !!project.value?.settings.snapping, onClick: byId.snap.run, sc: 'N' }, { text: 'Magnetic main track', checked: !!project.value?.settings.magnetic, onClick: () => commit('Toggle magnetic track', p => { p.settings.magnetic = !p.settings.magnetic; }) }, { divider: true }, item('fullscreen')],
-    Insert: () => [item('add-text'), { text: 'Sticker', onClick: () => (libraryTab.value = 'stickers') }, item('add-transition'), { text: 'Captions…', icon: Captions, onClick: () => (libraryTab.value = 'captions') }, { text: 'Effects', icon: Sparkles, onClick: () => (libraryTab.value = 'effects') }, { text: 'Record voiceover', icon: Mic, onClick: () => (libraryTab.value = 'audio') }, { divider: true }, item('add-video'), item('add-audio')],
+    Insert: () => [item('add-text'), { text: 'Sticker', onClick: () => (libraryTab.value = 'stickers') }, item('add-transition'), { text: 'Captions…', icon: Captions, onClick: () => (libraryTab.value = 'captions') }, { text: 'Effects', icon: Sparkles, onClick: () => (libraryTab.value = 'effects') }, { text: 'Record voiceover…', icon: Mic, onClick: openStudio }, { divider: true }, item('add-video'), item('add-audio')],
     Help: () => [item('shortcuts'), { text: 'Getting started', onClick: openHelp }],
   };
 }

@@ -10,6 +10,7 @@ import { openMenu, prompt } from './kit.jsx';
 import { importFiles } from '../lib/api.js';
 import { fitTimeline } from './commands.jsx';
 import { addTextTemplate } from './AssetPanel.jsx';
+import { openStudio } from './Studio.jsx';
 import { TEXT_TEMPLATES } from '../../shared/templates.mjs';
 import { shortTime } from '../lib/format.js';
 import { keyGain } from '../../shared/audio.mjs';
@@ -153,7 +154,7 @@ function Clip({ c, t, z }) {
       <span class="ellipsis">{label}</span>
       {w > 90 && c.kind !== 'text' && <span class="dur">{shortTime(dur)}</span>}
     </div>
-    {c.markers?.map((m, i) => <span key={i} class="clip-marker" style={{ left: (m.t / (c.speed || 1)) * z }} data-tip={m.label || 'Mistake marker'} />)}
+    {c.markers?.map((m, i) => <span key={i} class="clip-marker" style={{ left: ((m.t - (c.in || 0)) / (c.speed || 1)) * z }} data-tip={m.label || 'Mistake marker'} />)}
     {partner && <button class={`tr-mark ${c.transition ? 'on' : ''}`} style={{ left: -9 }} data-tip={c.transition ? transitionDef(c.transition.id)?.name + ' · click to edit' : 'Add a transition'} onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); selection.value = [c.id]; if (!c.transition) applyTransition('dissolve', c.id); else libraryTab.value = 'transitions'; }}><Blend size={10} /></button>}
     {!trackOf(p, c.trackId)?.locked && <><span class="edge l" onPointerDown={e => edgeDown(e, c, 'start', z)} /><span class="edge r" onPointerDown={e => edgeDown(e, c, 'end', z)} /></>}
   </div>;
@@ -342,6 +343,7 @@ function Toolbar() {
     <button class="icon-btn" data-tip="Delete" data-kbd="Del" disabled={!sel} onClick={() => deleteClips()}><Trash2 size={16} /></button>
     <button class="icon-btn" data-tip="Duplicate" data-kbd="Ctrl+D" disabled={!sel} onClick={() => duplicateClips()}><Copy size={16} /></button>
     <button class="icon-btn" data-tip="Add marker at playhead" data-kbd="" onClick={() => commit('Add marker', d => { d.markers.push({ t: time.value, label: '' }); d.markers.sort((a, b) => a.t - b.t); })}><Diamond size={15} /></button>
+    <button class="icon-btn" data-tip="Record voiceover" onClick={openStudio}><Mic size={16} /></button>
     <div class="grow" />
     <button class={`icon-btn ${p.settings.snapping ? 'on' : ''}`} data-tip="Snapping" data-kbd="N" onClick={() => commit('Toggle snapping', d => { d.settings.snapping = !d.settings.snapping; })}><Magnet size={16} /></button>
     <button class={`btn ghost sm ${p.settings.magnetic ? 'on-text' : ''}`} data-tip="Magnetic main track keeps clips together" onClick={() => commit('Toggle magnetic track', d => { d.settings.magnetic = !d.settings.magnetic; })}>Magnetic {p.settings.magnetic ? 'on' : 'off'}</button>

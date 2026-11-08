@@ -4,6 +4,7 @@ import './styles/app.css';
 import './styles/home.css';
 import './styles/editor.css';
 import './styles/timeline.css';
+import './styles/studio.css';
 import { route, prefs, health, fonts, userLuts, refreshMedia, openProject, media, jobs, toast } from './lib/state.js';
 import { api } from './lib/api.js';
 import { installTooltips, TooltipHost, MenuHost, DialogHost, ToastHost } from './ui/kit.jsx';
@@ -11,8 +12,9 @@ import { Home } from './ui/Home.jsx';
 import { Editor } from './ui/Editor.jsx';
 import * as stateMod from './lib/state.js';
 import * as editMod from './lib/edit.js';
+import * as studioMod from './ui/Studio.jsx';
 // Automation hooks used by the end-to-end tests.
-window.__fc = { state: stateMod, edit: editMod, api };
+window.__fc = { state: stateMod, edit: editMod, studio: studioMod, api };
 
 function App() {
   useEffect(() => {

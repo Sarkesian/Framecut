@@ -162,7 +162,7 @@ function renderPlan(raw, { assets, rasters = {}, luts = {}, processedAudio = {},
     filters.push(`[${i}:a:0]atrim=duration=${f(len)},asetpts=PTS-STARTPTS,${tempo(A.speed)},aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,volume=${f(A.volume)},${A.keys?.length ? `volume='${keyExpr(A.keys)}':eval=frame,` : ''}afade=t=in:st=0:d=${f(fi)},afade=t=out:st=${f(Math.max(0, A.duration - fo))}:d=${f(fo)},atrim=duration=${f(A.duration)},adelay=${Math.round(A.start * 1000)}:all=1${lab}`);
     mix.push(lab);
   }
-  if (wantAudio) filters.push(`${mix.join('')}amix=inputs=${mix.length}:duration=first:dropout_transition=0:normalize=0,alimiter=limit=0.98:level=false:attack=2:release=40[amix]`);
+  if (wantAudio) filters.push(`${mix.join('')}amix=inputs=${mix.length}:duration=first:dropout_transition=0:normalize=0,alimiter=limit=0.891:level=false:attack=2:release=40[amix]`);
 
   if (spec.video) { filters.push(`${base}scale=out_color_matrix=bt709:out_range=tv,format=${fmt === 'gif' ? 'rgb24' : settings.codec === 'prores' ? 'yuv422p10le' : 'yuv420p'},setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709${fmt === 'gif' ? '' : ':range=tv'}[vfinal]`); base = '[vfinal]'; }
   let vout = base, aout = '[amix]';

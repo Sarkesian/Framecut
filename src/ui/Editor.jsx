@@ -13,6 +13,9 @@ import { openExport } from './ExportDialog.jsx';
 import { openPreferences } from './Preferences.jsx';
 import { openShortcuts, installShortcuts, menus } from './commands.jsx';
 import { TaskIndicator } from './Tasks.jsx';
+import { studioOpen, focusMode, StudioPanel, FocusScript } from './Studio.jsx';
+import { WaveEditor } from './WaveEditor.jsx';
+import { applySavedOutput } from '../audio/devices.js';
 
 function usePanelSize(key, initial, min, max) {
   const [size, setSize] = useState(() => { try { return Math.min(max, Math.max(min, +localStorage.getItem('fc:' + key) || initial)); } catch { return initial; } });
@@ -36,12 +39,14 @@ export function Editor() {
   useEffect(() => installShortcuts(), []);
   useEffect(() => { native?.setTitleColors?.({ color: '#0b0c10', symbolColor: '#c9ccd6' }); const beforeUnload = () => { saveNow(); }; window.addEventListener('beforeunload', beforeUnload); return () => window.removeEventListener('beforeunload', beforeUnload); }, []);
   if (!p) return null;
-  return <div class="editor" style={{ '--left': left + 'px', '--right': right + 'px', '--bottom': bottom + 'px' }}>
+  useEffect(() => { setTimeout(() => applySavedOutput().catch(() => {}), 500); }, []);
+  const studio = studioOpen.value, focus = studio && focusMode.value;
+  return <div class={`editor ${focus ? 'focus' : ''}`} style={{ '--left': (studio ? Math.max(left, 360) : left) + 'px', '--right': right + 'px', '--bottom': bottom + 'px' }}>
     <TopBar />
     <div class="workspace">
-      <aside class="panel left"><AssetPanel /></aside>
+      <aside class="panel left">{studio ? <StudioPanel /> : <AssetPanel />}</aside>
       <Splitter dir="v" label="Resize media panel" onDrag={d => setLeft(s => Math.min(560, Math.max(260, s + d)))} onReset={() => setLeft(340)} />
-      <section class="panel center"><Preview /></section>
+      <section class="panel center"><div class="center-stack"><div class="center-main"><Preview />{focus && <FocusScript />}</div>{studio && !focus && <WaveEditor />}</div></section>
       <Splitter dir="v" label="Resize inspector" onDrag={d => setRight(s => Math.min(520, Math.max(280, s - d)))} onReset={() => setRight(330)} />
       <aside class="panel right"><Inspector /></aside>
     </div>

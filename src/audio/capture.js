@@ -1,7 +1,7 @@
 // Microphone capture with all browser voice processing disabled. Raw samples stream to the
 // FrameCut service, which writes 24-bit WAV directly to disk while you record.
 import { api } from '../lib/api.js';
-import workletUrl from './capture-worklet.js?url';
+import workletUrl from './capture-worklet.js?url&no-inline';
 
 const db = v => (v > 0 ? 20 * Math.log10(v) : -Infinity);
 export class Capture {
@@ -12,11 +12,13 @@ export class Capture {
     this.stream = await navigator.mediaDevices.getUserMedia(constraints);
     const track = this.stream.getAudioTracks()[0]; this.track = track;
     const s = track.getSettings();
-    this.settings = { sampleRate: s.sampleRate || 48000, channels: Math.min(2, s.channelCount || 1), latency: s.latency || 0, label: track.label, deviceId: s.deviceId, echoCancellation: s.echoCancellation, noiseSuppression: s.noiseSuppression, autoGainControl: s.autoGainControl };
+    this.settings = { sampleSize: s.sampleSize || null, sampleRate: s.sampleRate || 48000, channels: Math.min(2, s.channelCount || 1), latency: s.latency || 0, label: track.label, deviceId: s.deviceId, echoCancellation: s.echoCancellation, noiseSuppression: s.noiseSuppression, autoGainControl: s.autoGainControl };
     this.ctx = new AudioContext({ sampleRate: this.settings.sampleRate, latencyHint: 'interactive' });
     await this.ctx.audioWorklet.addModule(workletUrl);
+    await this.ctx.resume().catch(() => {});
     this.source = this.ctx.createMediaStreamSource(this.stream);
-    this.node = new AudioWorkletNode(this.ctx, 'framecut-capture', { numberOfInputs: 1, numberOfOutputs: 0, channelCount: this.settings.channels, channelCountMode: 'explicit' });
+    this.node = new AudioWorkletNode(this.ctx, 'framecut-capture', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], channelCount: this.settings.channels, channelCountMode: 'explicit' });
+    this.sink = this.ctx.createGain(); this.sink.gain.value = 0; this.node.connect(this.sink).connect(this.ctx.destination); // keeps the worklet running
     this.source.connect(this.node);
     this.monitorGain = this.ctx.createGain(); this.monitorGain.gain.value = 0; this.source.connect(this.monitorGain).connect(this.ctx.destination);
     this.node.port.onmessage = ({ data }) => {
@@ -64,6 +66,6 @@ export async function micCheck(capture, seconds = 3) {
     level: peak > -0.5 ? 'too-loud' : peak > -18 ? 'good' : peak > -30 ? 'quiet' : 'very-quiet',
     noisy: floor > -50,
     processing: { echoCancellation: capture.settings.echoCancellation, noiseSuppression: capture.settings.noiseSuppression, autoGainControl: capture.settings.autoGainControl },
-    format: `${capture.settings.sampleRate / 1000} kHz · ${capture.settings.channels === 1 ? 'mono' : 'stereo'} · saved as 24-bit WAV`,
+    format: `Device delivers ${capture.settings.sampleRate / 1000} kHz${capture.settings.sampleSize ? ` / ${capture.settings.sampleSize}-bit` : ""} ${capture.settings.channels === 1 ? "mono" : "stereo"} · saved losslessly as 24-bit WAV`,
   };
 }

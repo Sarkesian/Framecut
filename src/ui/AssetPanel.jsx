@@ -14,6 +14,7 @@ import { filterPreviews, effectPreviews } from './previews.js';
 import { shortTime, bytes } from '../lib/format.js';
 import { transcribe, groupWords } from '../lib/whisper.js';
 import { freeTrack } from '../lib/edit.js';
+import { openStudio } from './Studio.jsx';
 
 const TABS = [['media', 'Media', Film], ['audio', 'Audio', Music], ['text', 'Text', Type], ['stickers', 'Stickers', Smile], ['effects', 'Effects', Sparkles], ['transitions', 'Transitions', Blend], ['filters', 'Filters', Palette], ['captions', 'Captions', Captions], ['templates', 'Templates', LayoutTemplate]];
 export const dragPayload = (e, data) => { e.dataTransfer.setData('application/x-framecut', JSON.stringify(data)); e.dataTransfer.effectAllowed = 'copy'; window.__fcDrag = data; };
@@ -117,42 +118,7 @@ function addAudio(a) {
   commit('Add audio', p => { c.trackId = freeTrack(p, 'audio', c.start, clipEnd(c)).id; p.clips.push(c); }, { select: [c.id] });
 }
 function Recorder() {
-  const [state, setState] = useState('idle'), [count, setCount] = useState(0), [elapsed, setElapsed] = useState(0), [level, setLevel] = useState(0);
-  const rec = useRef(null);
-  const start = async () => {
-    let stream;
-    try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }); }
-    catch { return toast('FrameCut couldn’t use a microphone. Check that one is connected and allowed in Windows privacy settings.', 'error'); }
-    setState('count');
-    for (let i = 3; i > 0; i--) { setCount(i); await new Promise(r => setTimeout(r, 700)); }
-    const mr = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' }); const chunks = []; const at = time.value;
-    const ctx = new AudioContext(); const an = ctx.createAnalyser(); ctx.createMediaStreamSource(stream).connect(an); const buf = new Uint8Array(an.fftSize);
-    const t0 = performance.now(); const meter = setInterval(() => { an.getByteTimeDomainData(buf); let m = 0; for (const v of buf) m = Math.max(m, Math.abs(v - 128)); setLevel(m / 128); setElapsed((performance.now() - t0) / 1000); }, 80);
-    mr.ondataavailable = e => chunks.push(e.data);
-    mr.onstop = async () => {
-      clearInterval(meter); stream.getTracks().forEach(t => t.stop()); ctx.close(); player.current?.pause(); if (player.current?.master) player.current.master.gain.value = 1;
-      setState('saving');
-      try {
-        const name = `Voiceover ${new Date().toLocaleTimeString().replace(/:/g, '.')}.webm`;
-        const r = await importFiles([new File(chunks, name, { type: 'audio/webm' })]);
-        const a = r.assets[0]; if (!a) throw Error(r.errors[0]?.error || 'Recording could not be saved.');
-        const m = new Map(media.value); m.set(a.id, a); media.value = m;
-        const c = newClip('audio', { mediaId: a.id, name: 'Voiceover', start: at, duration: a.duration });
-        commit('Record voiceover', p => { c.trackId = freeTrack(p, 'audio', at, at + a.duration).id; p.clips.push(c); if (!p.mediaIds.includes(a.id)) p.mediaIds.push(a.id); }, { select: [c.id] });
-        toast('Voiceover added to the timeline.');
-      } catch (e) { toast(e.message, 'error'); } finally { setState('idle'); }
-    };
-    rec.current = mr; mr.start(250); setState('rec');
-    // Play the timeline (muted) so you can narrate over the picture.
-    if (player.current) { player.current.audio(); player.current.master.gain.value = 0; player.current.play(); }
-  };
-  const stop = () => rec.current?.state === 'recording' && rec.current.stop();
-  return <div class={`recorder ${state}`}>
-    {state === 'idle' && <button class="btn block" onClick={start}><Mic size={15} />Record voiceover at playhead</button>}
-    {state === 'count' && <div class="rec-count">Recording in <b>{count}</b></div>}
-    {state === 'rec' && <div class="row"><span class="rec-dot" /><b class="mono">{shortTime(elapsed)}</b><div class="level"><div style={{ width: Math.min(100, level * 140) + '%' }} /></div><button class="btn danger sm" onClick={stop}><Square size={12} fill="currentColor" />Stop</button></div>}
-    {state === 'saving' && <div class="row muted"><LoaderCircle size={14} class="spin" />Saving recording…</div>}
-  </div>;
+  return <button class="studio-entry" onClick={openStudio}><span class="dot" /><div><b>Record voiceover</b><small>Studio-quality WAV · script reader · auto cleanup</small></div></button>;
 }
 
 // ---------------- Text ----------------
