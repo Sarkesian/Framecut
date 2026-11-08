@@ -175,12 +175,16 @@ class Creative {
     if (['png', 'webp', 'jpeg'].includes(type)) return this.markSticker(await this.library.importPath(file, { name: name + path.extname(file), role: 'sticker', source }), source);
     if (!['gif', 'apng'].includes(type)) throw Error('This animation format needs to be prepared in the editor window.');
     const fmt = type === 'apng' ? ['-f', 'apng'] : [];
-    const info = JSON.parse((await run(ffprobe, ['-v', 'quiet', ...fmt, '-i', file, '-show_streams', '-of', 'json'], { signal })).out).streams?.[0] || {};
-    const [n, d] = String(info.avg_frame_rate || info.r_frame_rate || '24/1').split('/').map(Number);
-    const fps = Math.max(1, Math.min(30, Math.round(d ? n / d : 24) || 24));
+    // Real per-frame timing (GIF/APNG frames can each have their own delay). The last frame's delay is
+    // easy to lose when resampling, so it is padded explicitly and the output is cut to the true length.
+    const probe = JSON.parse((await run(ffprobe, ['-v', 'quiet', ...fmt, '-i', file, '-show_entries', 'packet=pts_time,duration_time', '-of', 'json'], { signal })).out).packets || [];
+    const durs = probe.map(f => +f.duration_time).filter(x => Number.isFinite(x) && x > 0);
+    if (!probe.length) throw Error('This animation has no frames.');
+    const last = durs.at(-1) || 0.1, total = Math.max(0.05, (+probe.at(-1).pts_time || 0) + last);
+    const fps = Math.max(1, Math.min(30, Math.round(probe.length / total) || 24));
     const out = path.join(this.library.dirs.derived, `sticker-${safeName(name).replace(/\s+/g, '-')}-${Date.now()}.webm`);
-    await run(ffmpeg, ['-y', '-v', 'error', ...fmt, '-i', file, '-an',
-      '-vf', `fps=${fps},scale='min(512,iw)':'min(512,ih)':force_original_aspect_ratio=decrease:flags=lanczos,pad=ceil(iw/2)*2:ceil(ih/2)*2:color=0x00000000,format=yuva420p`,
+    await run(ffmpeg, ['-y', '-v', 'error', ...fmt, '-i', file, '-an', '-t', total.toFixed(4),
+      '-vf', `tpad=stop_mode=clone:stop_duration=${last.toFixed(4)},fps=${fps},scale='min(512,iw)':'min(512,ih)':force_original_aspect_ratio=decrease:flags=lanczos,pad=ceil(iw/2)*2:ceil(ih/2)*2:color=0x00000000,format=yuva420p`,
       '-c:v', 'libvpx-vp9', '-pix_fmt', 'yuva420p', '-b:v', '0', '-crf', '26', '-row-mt', '1', '-deadline', 'good', '-cpu-used', '4', '-auto-alt-ref', '0', '-metadata:s:v:0', 'alpha_mode=1', out], { signal });
     return this.library.importPath(out, { name: name + ' (sticker)', derivedFrom, derivedKind: 'sticker', role: 'sticker', source: source ? { ...source, originalFile: source.originalFile || file } : null, alpha: true, animated: true });
   }

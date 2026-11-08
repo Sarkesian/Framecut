@@ -33,6 +33,7 @@ const step = n => console.log('· ' + n);
     assert.equal(await page.locator('.track-row.main .clip').count(), 2);
     step('add music via audio tab');
     await page.locator('.rail-btn', { hasText: 'Audio' }).click();
+    await page.locator('.lib-tabs button', { hasText: 'My audio' }).click();
     await page.evaluate(() => window.__fc.state.player.current.seek(0));
     await page.locator('.audio-row', { hasText: 'Song' }).locator('button[data-tip="Add at playhead"]').click();
     assert.equal(await page.locator('.track-row.k-audio .clip').count(), 1);

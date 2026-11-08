@@ -38,6 +38,7 @@ class Openverse {
       return r;
     } catch (e) {
       if (e.status === 429) { const s = Math.max(5, Math.min(3600, +e.retryAfter || 60)); this.blockedUntil = Date.now() + s * 1000; throw Object.assign(Error('Openverse is limiting requests right now.'), { code: 'quota', retryAfter: s }); }
+      if (e.code === 'gone') throw Object.assign(Error('This sound is no longer available on Openverse.'), { code: 'gone' });
       if ((e.status === 401 || e.status === 403) && this.token) { this.token = null; throw Object.assign(Error('Openverse rejected the API credentials. Check them in Preferences › Library.'), { code: 'auth' }); }
       throw e;
     }
@@ -66,7 +67,7 @@ class Openverse {
   }
   normalize(r, kind) {
     if (!r || !r.id || !r.url || r.mature) return null;
-    let downloadUrl; try { const u = new URL(r.url); if (u.protocol !== 'https:') return null; downloadUrl = u.href; } catch { return null; }
+    let downloadUrl; try { const u = new URL(r.url); if (u.protocol !== 'https:' && !(this.http.allowLocal && u.hostname === '127.0.0.1')) return null; downloadUrl = u.href; } catch { return null; }
     const k = kind || (r.category === 'sound_effect' ? 'sfx' : 'music');
     const rec = {
       provider: 'openverse', sourceId: r.id, kind: k, title: String(r.title || 'Untitled').replace(/\.(wav|mp3|ogg|flac|aiff?|m4a|opus)$/i, '').slice(0, 200), creator: r.creator ? String(r.creator).slice(0, 120) : '', creatorUrl: safeUrl(r.creator_url),

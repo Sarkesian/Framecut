@@ -50,9 +50,8 @@ export function LicenseBadge({ rec, compact }) {
   return <span class={`lic lic-${r.level}`} data-tip={`${r.name ? r.name + ' — ' : ''}${r.summary}`}>{r.blocked ? <Ban size={10} /> : null}{compact ? (r.name || r.badge) : r.badge}</span>;
 }
 function UsageSwitch() {
-  const m = usageMode();
-  return <div class="usage" data-tip="FrameCut hides licenses that don't allow this kind of video and warns at export. Based on license metadata — not legal advice.">
-    <Segmented label="This video is" value={m} options={[['commercial', 'Monetized / client'], ['personal', 'Personal']]} onChange={setUsageMode} />
+  return <div class="usage" data-tip="FrameCut hides licenses that don't allow this kind of video, and checks again at export. Based on license metadata — not legal advice.">
+    <Select label="This video is" value={usageMode()} options={[['commercial', 'Monetized video'], ['personal', 'Personal video']]} onChange={setUsageMode} />
   </div>;
 }
 function SearchField({ panel, placeholder, onArrowDown }) {
@@ -93,7 +92,7 @@ export function AudioLibrary() {
   useEffect(() => () => stopPreview(), []);
   return <div class="tab-body lib" ref={ref}>
     <div class="asset-head"><h2>Audio</h2><div class="grow" /><button class="btn sm" onClick={() => importMedia()} data-tip="Import your own music or sound files"><Upload size={14} />Import</button></div>
-    <div class="lib-tabs"><Segmented label="Audio library" value={tab} options={[['music', 'Music'], ['sfx', 'Sound effects'], ['mine', 'My audio']]} onChange={v => { stopPreview(); audioTab.value = v; }} /></div>
+    <div class="lib-tabs"><Segmented label="Audio library" value={tab} options={[['music', 'Music'], ['sfx', 'Sound FX'], ['mine', 'My audio']]} onChange={v => { stopPreview(); audioTab.value = v; }} /></div>
     {tab === 'mine' ? <MyAudio /> : <OnlineAudio key={tab} panel={tab} />}
     <PreviewBar />
     <Drawer />
@@ -112,11 +111,11 @@ function OnlineAudio({ panel }) {
     <div class="lib-filters">
       <Select label="Length" value={s.length} options={panel === 'music' ? [['', 'Any length'], ['clip', 'Under 1 min'], ['song', 'Over 1 min']] : [['', 'Any length'], ['short', 'Under 10 s'], ['medium', '10–60 s'], ['long', 'Over 1 min']]} onChange={v => search(panel, { length: v }, { now: true })} />
       <Select label="Source" value={s.source} options={panel === 'music' ? SOURCES.filter(x => ['', 'jamendo', 'ccmixter', 'wikimedia_audio'].includes(x[0])) : SOURCES.filter(x => ['', 'freesound', 'wikimedia_audio'].includes(x[0]))} onChange={v => search(panel, { source: v }, { now: true })} />
+      <UsageSwitch />
     </div>
-    <UsageSwitch />
-    {panel === 'music' && <div class="lib-mix">
-      <Toggle label={<span class="row"><Volume2 size={13} />Auto balance new music</span>} on={!!p.libraryBalance} onChange={v => savePrefs({ libraryBalance: v })} hint="Sets the music's volume to sit under speech. Your recordings are never changed." />
-      <Toggle label={<span class="row"><Mic size={13} />Duck under voice</span>} on={!!p.libraryDuck} onChange={v => savePrefs({ libraryDuck: v })} hint="Music dips automatically while someone speaks on a voice track (uses Audio Studio ducking)." />
+    {panel === 'music' && <div class="lib-mix" role="group" aria-label="When adding music">
+      <button class={`fchip ${p.libraryBalance ? 'on' : ''}`} aria-pressed={!!p.libraryBalance} onClick={() => savePrefs({ libraryBalance: !p.libraryBalance })} data-tip="Sets new music's volume to sit under speech. Your recordings are never changed."><Volume2 size={12} />Auto balance</button>
+      <button class={`fchip ${p.libraryDuck ? 'on' : ''}`} aria-pressed={!!p.libraryDuck} onClick={() => savePrefs({ libraryDuck: !p.libraryDuck })} data-tip="Music dips automatically while someone speaks on a voice track (Audio Studio ducking)."><Mic size={12} />Duck under voice</button>
     </div>}
     {!s.q.trim() ? <div class="lib-idle">
       <Chips label="Ideas" items={ideas} onPick={q => search(panel, { q }, { now: true })} />
@@ -164,9 +163,8 @@ function AudioRow({ rec, panel }) {
     </button>
     <div class="grow lib-meta">
       <div class="ellipsis lib-title" title={rec.title}>{rec.title}</div>
-      <small class="muted ellipsis">{[rec.creator, rec.sourceName, rec.durationMs ? shortTime(rec.durationMs / 1000) : null].filter(Boolean).join(' · ')}</small>
+      <div class="lib-sub"><button class="lic-btn" tabIndex={-1} aria-label="License and source" onClick={() => (selectedRecord.value = rec)}><LicenseBadge rec={rec} /></button><small class="muted ellipsis">{[rec.durationMs ? shortTime(rec.durationMs / 1000) : null, rec.creator, rec.sourceName].filter(Boolean).join(' · ')}</small></div>
     </div>
-    <button class="lic-btn" tabIndex={-1} aria-label="License and source" onClick={() => (selectedRecord.value = rec)}><LicenseBadge rec={rec} /></button>
     <button class={`icon-btn sm fav-btn ${rec.favorite ? 'on' : ''}`} tabIndex={-1} aria-label={rec.favorite ? 'Remove from favorites' : 'Save to favorites'} aria-pressed={rec.favorite} onClick={() => toggleFavorite(rec)}><Heart size={14} fill={rec.favorite ? 'currentColor' : 'none'} /></button>
     {busy ? <span class="busy-ring" role="progressbar" aria-label="Adding" style={{ '--p': ((prog ?? 0.15) * 100) + '%' }}><LoaderCircle size={14} class="spin" /></span>
       : <button class="icon-btn sm add" tabIndex={-1} disabled={false} data-tip={r.blocked ? r.summary : rec.imported ? 'Add at playhead (already downloaded)' : 'Add at playhead'} aria-label="Add at playhead" onClick={() => (r.blocked ? (selectedRecord.value = rec) : add())}>{r.blocked ? <Info size={15} /> : rec.imported ? <Check size={15} /> : <Plus size={16} />}</button>}
@@ -232,10 +230,8 @@ function MyAudio() {
           onKeyDown={e => { if (e.key === ' ') { e.preventDefault(); play(a); } if (e.key === 'Enter') add(a); }}
           onContextMenu={e => openMenu(e, [{ text: 'Add at playhead', icon: Plus, onClick: () => add(a) }, src && { text: 'Copy credit', icon: Copy, onClick: () => copy(creditLine(src)) }, src?.sourcePageUrl && { text: 'Open source page', icon: ExternalLink, onClick: () => window.open(src.sourcePageUrl, '_blank') }, native && !a.missing && { text: 'Reveal file', icon: FolderOpen, onClick: () => native.showInFolder(a.folder + '\\' + a.fileName) }, a.missing && { text: 'Relink…', icon: Link2, onClick: () => relinkOne(a) }])}>
           <button class={`play-btn ${playing === a.id ? 'on' : ''}`} tabIndex={-1} aria-label="Preview" disabled={a.missing} onClick={() => play(a)}>{playing === a.id ? <Pause size={14} /> : <Play size={14} />}</button>
-          <div class="grow lib-meta"><div class="ellipsis lib-title">{(src?.title || a.name).replace(/\.[^.]+$/, '')}</div><small class="muted ellipsis">{a.missing ? 'File missing — relink to use' : [shortTime(a.duration), a.recording ? 'Recording' : src ? src.sourceName || 'Openverse' : a.kind === 'audio' ? 'Your file' : 'From video', p.mediaIds.includes(a.id) ? 'In project' : null].filter(Boolean).join(' · ')}</small></div>
-          {src ? <LicenseBadge rec={src} compact /> : null}
-          <span class="lic lic-ok" data-tip="Stored with your projects — works offline">Offline</span>
-          <button class="icon-btn sm add" tabIndex={-1} aria-label="Add at playhead" onClick={() => add(a)}>{a.missing ? <Link2 size={15} /> : <Plus size={16} />}</button>
+          <div class="grow lib-meta"><div class="ellipsis lib-title">{(src?.title || a.name).replace(/\.[^.]+$/, '')}</div><div class="lib-sub">{src ? <LicenseBadge rec={src} compact /> : null}<small class="muted ellipsis">{a.missing ? 'File missing — relink to use' : [shortTime(a.duration), a.recording ? 'Recording' : src ? src.sourceName || 'Openverse' : a.kind === 'audio' ? 'Your file' : 'From video', p.mediaIds.includes(a.id) ? 'In project' : 'Ready offline'].filter(Boolean).join(' · ')}</small></div></div>
+          <button class="icon-btn sm add" tabIndex={-1} data-tip="Add at playhead" aria-label="Add at playhead" onClick={() => add(a)}>{a.missing ? <Link2 size={15} /> : <Plus size={16} />}</button>
         </div>;
       })}</div>}
   </>;
@@ -253,7 +249,7 @@ export function StickerLibrary() {
     <div class="asset-head"><h2>Stickers</h2><div class="grow" />
       <button class="icon-btn sm" data-tip={size === 'l' ? 'Smaller tiles' : 'Larger tiles'} aria-label="Tile size" onClick={() => setSize(size === 's' ? 'm' : size === 'm' ? 'l' : 's')}>{size === 'l' ? <Rows3 size={14} /> : <LayoutGrid size={14} />}</button>
       <button class="btn sm" onClick={pickStickerFiles} data-tip="PNG, GIF, APNG, WebP, SVG or Lottie"><Upload size={14} />Import</button></div>
-    <div class="lib-tabs"><Segmented label="Sticker library" value={tab} options={[['discover', 'Discover'], ['animated', 'Animated'], ['static', 'Static'], ['mine', 'My stickers']]} onChange={v => (stickerTab.value = v)} /></div>
+    <div class="lib-tabs"><Segmented label="Sticker library" value={tab} options={[['discover', 'Discover'], ['animated', 'Animated'], ['static', 'Static'], ['mine', 'Mine']]} onChange={v => (stickerTab.value = v)} /></div>
     {tab === 'discover' ? <Discover /> : tab === 'animated' ? <Animated /> : tab === 'static' ? <StaticStickers /> : <MyStickers />}
     <Drawer />
   </div>;
