@@ -3,9 +3,10 @@
 import { signal, effect } from '@preact/signals';
 
 const KEY = 'fc:ui';
-const DEFAULTS = { viewSnap: true, safeArea: false, ripple: false, linked: true, zoom: 80, snapPx: 8 };
+const DEFAULTS = { viewSnap: true, safeArea: false, ripple: false, linked: true, zoom: 80, snapPx: 8, blade: false };
 let saved = {};
 try { saved = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch {}
+saved.blade = false; // the blade tool always starts off
 export const ui = signal({ ...DEFAULTS, ...saved });
 export const setUi = patch => { ui.value = { ...ui.value, ...patch }; };
 let timer;

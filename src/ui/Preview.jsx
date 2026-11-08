@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { Play, Pause, SkipBack, SkipForward, Maximize, ChevronDown, Grid2x2, Magnet, Lock, AlignStartVertical, AlignCenterVertical, AlignEndVertical, AlignStartHorizontal, AlignCenterHorizontal, AlignEndHorizontal, AlignHorizontalDistributeCenter, AlignVerticalDistributeCenter, RotateCcw, LockOpen, Crosshair } from 'lucide-preact';
 import { project, media, time, playing, player, selection, primary, commit, toast, duration, asset } from '../lib/state.js';
-import { Player } from '../engine/player.js';
+import { Player, rasterReady } from '../engine/player.js';
 import { dimensions, RATIOS } from '../../shared/model.mjs';
 import { propValue, writeProp } from '../../shared/keys.mjs';
 import { TEXT_STYLE, CAPTION_STYLE } from '../../shared/catalog.mjs';
@@ -51,10 +51,13 @@ export function Preview() {
   const onDrop = e => {
     e.preventDefault(); setOver(false);
     const d = window.__fcDrag; window.__fcDrag = null; if (!d) return;
+    // Where on the frame it was dropped, as offsets from the centre (fractions of width / height).
+    const r = canvas.current?.getBoundingClientRect();
+    const pos = r && r.width ? { x: Math.max(-0.5, Math.min(0.5, (e.clientX - r.left) / r.width - 0.5)), y: Math.max(-0.5, Math.min(0.5, (e.clientY - r.top) / r.height - 0.5)) } : undefined;
     if (d.type === 'media') { const a = asset(d.id); if (a) addAssets([a], { overlay: project.value.clips.some(c => c.start <= time.value && c.start + c.duration > time.value && c.kind !== 'audio') && a.kind !== 'audio' }); }
     if (d.type === 'text') addText({ style: d.style });
-    if (d.type === 'sticker') addSticker(d.sticker);
-    if (d.type === 'library') d.drop({});
+    if (d.type === 'sticker') addSticker(d.sticker, { pos });
+    if (d.type === 'library') d.drop({ pos });
     if (d.type === 'effect') applyEffect(d.id);
     if (d.type === 'filter') applyFilter(d.id, d.name);
     if (d.type === 'textTemplate') addTextTemplate(TEXT_TEMPLATES.find(t => t.id === d.id));
@@ -148,7 +151,7 @@ function SnapGuides({ cw, ch, W }) {
 
 // Move / scale / rotate the selected visual directly on the canvas.
 function Gizmo({ cw, ch, W, H }) {
-  const c = primary.value; time.value; // re-render on time for animated clips
+  const c = primary.value; time.value; rasterReady.value; // re-render on time for animated clips, and once a sticker/text raster is measured
   const pl = player.current; const plan = pl?.getPlan();
   if (!c || c.kind === 'audio' || c.kind === 'adjust' || !plan) return null;
   const L = plan.layers.find(l => l.id === c.id); if (!L) return null;

@@ -158,10 +158,10 @@ export function insertAudio(a, kind, { at = time.value, trackId } = {}) {
   return c.id;
 }
 // Stickers go on a free overlay (text) track, centered, looping when animated.
-export function insertSticker(a, { at = time.value } = {}) {
+export function insertSticker(a, { at = time.value, pos } = {}) {
   const duration = a.kind === 'video' ? Math.max(3, Math.min(8, a.duration || 3)) : 3;
   const name = (a.source?.title || a.name).replace(/\s*\(sticker\)$/, '').replace(/\.[^.]+$/, '');
-  const c = newClip('sticker', { sticker: { type: 'media' }, mediaId: a.id, in: 0, speed: 1, loop: true, start: at, duration, name, transform: { scale: 1 }, animIn: { id: 'pop', duration: 0.3 } });
+  const c = newClip('sticker', { sticker: { type: 'media' }, mediaId: a.id, in: 0, speed: 1, loop: true, start: at, duration, name, transform: { scale: 1, ...(pos ? { x: pos.x, y: pos.y } : {}) } });
   let trackName = '';
   commit('Add sticker', p => {
     const t = p.tracks.find(t => t.kind === 'text' && !t.captions && !t.locked && !overlaps(p, t.id, at, at + duration)) || addTrack(p, 'text');
@@ -171,17 +171,17 @@ export function insertSticker(a, { at = time.value } = {}) {
   return c.id;
 }
 // One entry point for clicks, Enter and drops.
-export async function useRecord(rec, { at = time.value, trackId } = {}) {
+export async function useRecord(rec, { at = time.value, trackId, pos } = {}) {
   const a = await obtain(rec); if (!a) return null;
-  return rec.kind === 'sticker' ? insertSticker(a, { at }) : insertAudio(a, rec.kind, { at, trackId });
+  return rec.kind === 'sticker' ? insertSticker(a, { at, pos }) : insertAudio(a, rec.kind, { at, trackId });
 }
 // Drag payload understood by the timeline and the player (see Timeline.jsx / Preview.jsx).
 export function dragRecord(e, rec) {
-  const data = { type: 'library', key: rec.key, duration: rec.kind === 'sticker' ? 3 : (rec.durationMs || 3000) / 1000, drop: ({ at, track } = {}) => useRecord(rec, { at: at ?? time.value, trackId: track?.id }) };
+  const data = { type: 'library', key: rec.key, duration: rec.kind === 'sticker' ? 3 : (rec.durationMs || 3000) / 1000, drop: ({ at, track, pos } = {}) => useRecord(rec, { at: at ?? time.value, trackId: track?.id, pos }) };
   e.dataTransfer.setData('application/x-framecut', JSON.stringify({ type: 'library', key: rec.key })); e.dataTransfer.effectAllowed = 'copy'; window.__fcDrag = data;
 }
 export function dragAsset(e, a, kind) {
-  const data = { type: 'library', duration: kind === 'sticker' ? 3 : a.duration, drop: ({ at, track } = {}) => (kind === 'sticker' ? insertSticker(a, { at: at ?? time.value }) : insertAudio(a, kind, { at: at ?? time.value, trackId: track?.id })) };
+  const data = { type: 'library', duration: kind === 'sticker' ? 3 : a.duration, drop: ({ at, track, pos } = {}) => (kind === 'sticker' ? insertSticker(a, { at: at ?? time.value, pos }) : insertAudio(a, kind, { at: at ?? time.value, trackId: track?.id })) };
   e.dataTransfer.setData('application/x-framecut', JSON.stringify({ type: 'library' })); e.dataTransfer.effectAllowed = 'copy'; window.__fcDrag = data;
 }
 

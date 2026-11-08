@@ -67,8 +67,10 @@ export function addText({ text = 'Your text', style = {}, at = time.value, durat
   commit('Add text', p => { c.trackId = freeTrack(p, 'text', at, at + duration, { ignore: new Set() }).id; if (trackOf(p, c.trackId).captions) c.trackId = addTrack(p, 'text').id; p.clips.push(c); }, { select: [c.id] });
   return c.id;
 }
-export function addSticker(sticker, { at = time.value, duration = 3 } = {}) {
-  const c = newClip('sticker', { sticker, start: at, duration, name: sticker.type === 'emoji' ? sticker.value : sticker.name || 'Sticker', transform: { scale: 1 }, animIn: { id: 'pop', duration: 0.35 } });
+// New stickers are visible on the frame you drop them on (no automatic entrance animation; add one in
+// Animation), placed where they were dropped on the player when a position is given.
+export function addSticker(sticker, { at = time.value, duration = 3, pos } = {}) {
+  const c = newClip('sticker', { sticker, start: at, duration, name: sticker.type === 'emoji' ? sticker.value : sticker.name || 'Sticker', transform: { scale: 1, ...(pos ? { x: pos.x, y: pos.y } : {}) } });
   delete c.sticker.name;
   commit('Add sticker', p => { const t = p.tracks.find(t => t.kind === 'text' && !t.captions && !t.locked && !overlaps(p, t.id, at, at + duration)) || addTrack(p, 'text'); c.trackId = t.id; p.clips.push(c); }, { select: [c.id] });
 }
@@ -261,6 +263,29 @@ export function detachAudio(id) {
     const au = newClip('audio', { id: nid, mediaId: v.mediaId, name: v.name + ' audio', start: v.start, duration: v.duration, in: v.in, speed: v.speed, volume: v.volume, fadeIn: v.fadeIn, fadeOut: v.fadeOut, audioFx: structuredClone(v.audioFx) });
     au.trackId = freeTrack(p, 'audio', au.start, clipEnd(au)).id; p.clips.push(au); v.muted = true; v.detachedAudio = nid;
   }, { select: [nid] });
+}
+// Close every gap on the given tracks (default: all unlocked tracks except captions). Clips keep their
+// order and slide left; returns { gaps, tracks } so the UI can say exactly what changed.
+export function closeAllGaps({ trackIds } = {}) {
+  const p0 = project.value;
+  const targets = p0.tracks.filter(t => !t.locked && !t.captions && (!trackIds || trackIds.includes(t.id)));
+  let gaps = 0, tracks = 0;
+  for (const t of targets) { const n = trackGaps(p0, t.id).length; if (n) { gaps += n; tracks++; } }
+  if (!gaps) { toast(trackIds ? 'There are no gaps on that track.' : 'There are no gaps to close.'); return { gaps: 0, tracks: 0 }; }
+  commit(gaps > 1 ? 'Close all gaps' : 'Close gap', p => {
+    for (const tr of targets) { let t = 0; for (const c of trackClips(p, tr.id)) { if (c.start > t + EPS) c.start = t; t = Math.max(t, clipEnd(c)); } }
+    for (const c of p.clips) if (c.transition && !transitionPartner(p, c)) c.transition = null;
+  });
+  toast(`Closed ${gaps} gap${gaps > 1 ? 's' : ''}${tracks > 1 ? ` on ${tracks} tracks` : ''}. Ctrl+Z to undo.`);
+  return { gaps, tracks };
+}
+// Blade: split the given clips (or every clip under t on unlocked tracks) at time t.
+export function bladeCut(t, ids) {
+  const p = project.value;
+  const under = p.clips.filter(c => t > c.start + 0.03 && t < clipEnd(c) - 0.03 && !trackOf(p, c.trackId)?.locked);
+  const targets = ids ? under.filter(c => ids.includes(c.id)) : under;
+  if (!targets.length) return toast('Click inside a clip, away from its edges, to cut it.', 'warn');
+  splitAt(t, targets.map(c => c.id));
 }
 export function closeGaps(trackId) {
   commit('Close gaps', p => { let t = 0; for (const c of trackClips(p, trackId)) { c.start = t; t += c.duration; } });

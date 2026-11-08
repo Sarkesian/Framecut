@@ -2,8 +2,10 @@
 import { LiveTakeRow } from './LiveTake.jsx';
 import { useEffect, useRef, useState, useMemo } from 'preact/hooks';
 import { signal } from '@preact/signals';
+import { Slice, FoldHorizontal, GalleryHorizontalEnd, ChevronDown } from 'lucide-preact';
 import { Scissors, Trash2, Copy, Undo2, Redo2, Magnet, ZoomIn, ZoomOut, Maximize, Eye, EyeOff, Lock, LockOpen, Volume2, VolumeX, Plus, Film, Music, Type, Layers, Snowflake, Unlink, Link2, Pencil, ArrowLeftRight, ArrowLeftToLine, ArrowRightToLine, Diamond, Gauge, Blend, Captions, Sparkles, Mic, MoreHorizontal } from 'lucide-preact';
 import { project, selection, time, zoom, media, asset, player, history, undo, redo, commit, toast, drag, playing, duration, libraryTab } from '../lib/state.js';
+import { closeAllGaps, bladeCut } from '../lib/edit.js';
 import { splitAt, deleteClips, duplicateClips, copyClips, cutClips, pasteClips, placeClips, trimClips, trimLimits, setTrack, removeTrack, addTrack, closeGaps, closeGap, trackGaps, detachAudio, addAssets, addText, addSticker, applyEffect, applyFilter, applyTransition, trackOf, overlaps, freeTrack, updateClip, partnerOf, unlinkClip } from '../lib/edit.js';
 import { beginDrag } from '../lib/drag.js';
 import { timelineTargets, snapEdges, toFrame } from '../../shared/snap.mjs';
@@ -28,6 +30,7 @@ const trackH = t => (t.main ? H.main : H[t.kind] || 40);
 const KIND_ICON = { video: Film, audio: Music, text: Type, effect: Layers };
 const scroll = signal({ left: 0, width: 1000, top: 0 });
 const snapLine = signal(null); // { t, kind } while an edge is snapped
+const bladeLine = signal(null); // timeline time under the pointer while the blade tool is on
 const readout = signal(null); // { t, text } floating timecode/duration readout while scrubbing, moving or trimming
 const marquee = signal(null);
 const dropHint = signal(null);
@@ -107,7 +110,7 @@ export function Timeline() {
   };
   const dropProps = useDrop(sc, z);
   const ph = time.value * z;
-  return <div class="timeline">
+  return <div class={`timeline ${ui.value.blade ? 'blade-on' : ''}`}>
     <Toolbar />
     <div class="tl-scroll" ref={sc} onWheel={onWheel} onPointerDown={onBgDown} {...dropProps}>
       <div class="tl-inner" style={{ width: width + HEADER_W }}>
@@ -116,6 +119,7 @@ export function Timeline() {
         <LiveTakeRow z={z} width={width} />
         <div class="tl-tail" style={{ width: width + HEADER_W }} />
         {snapLine.value && <div class={`snap-line k-${snapLine.value.kind}`} style={{ left: HEADER_W + snapLine.value.t * z }} />}
+        {ui.value.blade && bladeLine.value !== null && <div class="blade-line" style={{ left: HEADER_W + bladeLine.value * z }}><span class="mono">{timecode(bladeLine.value, fpsOf(p))}</span></div>}
         {readout.value && <div class="tl-readout mono" style={{ left: HEADER_W + readout.value.t * z, top: scroll.value.top + RULER_H + 4 }}>{readout.value.text}</div>}
         {dropHint.value && <div class="drop-hint" style={{ left: HEADER_W + dropHint.value.x, top: dropHint.value.y, width: dropHint.value.w, height: dropHint.value.h }} />}
         {marquee.value && <div class="marquee" style={{ left: HEADER_W + marquee.value.x, top: marquee.value.y, width: marquee.value.w, height: marquee.value.h }} />}
@@ -222,7 +226,7 @@ function Clip({ c, t, z }) {
   const label = c.kind === 'text' ? c.text : c.kind === 'sticker' ? (c.sticker?.type === 'emoji' ? c.sticker.value : c.name || 'Sticker') : c.kind === 'adjust' ? [c.filter?.id && filterDef(c.filter.id)?.name, ...(c.effects || []).map(e => effectDef(e.id)?.name)].filter(Boolean).join(' + ') || c.name : c.name || a?.name || 'Clip';
   return <div class={`clip k-${c.kind} ${c.caption ? 'caption' : ''} ${sel ? 'sel' : ''} ${a?.missing ? 'missing' : ''} ${c.muted ? 'muted' : ''} ${d?.ids.includes(c.id) ? 'dragging' : ''} ${d?.copy && d.ids.includes(c.id) ? 'copying' : ''} ${c.locked ? 'locked' : ''}`}
     style={{ transform: `translate(${left}px, ${shiftY}px)`, width: w }} data-clip={c.id}
-    onPointerDown={e => clipDown(e, c, t, z)} onContextMenu={e => clipMenu(e, c, t)} onDblClick={() => { if (c.kind === 'text') setTimeout(() => document.querySelector('.insp-text textarea')?.focus(), 30); }}>
+    onPointerDown={e => clipDown(e, c, t, z)} onPointerMove={e => { if (ui.value.blade) bladeLine.value = bladeTimeAt(e, z); }} onPointerLeave={() => { bladeLine.value = null; }} onContextMenu={e => clipMenu(e, c, t, bladeTimeAt(e, z))} onDblClick={() => { if (c.kind === 'text') setTimeout(() => document.querySelector('.insp-text textarea')?.focus(), 30); }}>
     {(c.kind === 'video' || c.kind === 'image') && a && <Filmstrip c={c} a={a} start={start} w={w} z={z} h={trackH(t) - 18} />}
     {(c.kind === 'audio' || (c.kind === 'video' && t.main)) && a?.audio && !c.muted && <Wave c={c} a={a} start={start} w={w} z={z} tall={c.kind === 'audio'} />}
     {((c.kind === 'audio') || (c.kind === 'video' && a?.audio)) && !c.muted && (sel || c.volumeKeys?.length > 0) && <Envelope c={c} w={w} z={z} sel={sel} />}
@@ -311,7 +315,15 @@ function withPartners(p, ids, alignedEdge) {
 }
 const endDragUi = () => { drag.value = null; snapLine.value = null; readout.value = null; };
 
+// Time under the pointer inside a clip lane: frame-exact, pulled to the playhead when close.
+function bladeTimeAt(e, z) {
+  const lane = e.currentTarget.closest('.track-lane'); if (!lane) return null;
+  const p = project.value, fps = fpsOf(p); let t = Math.max(0, (e.clientX - lane.getBoundingClientRect().left) / z);
+  if (p.settings.snapping && !e.altKey && Math.abs(t - time.value) * z < 8) t = time.value;
+  return Math.round(t * fps) / fps;
+}
 function clipDown(e, c, t, z) {
+  if (e.button === 0 && ui.value.blade) { e.stopPropagation(); e.preventDefault(); const at = bladeTimeAt(e, z); if (at !== null) bladeCut(at, e.shiftKey ? undefined : [c.id]); return; }
   if (e.button !== 0 || e.target.closest('.edge, .tr-mark, .clip-key, .env-pt')) return;
   e.stopPropagation();
   const p = project.value, fps = fpsOf(p), toggle = e.ctrlKey || e.metaKey;
@@ -461,10 +473,11 @@ function keyMenu(e, c, k) {
     { text: n > 1 ? `Delete ${n} keyframes` : 'Delete keyframe', icon: Trash2, sc: 'Del', danger: true, onClick: () => deleteKeys() },
   ]);
 }
-function clipMenu(e, c, t) {
+function clipMenu(e, c, t, at = null) {
   if (!selection.value.includes(c.id)) selection.value = [c.id];
   const n = selection.value.length, p = project.value, partner = partnerOf(p, c);
   openMenu(e, [
+    at !== null && at > c.start + 0.03 && at < clipEnd(c) - 0.03 && { text: 'Split here', icon: Slice, onClick: () => bladeCut(at, [c.id]) },
     { text: 'Split at playhead', icon: Scissors, sc: 'Ctrl+B', onClick: () => splitAt() },
     { text: 'Duplicate', icon: Copy, sc: 'Ctrl+D', onClick: () => duplicateClips() },
     { text: 'Copy', sc: 'Ctrl+C', onClick: () => copyClips() }, { text: 'Cut', sc: 'Ctrl+X', onClick: () => cutClips() }, { text: 'Paste at playhead', sc: 'Ctrl+V', onClick: () => pasteClips() }, { text: 'Paste in place', sc: 'Ctrl+Shift+V', onClick: () => pasteClips(undefined, { inPlace: true }) },
@@ -527,6 +540,7 @@ function Toolbar() {
     <button class="icon-btn" data-tip="Redo" data-kbd="Ctrl+Y" disabled={!h.future.length} onClick={() => redo()}><Redo2 size={16} /></button>
     <span class="sep" />
     <button class="icon-btn" data-tip="Split at playhead" data-kbd="Ctrl+B" onClick={() => splitAt()}><Scissors size={16} /></button>
+    <button class={`icon-btn ${ui.value.blade ? 'on' : ''}`} aria-pressed={ui.value.blade} data-tip={ui.value.blade ? 'Blade on — click a clip to cut it there, Shift+click cuts every track. Press C or Esc to stop.' : 'Blade — click anywhere on a clip to cut it'} data-kbd="C" onClick={() => setUi({ blade: !ui.value.blade })}><Slice size={16} /></button>
     <button class="icon-btn" data-tip="Trim start to playhead" data-kbd="Q" onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'q' }))}><ArrowLeftToLine size={16} /></button>
     <button class="icon-btn" data-tip="Trim end to playhead" data-kbd="W" onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }))}><ArrowRightToLine size={16} /></button>
     <button class="icon-btn" data-tip="Delete" data-kbd="Del" disabled={!sel} onClick={() => deleteClips()}><Trash2 size={16} /></button>
@@ -534,8 +548,11 @@ function Toolbar() {
     <button class="icon-btn" data-tip="Add marker at playhead" data-kbd="" onClick={() => commit('Add marker', d => { d.markers.push({ t: time.value, label: '' }); d.markers.sort((a, b) => a.t - b.t); })}><Diamond size={15} /></button>
     <button class="icon-btn" data-tip="Record voiceover" onClick={openStudio}><Mic size={16} /></button>
     <div class="grow" />
-    <button class={`icon-btn ${p.settings.snapping ? 'on' : ''}`} aria-pressed={!!p.settings.snapping} data-tip="Snapping (hold Alt while dragging to bypass)" data-kbd="N" onClick={() => commit('Toggle snapping', d => { d.settings.snapping = !d.settings.snapping; })}><Magnet size={16} /></button>
-    <button class={`btn ghost sm ${p.settings.magnetic ? 'on-text' : ''}`} data-tip="Magnetic main track keeps clips together" onClick={() => commit('Toggle magnetic track', d => { d.settings.magnetic = !d.settings.magnetic; })}>Magnetic {p.settings.magnetic ? 'on' : 'off'}</button>
+    <span class="tl-gaps"><button class="tl-toggle" data-tip="Close every gap on every track (captions and locked tracks stay put). Ctrl+Z undoes it." data-kbd="Alt+G" onClick={() => closeAllGaps()}><FoldHorizontal size={14} />Close gaps</button><button class="tl-toggle tl-more" aria-label="Close gaps options" onClick={e => openMenu(e, [{ text: 'Close gaps on all tracks', onClick: () => closeAllGaps() }, { text: 'Close gaps on the main track', onClick: () => closeAllGaps({ trackIds: [mainTrack(p).id] }) }, { text: 'Close gaps on the selected clips’ tracks', disabled: !sel, onClick: () => closeAllGaps({ trackIds: [...new Set(p.clips.filter(c => selection.value.includes(c.id)).map(c => c.trackId))] }) }], { align: 'below' })}><ChevronDown size={12} /></button></span>
+    <span class="sep" />
+    <button class={`tl-toggle ${p.settings.snapping ? 'on' : ''}`} aria-pressed={!!p.settings.snapping} data-tip={`Snap ${p.settings.snapping ? 'on' : 'off'} — while dragging, clip edges stick to other edges, the playhead and markers. Hold Alt to bypass.`} data-kbd="N" onClick={() => commit('Toggle snapping', d => { d.settings.snapping = !d.settings.snapping; })}><Magnet size={14} />Snap</button>
+    <button class={`tl-toggle ${p.settings.magnetic ? 'on' : ''}`} aria-pressed={!!p.settings.magnetic} data-tip={`Gapless main track ${p.settings.magnetic ? 'on' : 'off'} — clips on the Main track always sit end to end; removing one pulls the rest left.`} onClick={() => commit('Toggle gapless main track', d => { d.settings.magnetic = !d.settings.magnetic; })}><GalleryHorizontalEnd size={14} />Gapless main</button>
+    <span class="sep" />
     <button class={`icon-btn ${ui.value.ripple ? 'on' : ''}`} aria-pressed={ui.value.ripple} data-tip={`Ripple edits ${ui.value.ripple ? 'on' : 'off'} — trimming and deleting closes or opens space on other tracks too`} onClick={() => setUi({ ripple: !ui.value.ripple })}><ArrowLeftRight size={16} /></button>
     <button class={`icon-btn ${ui.value.linked ? 'on' : ''}`} aria-pressed={ui.value.linked} data-tip={`Linked audio/video ${ui.value.linked ? 'on' : 'off'} — separated audio moves and trims with its video`} onClick={() => setUi({ linked: !ui.value.linked })}><Link2 size={16} /></button>
     <span class="sep" />

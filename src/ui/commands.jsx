@@ -2,7 +2,7 @@
 import { Scissors, Copy, ClipboardPaste, Trash2, Undo2, Redo2, Type, Upload, Mic, Captions, ZoomIn, ZoomOut, Maximize, Settings, Keyboard, Download, FolderOpen, Plus, Save, ArrowLeft, Magnet, Sparkles, Film, Blend } from 'lucide-preact';
 import { project, selection, player, time, undo, redo, toast, saveNow, closeProject, commit, zoom, libraryTab, duration, primary } from '../lib/state.js';
 import { api, native, pickMedia } from '../lib/api.js';
-import { splitAt, deleteClips, duplicateClips, copyClips, cutClips, pasteClips, selectAll, addText, addAssets, trimClip, applyTransition, updateClips } from '../lib/edit.js';
+import { splitAt, deleteClips, duplicateClips, copyClips, cutClips, pasteClips, selectAll, addText, addAssets, trimClip, applyTransition, updateClips, closeAllGaps } from '../lib/edit.js';
 import { clipEnd, mainTrack, trackClips, RATIOS, RESOLUTIONS, FRAME_RATES } from '../../shared/model.mjs';
 import { showDialog, closeDialog, Modal, Select, Segmented, Color, Slider, Kbd } from './kit.jsx';
 import { openExport } from './ExportDialog.jsx';
@@ -61,6 +61,8 @@ export const ACTIONS = [
   { id: 'fullscreen', label: 'Full-screen preview', keys: ['Shift+F'], run: () => document.querySelector('.preview')?.requestFullscreen?.(), group: 'Playback' },
 
   { id: 'split', label: 'Split at playhead', keys: ['Ctrl+B', 'Ctrl+K'], icon: Scissors, run: () => splitAt(), group: 'Edit' },
+  { id: 'blade', label: 'Blade tool — click clips to cut (Shift+click: all tracks)', keys: ['C'], run: () => { setUi({ blade: !ui.value.blade }); toast(ui.value.blade ? 'Blade on: click a clip to cut it. Press C or Esc to stop.' : 'Blade off.'); }, group: 'Edit' },
+  { id: 'close-gaps', label: 'Close all gaps', keys: ['Alt+G'], run: () => closeAllGaps(), group: 'Edit' },
   { id: 'trim-start', label: 'Trim start to playhead', keys: ['Q'], run: () => trimTo('start'), group: 'Edit' },
   { id: 'trim-end', label: 'Trim end to playhead', keys: ['W'], run: () => trimTo('end'), group: 'Edit' },
   { id: 'delete', label: 'Delete', keys: ['Delete', 'Backspace'], icon: Trash2, run: delSel, group: 'Edit' },
@@ -71,7 +73,7 @@ export const ACTIONS = [
   { id: 'paste', label: 'Paste at playhead', keys: ['Ctrl+V'], icon: ClipboardPaste, run: pasteSel, group: 'Edit' },
   { id: 'paste-in-place', label: 'Paste in place (original time)', keys: ['Ctrl+Shift+V'], run: () => pasteClips(undefined, { inPlace: true }), group: 'Edit' },
   { id: 'select-all', label: 'Select all', keys: ['Ctrl+A'], run: () => selectAll(), group: 'Edit' },
-  { id: 'deselect', label: 'Clear selection', keys: ['Escape'], run: () => { selection.value = []; clearKeys(); }, group: 'Edit' },
+  { id: 'deselect', label: 'Clear selection', keys: ['Escape'], run: () => { if (ui.value.blade) { setUi({ blade: false }); return; } selection.value = []; clearKeys(); }, group: 'Edit' },
   { id: 'lock', label: 'Lock / unlock selected', keys: ['Ctrl+L'], run: () => toggleLock(), group: 'Edit' },
   { id: 'mute', label: 'Mute / unmute clip', keys: ['Ctrl+M'], run: toggleMute, group: 'Edit' },
   { id: 'undo', label: 'Undo', keys: ['Ctrl+Z'], icon: Undo2, run: () => { const l = undo(); if (l) toast('Undid ' + l.toLowerCase()); }, group: 'Edit' },
@@ -128,7 +130,7 @@ export function menus() {
   const sel = () => selection.value.length > 0;
   return {
     File: () => [item('new'), item('open', { text: 'Back to projects', icon: ArrowLeft }), { divider: true }, { text: 'Import media…', icon: Upload, sc: 'V', onClick: () => importMedia() }, { text: 'Save project as file…', onClick: saveAsFile }, { text: 'Project settings…', icon: Settings, onClick: openProjectSettings }, { divider: true }, item('save'), item('export'), { divider: true }, { text: 'Preferences…', onClick: openPreferences }],
-    Edit: () => [item('undo'), item('redo'), { divider: true }, item('cut', { disabled: !sel() }), item('copy', { disabled: !sel() }), item('paste'), item('duplicate', { disabled: !sel() }), item('delete', { disabled: !sel() }), item('ripple-delete', { disabled: !sel() }), { divider: true }, item('split'), item('trim-start'), item('trim-end'), item('select-all')],
+    Edit: () => [item('undo'), item('redo'), { divider: true }, item('cut', { disabled: !sel() }), item('copy', { disabled: !sel() }), item('paste'), item('duplicate', { disabled: !sel() }), item('delete', { disabled: !sel() }), item('ripple-delete', { disabled: !sel() }), { divider: true }, item('split'), item('blade'), item('close-gaps'), item('trim-start'), item('trim-end'), item('select-all')],
     View: () => [item('zoom-in'), item('zoom-out'), item('zoom-fit'), { divider: true }, { text: 'Timeline snapping', checked: !!project.value?.settings.snapping, onClick: byId.snap.run, sc: 'N' }, { text: 'Viewer snapping', checked: !!ui.value.viewSnap, onClick: byId['view-snap'].run, sc: 'Shift+N' }, { text: 'Safe-area guides', checked: !!ui.value.safeArea, onClick: byId['safe-area'].run, sc: "'" }, { text: 'Magnetic main track', checked: !!project.value?.settings.magnetic, onClick: () => commit('Toggle magnetic track', p => { p.settings.magnetic = !p.settings.magnetic; }) }, { text: 'Ripple edits', checked: !!ui.value.ripple, onClick: () => setUi({ ripple: !ui.value.ripple }) }, { text: 'Linked audio/video', checked: !!ui.value.linked, onClick: () => setUi({ linked: !ui.value.linked }) }, { divider: true }, item('fullscreen')],
     Insert: () => [item('add-text'), { text: 'Sticker', onClick: () => (libraryTab.value = 'stickers') }, item('add-transition'), { text: 'Captions…', icon: Captions, onClick: () => (libraryTab.value = 'captions') }, { text: 'Effects', icon: Sparkles, onClick: () => (libraryTab.value = 'effects') }, { text: 'Record voiceover…', icon: Mic, onClick: openStudio }, { divider: true }, item('add-video'), item('add-audio')],
     Help: () => [item('shortcuts'), { text: 'Getting started', onClick: openHelp }],
@@ -172,7 +174,7 @@ export function openHelp() {
     <ol class="help-steps">
       <li><b>Import</b> — drop videos, photos and music onto the Media panel (or press <Kbd>V</Kbd>). Files are linked, not copied.</li>
       <li><b>Arrange</b> — drag media to the timeline. The main track snaps clips together; drop above it to layer picture-in-picture.</li>
-      <li><b>Cut</b> — move the playhead and press <Kbd>Ctrl+B</Kbd> to split, drag clip edges to trim, <Kbd>Delete</Kbd> to remove.</li>
+      <li><b>Cut</b> — press <Kbd>C</Kbd> for the blade and click a clip where you want to cut, or move the playhead and press <Kbd>Ctrl+B</Kbd>. <Kbd>Alt+G</Kbd> closes all gaps. Also: drag clip edges to trim, <Kbd>Delete</Kbd> to remove.</li>
       <li><b>Style</b> — add text, captions, stickers, transitions, filters and effects from the left panel. Select anything to fine-tune it on the right.</li>
       <li><b>Export</b> — press <Kbd>Ctrl+E</Kbd>, pick a preset and save. What you see in the preview is what you get.</li>
     </ol>

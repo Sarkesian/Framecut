@@ -4,6 +4,10 @@ import { buildPlan, activeLayers, sourceTime, audioGain } from '../../shared/pla
 import { dimensions } from '../../shared/model.mjs';
 import { parseCube } from '../../shared/catalog.mjs';
 import { Compositor } from './compositor.js';
+import { signal } from '@preact/signals';
+
+// Bumped whenever a text/sticker raster finishes, so on-canvas handles can re-measure the layer.
+export const rasterReady = signal(0);
 import { rasterSync, rasterFor } from './raster.js';
 
 export class Player {
@@ -32,7 +36,7 @@ export class Player {
     const r = rasterSync(c, W, H, variant, id => this.getMedia(id));
     if (r) return r;
     const key = c.id + JSON.stringify(c.sticker || c.mediaId);
-    if (!this.pendingRasters.has(key)) { this.pendingRasters.add(key); rasterFor(c, W, H, id => this.getMedia(id)).then(() => { this.pendingRasters.delete(key); this.svgDone ||= new Map(); this.invalidate(); }).catch(() => {}); }
+    if (!this.pendingRasters.has(key)) { this.pendingRasters.add(key); rasterFor(c, W, H, id => this.getMedia(id)).then(() => { this.pendingRasters.delete(key); this.svgDone ||= new Map(); this.invalidate(); rasterReady.value++; }).catch(() => {}); }
     return null;
   }
   async loadLut(id) {
