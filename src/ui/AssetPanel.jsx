@@ -1,7 +1,7 @@
 // Left panel: creative asset browser (media, audio, text, stickers, effects, transitions, filters, captions, templates).
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { Film, Music, Type, Smile, Sparkles, Blend, Palette, Captions, LayoutTemplate, Plus, Upload, Search, Star, TriangleAlert, FolderOpen, Trash2, Mic, Square, Play, Pause, Image as ImageIcon, Link2, Gauge, Layers, LoaderCircle, Wand2, FileText, Download, Languages, X, RotateCcw, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, SlidersHorizontal } from 'lucide-preact';
-import { libraryTab, project, media, asset, commit, toast, time, player, selection, primary, prefs, userLuts, fonts, rememberMedia, transitionSel, importing, trackImport, lookPick } from '../lib/state.js';
+import { libraryTab, project, media, asset, commit, toast, time, player, selection, primary, prefs, userLuts, fonts, rememberMedia, transitionSel, importing, trackImport, lookPick, commitTentative, dropTentative, tentativeKey } from '../lib/state.js';
 import { hoverType } from './TransitionPanel.jsx';
 import { api, native, importFiles, pickFile, waitJob } from '../lib/api.js';
 import { addAssets, addText, addSticker, applyEffect, applyFilter, applyTransition, insertCaptions, trackOf } from '../lib/edit.js';
@@ -127,9 +127,30 @@ function TextTab() {
     <div class="tile-grid two">{TEXT_TEMPLATES.map(t => <button key={t.id} class="tile text-tile" onClick={() => addTextTemplate(t)} draggable onDragStart={e => dragPayload(e, { type: 'textTemplate', id: t.id })}><TextPreview style={t.items[0].style} text={t.items[0].text.split('\n')[0].slice(0, 14)} /><span>{t.name}</span></button>)}</div>
   </div>;
 }
-export function addTextTemplate(t, at = time.value) {
-  const clips = textTemplateClips(t, at);
-  commit('Add ' + t.name.toLowerCase(), p => { for (const c of clips) { const tr = p.tracks.find(x => x.kind === 'text' && !x.captions && !x.locked && !p.clips.some(o => o.trackId === x.id && o.start < clipEnd(c) && clipEnd(o) > c.start)); c.trackId = (tr || freeTrack(p, 'text', c.start, clipEnd(c))).id; p.clips.push(c); } }, { select: clips.map(c => c.id) });
+// preview: a key such as 'tpl:headline'. The template is then added tentatively (see commitTentative): it is on
+// the frame and can be moved or edited straight away, which keeps it; left untouched, dropTemplatePreview removes it.
+let previewHome = null;
+export function addTextTemplate(t, at = time.value, { preview = null } = {}) {
+  const clips = textTemplateClips(t, at), t0 = player.current?.t;
+  const put = p => { for (const c of clips) { const tr = p.tracks.find(x => x.kind === 'text' && !x.captions && !x.locked && !p.clips.some(o => o.trackId === x.id && o.start < clipEnd(c) && clipEnd(o) > c.start)); c.trackId = (tr || freeTrack(p, 'text', c.start, clipEnd(c))).id; p.clips.push(c); } };
+  const label = 'Add ' + t.name.toLowerCase(), opts = { select: clips.map(c => c.id) };
+  if (preview) commitTentative(preview, label, put, opts); else commit(label, put, opts);
+  // A title that animates in is invisible on its very first frame: a paused playhead sitting there steps past the entrance.
+  const pl = player.current, first = clips[0];
+  if (pl && first && !pl.playing) {
+    const inDur = Math.max(0, ...clips.filter(c => c.start === first.start).map(c => c.animIn?.duration || 0));
+    if (inDur && pl.t >= first.start - 1e-3 && pl.t < first.start + inDur) pl.seek(Math.min(first.start + inDur + 0.05, first.start + first.duration - 0.05));
+  }
+  previewHome = preview && pl ? { t0, spot: pl.t } : null;
+}
+// Takes an untouched template preview back off.
+// rewind: put the playhead back where it was before the preview, so the next template starts at the same moment.
+export function dropTemplatePreview({ rewind = false } = {}) {
+  const h = previewHome, pl = player.current; previewHome = null;
+  const dropped = dropTentative();
+  // Only when another template follows (it steps past its own entrance again); otherwise a kept title would drop out of view.
+  if (rewind && h && pl && !pl.playing && Math.abs(pl.t - h.spot) < 0.01) pl.seek(h.t0);
+  return dropped;
 }
 
 // ---------------- Effects / Filters / Transitions ----------------
@@ -213,7 +234,13 @@ function TemplatesTab() {
   const toggle = id => (needle ? setShut(flip(shut, id)) : setUi({ tplOpen: flip(openIds, id) }));
   const allOpen = sections.length > 0 && sections.every(s => isOpen(s.id));
   const toggleAll = () => (needle ? setShut(allOpen ? sections.map(s => s.id) : []) : setUi({ tplOpen: allOpen ? [] : sections.map(s => s.id) }));
-  const tile = t => { const c = customizeTemplate(t, o), first = c.items[0]; return <button key={t.id} class="tile text-tile" data-tip={`${t.name} · ${t.items.length > 1 ? t.items.length + ' parts' : '1 part'}${t.sequence ? ', one after another' : ''}`} onClick={() => addTextTemplate(c)} draggable onDragStart={e => dragPayload(e, { type: 'textTemplate', id: t.id, tpl: c })}><TextPreview style={first.style} text={first.text.split('\n')[0].slice(0, 16)} /><span>{t.name}</span></button>; };
+  // Clicking a template tries it out; clicking another swaps it; Esc, a second click or leaving this tab takes it off.
+  useEffect(() => {
+    const key = e => { if (e.key === 'Escape' && tentativeKey.peek()) dropTemplatePreview(); };
+    window.addEventListener('keydown', key, true);
+    return () => { window.removeEventListener('keydown', key, true); dropTemplatePreview(); };
+  }, []);
+  const tile = t => { const c = customizeTemplate(t, o), first = c.items[0]; return <button key={t.id} class={`tile text-tile ${tentativeKey.value === 'tpl:' + t.id ? 'on' : ''}`} aria-pressed={tentativeKey.value === 'tpl:' + t.id} data-tip={`${t.name} · ${t.items.length > 1 ? t.items.length + ' parts' : '1 part'}${t.sequence ? ', one after another' : ''}`} onClick={() => { const same = tentativeKey.peek() === 'tpl:' + t.id; dropTemplatePreview({ rewind: true }); if (!same) addTextTemplate(c, time.value, { preview: 'tpl:' + t.id }); }} draggable onDragStart={e => dragPayload(e, { type: 'textTemplate', id: t.id, tpl: c })}><TextPreview style={first.style} text={first.text.split('\n')[0].slice(0, 16)} /><span>{t.name}</span></button>; };
   // A look is only chosen by a click: the player shows the project with it on (a preview), its card says what it
   // would add, and nothing changes until Apply. The preview ends when the card closes, the section folds or you leave.
   const pick = lookPick.value, setPick = v => { lookPick.value = v; };
@@ -248,7 +275,7 @@ function TemplatesTab() {
       {open && (s.looks ? <div class="tpl-sec-body"><p class="muted hint">Click a look to preview it in the player. Nothing changes until you press <b>Apply</b>.</p><div class="tile-grid three">{s.list.map(look)}</div>{s.list.some(t => t.id === pick) && <LookCard t={s.list.find(t => t.id === pick)} onClose={() => setPick(null)} />}</div>
         : <div class="tpl-sec-body"><div class="tile-grid two">{s.list.map(tile)}</div></div>)}
     </section>; })}
-    <p class="muted hint tpl-foot">Click to add at the playhead, or drag onto the timeline. Everything stays editable afterwards.</p>
+    <p class="muted hint tpl-foot">Click to try one; move or edit it to keep it. Drag to the timeline to add it straight away.</p>
   </div>;
 }
 // The look that is on the project now (its clips are tagged), so applying another one replaces it instead of piling up.

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useMemo } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { Slice, FoldHorizontal, GalleryHorizontalEnd, ChevronDown, CopyPlus, Link2Off } from 'lucide-preact';
 import { Scissors, Trash2, Copy, Undo2, Redo2, Magnet, ZoomIn, ZoomOut, Maximize, Eye, EyeOff, Lock, LockOpen, Volume2, VolumeX, Plus, Film, Music, Type, Layers, Snowflake, Unlink, Link2, Pencil, ArrowLeftRight, ArrowLeftToLine, ArrowRightToLine, Diamond, Gauge, Blend, Captions, Sparkles, Mic, MoreHorizontal } from 'lucide-preact';
-import { project, selection, time, zoom, media, asset, player, history, undo, redo, commit, toast, drag, playing, duration, libraryTab, transitionSel, rememberMedia, trackImport } from '../lib/state.js';
+import { project, selection, time, zoom, media, asset, player, history, undo, redo, commit, toast, drag, playing, duration, libraryTab, transitionSel, rememberMedia, trackImport, tentativeIds } from '../lib/state.js';
 import { closeAllGaps, bladeCut } from '../lib/edit.js';
 import { splitAt, deleteClips, duplicateClips, copyClips, cutClips, pasteClips, placeClips, trimClips, trimLimits, setTrack, removeTrack, addTrack, closeGaps, closeGap, trackGaps, detachAudio, addAssets, addText, addSticker, applyEffect, applyFilter, applyTransition, selectTransition, removeTransition, trackOf, overlaps, freeTrack, updateClip, partnerOf, unlinkClip, insertTrack, pruneTracks, moveTrack, appendToText } from '../lib/edit.js';
 import { beginDrag } from '../lib/drag.js';
@@ -249,7 +249,7 @@ function Clip({ c, t, z }) {
   // The edge another clip is snapping to glows, so you can see exactly which cut it lines up with.
   const sn = snapLine.value, snapSide = sn && !sn.near && sn.clipId === c.id ? (Math.abs(sn.t - c.start) < 1e-6 ? 'snap-l' : Math.abs(sn.t - clipEnd(c)) < 1e-6 ? 'snap-r' : '') : '';
   const label = c.kind === 'text' ? c.text : c.kind === 'sticker' ? (c.sticker?.type === 'emoji' ? c.sticker.value : c.name || 'Sticker') : c.kind === 'adjust' ? [c.filter?.id && filterDef(c.filter.id)?.name, ...(c.effects || []).map(e => effectDef(e.id)?.name)].filter(Boolean).join(' + ') || c.name : c.name || a?.name || 'Clip';
-  return <div class={`clip k-${c.kind} ${c.caption ? 'caption' : ''} ${sel ? 'sel' : ''} ${a?.missing ? 'missing' : ''} ${c.muted ? 'muted' : ''} ${d?.ids.includes(c.id) ? 'dragging' : ''} ${d?.copy && d.ids.includes(c.id) ? 'copying' : ''} ${c.locked ? 'locked' : ''} ${snapSide}`}
+  return <div class={`clip k-${c.kind} ${tentativeIds.value.includes(c.id) ? 'tentative' : ''} ${c.caption ? 'caption' : ''} ${sel ? 'sel' : ''} ${a?.missing ? 'missing' : ''} ${c.muted ? 'muted' : ''} ${d?.ids.includes(c.id) ? 'dragging' : ''} ${d?.copy && d.ids.includes(c.id) ? 'copying' : ''} ${c.locked ? 'locked' : ''} ${snapSide}`}
     style={{ transform: `translate(${left}px, ${shiftY}px)`, width: w }} data-clip={c.id}
     onPointerDown={e => clipDown(e, c, t, z)} onPointerMove={e => { if (ui.value.blade) bladeLine.value = bladeTimeAt(e, z); }} onPointerLeave={() => { if (ui.value.blade) { bladeLine.value = null; snapLine.value = null; bladePrev = null; } }} onContextMenu={e => clipMenu(e, c, t, bladeTimeAt(e, z))} onDblClick={() => { if (c.kind === 'text') setTimeout(() => document.querySelector('.insp-text textarea')?.focus(), 30); }}>
     {(c.kind === 'video' || c.kind === 'image') && a && <Filmstrip c={c} a={a} start={start} w={w} z={z} h={trackH(t) - 18} />}

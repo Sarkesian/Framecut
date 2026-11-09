@@ -22,6 +22,7 @@
 .track-lane { position: relative; height: 100%; }
 .clip { position: absolute; top: 3px; bottom: 3px; left: 0; border-radius: 6px; overflow: hidden; cursor: grab; color: #fff; box-shadow: inset 0 0 0 1px rgba(255,255,255,.12); will-change: transform; transition: box-shadow .1s; }
 .clip:active { cursor: grabbing; }
+.clip.tentative { opacity: .6; outline: 1.5px dashed rgba(255,255,255,.9); outline-offset: -2px; }
 .clip.k-video { background: var(--c-video); } .clip.k-image { background: var(--c-image); } .clip.k-audio { background: #154f42; } .clip.k-text { background: var(--c-text); } .clip.k-text.caption { background: var(--c-caption); } .clip.k-sticker { background: var(--c-sticker); } .clip.k-adjust { background: var(--c-effect); }
 .clip.sel { box-shadow: inset 0 0 0 2px #fff, 0 0 0 1px rgba(0,0,0,.6); z-index: 2; }
 .clip.dragging { opacity: .85; z-index: 5; box-shadow: inset 0 0 0 2px var(--accent), 0 8px 20px rgba(0,0,0,.5); }

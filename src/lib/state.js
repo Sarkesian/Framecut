@@ -94,6 +94,30 @@ export function redo() {
   coalesce = { key: null, at: 0, g: null }; scheduleSave(); player.current?.invalidate(); return next.label;
 }
 
+// A tentative edit: applied like any other, so it can be seen, selected, moved and resized, but taken back
+// by dropTentative() as long as nothing else has changed the project since. Any later edit (or undo) keeps it.
+let tentative = null;
+export const tentativeKey = signal(null); // what is being tried out, e.g. 'tpl:headline'
+export const tentativeIds = signal([]);   // its clips, drawn as "not added yet" in the timeline
+const clearTentative = () => { tentative = null; if (tentativeKey.peek() !== null) tentativeKey.value = null; if (tentativeIds.peek().length) tentativeIds.value = []; };
+effect(() => { const p = project.value; if (tentative && p !== tentative.after) clearTentative(); });
+export function commitTentative(key, label, fn, opts = {}) {
+  dropTentative();
+  const before = project.value, h = history.value, sel = selection.value;
+  commit(label, fn, opts);
+  if (project.value === before) return;
+  tentative = { before, after: project.value, history: h, selection: sel };
+  batch(() => { tentativeKey.value = key; tentativeIds.value = opts.select || []; });
+}
+// True when the tentative edit was still untouched and has been taken back.
+export function dropTentative() {
+  const t = tentative; clearTentative();
+  if (!t || project.value !== t.after) return false;
+  batch(() => { history.value = t.history; project.value = t.before; selection.value = t.selection.filter(id => t.before.clips.some(c => c.id === id)); });
+  coalesce = { key: null, at: 0, g: null }; scheduleSave(); player.current?.invalidate();
+  return true;
+}
+
 let saveTimer, saving = Promise.resolve();
 export function scheduleSave(delay = 700) {
   saveState.value = 'unsaved'; clearTimeout(saveTimer);
