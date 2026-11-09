@@ -1,8 +1,8 @@
-// Left panel: creative asset browser (media, audio, text, stickers, effects, transitions, filters, captions, templates).
+// Left panel: creative asset browser (media, audio, text, stickers, effects, filters, captions, templates).
+// Transitions have no tab here: they are added on a cut in the timeline and edited in the details panel.
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { Film, Music, Type, Smile, Sparkles, Blend, Palette, Captions, LayoutTemplate, Plus, Upload, Search, Star, TriangleAlert, FolderOpen, Trash2, Mic, Square, Play, Pause, Image as ImageIcon, Link2, Gauge, Layers, LoaderCircle, Wand2, FileText, Download, Languages, X, RotateCcw, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, SlidersHorizontal } from 'lucide-preact';
 import { libraryTab, project, media, asset, commit, toast, time, player, selection, primary, prefs, userLuts, fonts, rememberMedia, transitionSel, importing, trackImport, lookPick, commitTentative, dropTentative, tentativeKey } from '../lib/state.js';
-import { hoverType } from './TransitionPanel.jsx';
 import { api, native, importFiles, pickFile, waitJob } from '../lib/api.js';
 import { addAssets, addText, addSticker, applyEffect, applyFilter, applyTransition, insertCaptions, trackOf } from '../lib/edit.js';
 import { openMenu, Empty, Segmented, Select, Progress, confirm, useDraft } from './kit.jsx';
@@ -20,14 +20,14 @@ import { openStudio } from './Studio.jsx';
 import { AudioLibrary, StickerLibrary } from './Library.jsx';
 import { CaptionsPanel } from './Captions.jsx';
 
-const TABS = [['media', 'Media', Film], ['audio', 'Audio', Music], ['text', 'Text', Type], ['stickers', 'Stickers', Smile], ['effects', 'Effects', Sparkles], ['transitions', 'Transitions', Blend], ['filters', 'Filters', Palette], ['captions', 'Captions', Captions], ['templates', 'Templates', LayoutTemplate]];
+const TABS = [['media', 'Media', Film], ['audio', 'Audio', Music], ['text', 'Text', Type], ['stickers', 'Stickers', Smile], ['effects', 'Effects', Sparkles], ['filters', 'Filters', Palette], ['captions', 'Captions', Captions], ['templates', 'Templates', LayoutTemplate]];
 export const dragPayload = (e, data) => { e.dataTransfer.setData('application/x-framecut', JSON.stringify(data)); e.dataTransfer.effectAllowed = 'copy'; window.__fcDrag = data; };
 
 export function AssetPanel() {
   const tab = libraryTab.value;
   return <div class="assets">
     <nav class="asset-rail" aria-label="Asset categories">{TABS.map(([id, label, Icon]) => <button key={id} class={`rail-btn ${tab === id ? 'on' : ''}`} onClick={() => (libraryTab.value = id)} aria-pressed={tab === id}><Icon size={18} /><span>{label}</span></button>)}</nav>
-    <div class="asset-content">{{ media: <MediaTab />, audio: <AudioLibrary />, text: <TextTab />, stickers: <StickerLibrary />, effects: <EffectsTab />, transitions: <TransitionsTab />, filters: <FiltersTab />, captions: <CaptionsPanel />, templates: <TemplatesTab /> }[tab]}</div>
+    <div class="asset-content">{{ media: <MediaTab />, audio: <AudioLibrary />, text: <TextTab />, stickers: <StickerLibrary />, effects: <EffectsTab />, filters: <FiltersTab />, captions: <CaptionsPanel />, templates: <TemplatesTab /> }[tab]}</div>
   </div>;
 }
 const Head = ({ title, children }) => <div class="asset-head"><h2>{title}</h2><div class="grow" />{children}</div>;
@@ -176,15 +176,6 @@ function FiltersTab() {
     {sel?.filter?.id && <button class="btn sm" style={{ marginBottom: 10 }} onClick={() => commit('Remove filter', p => { const c = p.clips.find(x => x.id === sel.id); c.filter = { id: null, intensity: 1 }; })}><X size={13} />Remove filter from clip</button>}
     {userLuts.value.length > 0 && <><h4 class="group-title">My LUTs</h4><div class="tile-grid">{userLuts.value.map(l => <button key={l.id} class={`tile fx-tile ${sel?.filter?.id === l.id ? 'on' : ''}`} onClick={() => applyFilter(l.id, l.name)} draggable onDragStart={e => dragPayload(e, { type: 'filter', id: l.id, name: l.name })}><div class="ph lut"><Palette size={18} /></div><span>{l.name}</span></button>)}</div></>}
     {groups.map(g => <div key={g}><h4 class="group-title">{g}</h4><div class="tile-grid">{FILTERS.filter(f => f.group === g).map(f => <button key={f.id} class={`tile fx-tile ${sel?.filter?.id === f.id ? 'on' : ''}`} draggable onDragStart={e => dragPayload(e, { type: 'filter', id: f.id, name: f.name })} onClick={() => applyFilter(f.id, f.name)}>{prev[f.id] ? <img src={prev[f.id]} alt="" draggable={false} /> : <div class="ph" />}<span>{f.name}</span></button>)}</div></div>)}
-  </div>;
-}
-function TransitionsTab() {
-  const groups = [...new Set(TRANSITION_FAMILIES.map(t => t.group))];
-  return <div class="tab-body">
-    <Head title="Transitions" />
-    <p class="muted hint">Drag onto the cut between two clips, or click to add at the cut nearest the playhead. Hover to preview{transitionSel.value ? ' it on the selected transition' : ''}.</p>
-    {groups.map(g => <div key={g}><h4 class="group-title">{g}</h4><div class="tile-grid">{TRANSITION_FAMILIES.filter(t => t.group === g).map(t => <button key={t.id} class="tile tr-tile" draggable data-tip={t.dirs.length ? 'Pick the direction after adding it' : null} onDragStart={e => dragPayload(e, { type: 'transition', id: t.first })} onClick={() => { hoverType(null, null); applyTransition(t.first); }}
-          onPointerEnter={() => transitionSel.value && hoverType(transitionSel.value, t.first)} onPointerLeave={() => hoverType(null, null)}><div class={`tr-demo tr-${t.first}`}><i class="a" /><i class="b" /><i class="dip" /></div><span>{t.name}</span></button>)}</div></div>)}
   </div>;
 }
 

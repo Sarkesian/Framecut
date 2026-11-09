@@ -16,20 +16,22 @@ const { Fluent } = require('./providers/fluent.cjs');
 const { Pixabay } = require('./providers/pixabay.cjs');
 const { SfxKit } = require('./providers/sfxkit.cjs');
 const { CcMixter } = require('./providers/ccmixter.cjs');
+const { AssetPolish } = require('./providers/assetpolish.cjs');
 const { assessRights, verifyLicense, discoverable, includeMode, providerTier, PROVIDERS, APP_NOTICES } = require('../shared/rights.mjs');
 
 const PREVIEW_CAP = 250 * 1024 ** 2;
+const FLIGHT_KEEP = 48 * 1024 ** 2; // how much of a preview in flight is kept in memory for late joiners
 const STICKER_EXT = /\.(png|apng|gif|webp|svg|json|jpe?g)$/i;
 const EXT_FOR = { 'image/svg+xml': '.svg', 'image/gif': '.gif', 'audio/mpeg': '.mp3', 'audio/mp3': '.mp3', 'audio/ogg': '.ogg', 'application/ogg': '.ogg', 'video/ogg': '.ogg', 'audio/wav': '.wav', 'audio/x-wav': '.wav', 'audio/wave': '.wav', 'audio/flac': '.flac', 'audio/x-flac': '.flac', 'audio/mp4': '.m4a', 'audio/aac': '.aac', 'audio/opus': '.opus', 'audio/webm': '.webm', 'image/png': '.png', 'image/apng': '.png' };
 const safeName = s => String(s || 'asset').replace(/[<>:"/\\|?*\x00-\x1f]+/g, '').replace(/\s+/g, ' ').trim().slice(0, 60) || 'asset';
 
 class Creative {
-  constructor({ dataDir, cacheDir, library, jobs, secrets = null, http = new SafeHttp(), openverseBase, pixabayBase, sfxkitBase, ccmixterBase }) {
+  constructor({ dataDir, cacheDir, library, jobs, secrets = null, http = new SafeHttp(), openverseBase, pixabayBase, sfxkitBase, ccmixterBase, assetpolishBase }) {
     this.library = library; this.jobs = jobs; this.secrets = secrets; this.http = http;
     this.statePath = path.join(dataDir, 'creative.json'); this.dataDir = dataDir;
     this.dirs = { lib: path.join(dataDir, 'media', 'library'), previews: path.join(cacheDir, 'creative', 'previews'), bake: path.join(cacheDir, 'creative', 'bake') };
     this.memCreds = {};
-    this.providers = { openverse: new Openverse({ http, base: openverseBase, credentials: () => this.credentials('openverse') }), fluent: new Fluent(), pixabay: new Pixabay({ http, base: pixabayBase, credentials: () => this.credentials('pixabay') }), sfxkit: new SfxKit({ base: sfxkitBase }), ccmixter: new CcMixter({ http, base: ccmixterBase }) };
+    this.providers = { openverse: new Openverse({ http, base: openverseBase, credentials: () => this.credentials('openverse') }), fluent: new Fluent(), pixabay: new Pixabay({ http, base: pixabayBase, credentials: () => this.credentials('pixabay') }), sfxkit: new SfxKit({ base: sfxkitBase }), ccmixter: new CcMixter({ http, base: ccmixterBase }), ...(assetpolishBase === false ? {} : { assetpolish: new AssetPolish({ http, base: assetpolishBase }) }) }; // false: left out (tests that must stay offline)
     this.cache = new Map(); this.known = new Map(); this.inflight = new Map(); this.sessions = new Map(); this.tokens = new Map();
     this.state = { favorites: [], recents: [], imports: {} };
   }
@@ -76,7 +78,7 @@ class Creative {
   // Providers that can answer a search for this kind in this discovery mode (configured, enabled, right tier).
   searchable(kind, include) {
     // Bundled-index sources (instant, work offline) lead the interleaved results.
-    const order = ['fluent', 'sfxkit', 'openverse', 'ccmixter', 'pixabay'];
+    const order = ['fluent', 'sfxkit', 'assetpolish', 'openverse', 'ccmixter', 'pixabay'];
     return Object.keys(this.providers).sort((x, y) => order.indexOf(x) - order.indexOf(y)).filter(id => {
       const pv = PROVIDERS[id], p = this.providers[id];
       if (!pv?.enabled || !pv.kinds.includes(kind)) return false;
@@ -139,26 +141,94 @@ class Creative {
     return this.remember(await this.provider(providerId).getAsset(id, kind));
   }
 
-  // ----- previews (streamed once, then served from a bounded cache) -----
+  // ----- previews (downloaded once, shared while in flight, then served from a bounded cache) -----
+  previewPath(providerId, id) { return path.join(this.dirs.previews, createHash('sha1').update(providerId + ':' + id).digest('hex').slice(0, 20)); }
+  // One download per preview, shared by everyone who asks for it: the warm-up that starts when a row is
+  // pointed at and the click that follows a moment later read the same bytes, so the click starts playing
+  // from what has already arrived instead of asking the source again. Finished downloads land in the cache.
+  flight(providerId, id, rec) {
+    const file = this.previewPath(providerId, id); this.flights ||= new Map();
+    let f = this.flights.get(file); if (f) return f;
+    // A warm-up nobody followed with a click gives its place to the new request.
+    for (const o of this.flights.values()) if (!o.subs.size && !o.done) o.abort();
+    const src = this.provider(providerId).preview(rec);
+    f = { file, chunks: [], kept: true, bytes: 0, type: null, length: null, done: false, ok: false, subs: new Set(), ctl: null, timer: null };
+    f.abort = () => { clearTimeout(f.timer); f.ctl?.abort(); };
+    // Left alone (the listener moved on, or a warm-up was never used) the download is dropped after a short grace.
+    f.idle = ms => { clearTimeout(f.timer); if (!f.done) f.timer = setTimeout(() => { if (!f.subs.size) f.abort(); }, ms); };
+    f.finished = new Promise(resolve => { f.settle = resolve; });
+    f.head = (async () => {
+      let r, release = () => {};
+      const get = async u => { const slot = await this.hostSlot(u); try { const x = await this.http.open(u, { accept: src.accept, headers: src.headers, timeout: src.timeout || 20000 }); release = slot.release; return x; } catch (e) { slot.release(); if (e.code === 'quota' || e.status === 429) slot.pause(e.retryAfter); throw e; } };
+      try { r = await get(src.url); }
+      catch (e) { if (!src.fallback || e.code === 'quota') throw e; r = await get(src.fallback); }
+      f.ctl = r.controller;
+      const type = (r.headers.get('content-type') || '').split(';')[0] || 'application/octet-stream';
+      f.type = type === 'application/octet-stream' && rec.kind === 'sticker' ? 'image/png' : type; f.length = r.headers.get('content-length');
+      (async () => {
+        const part = file + '.' + process.pid + '.part'; const out = fs.createWriteStream(part); let ok = true;
+        try {
+          for await (const chunk of Readable.fromWeb(r.body)) {
+            f.bytes += chunk.length; if (f.bytes > src.maxBytes) { ok = false; break; }
+            out.write(chunk);
+            if (f.kept) { if (f.bytes > FLIGHT_KEEP) { f.kept = false; f.chunks = []; } else f.chunks.push(chunk); }
+            for (const s of f.subs) s(chunk);
+          }
+        } catch { ok = false; } finally { r.cleanup(); release(); }
+        await new Promise(x => out.end(x));
+        if (ok && f.bytes) { await fsp.rename(part, file).catch(() => {}); await fsp.writeFile(file + '.type', f.type).catch(() => {}); this.prunePreviews().catch(() => {}); } else await fsp.unlink(part).catch(() => {});
+        clearTimeout(f.timer); f.ok = ok && f.bytes > 0; f.done = true; this.flights.delete(file);
+        for (const s of f.subs) s(null); f.settle(f.ok);
+      })();
+    })();
+    f.head.catch(() => { this.flights.delete(file); f.done = true; f.settle(false); });
+    this.flights.set(file, f);
+    return f;
+  }
+  // Starts fetching a preview before it is asked for (pointer resting on a row). Never throws.
+  async warmPreview(providerId, id) {
+    try {
+      const rec = await this.record(providerId, id);
+      if (rec.kind === 'sticker' || fs.existsSync(this.previewPath(providerId, id))) return;
+      const f = this.flight(providerId, id, rec); if (!f.subs.size) f.idle(15000);
+      await f.head;
+    } catch {}
+  }
   async preview(providerId, id, req, res) {
     const rec = await this.record(providerId, id);
-    const file = path.join(this.dirs.previews, createHash('sha1').update(providerId + ':' + id).digest('hex').slice(0, 20));
-    if (fs.existsSync(file)) { const now = new Date(); fsp.utimes(file, now, now).catch(() => {}); const t = await fsp.readFile(file + '.type', 'utf8').catch(() => null); return res.sendFile(file, { headers: { 'Content-Type': t || (rec.kind === 'sticker' ? 'image/png' : 'audio/mpeg'), 'Cache-Control': 'no-cache' } }); }
-    const src = this.provider(providerId).preview(rec);
-    let r, release = () => {};
-    const get = async u => { const slot = await this.hostSlot(u); try { const x = await this.http.open(u, { accept: src.accept, timeout: src.timeout || 20000 }); release = slot.release; return x; } catch (e) { slot.release(); if (e.code === 'quota' || e.status === 429) slot.pause(e.retryAfter); throw e; } };
-    try { r = await get(src.url); }
-    catch (e) { if (!src.fallback || e.code === 'quota') throw e; r = await get(src.fallback); }
-    const type = (r.headers.get('content-type') || '').split(';')[0] || 'application/octet-stream';
-    res.setHeader('Content-Type', type === 'application/octet-stream' && rec.kind === 'sticker' ? 'image/png' : type);
-    if (r.headers.get('content-length')) res.setHeader('Content-Length', r.headers.get('content-length'));
-    const part = file + '.' + process.pid + '.part'; const out = fs.createWriteStream(part); let bytes = 0, ok = true;
-    req.on('close', () => { if (!res.writableFinished) { ok = false; r.controller.abort(); } });
-    try {
-      for await (const chunk of Readable.fromWeb(r.body)) { bytes += chunk.length; if (bytes > src.maxBytes) { ok = false; break; } out.write(chunk); if (!res.write(chunk)) await new Promise(x => res.once('drain', x)); }
-    } catch { ok = false; } finally { r.cleanup(); release(); }
-    res.end(); await new Promise(x => out.end(x));
-    if (ok && bytes) { await fsp.rename(part, file).catch(() => {}); await fsp.writeFile(file + '.type', String(res.getHeader('Content-Type') || '')).catch(() => {}); this.prunePreviews().catch(() => {}); } else await fsp.unlink(part).catch(() => {});
+    const file = this.previewPath(providerId, id);
+    const cached = async () => { const now = new Date(); fsp.utimes(file, now, now).catch(() => {}); const t = await fsp.readFile(file + '.type', 'utf8').catch(() => null); return t || (rec.kind === 'sticker' ? 'image/png' : 'audio/mpeg'); };
+    // ?as=mp3: the player could not decode the file as it is (an unusual format, or a source that labels it wrongly),
+    // so it is converted on the fly. Needs the whole file, which is fetched (or already cached) first.
+    if (req.query?.as === 'mp3') {
+      if (!fs.existsSync(file)) { const f = this.flight(providerId, id, rec); f.subs.add(() => {}); await f.head; if (!(await f.finished)) throw Object.assign(Error('This preview could not be downloaded from its source.'), { code: 'gone' }); }
+      await cached();
+      res.setHeader('Content-Type', 'audio/mpeg'); res.setHeader('Cache-Control', 'no-cache');
+      const { spawn } = require('node:child_process');
+      const ff = spawn(ffmpeg, ['-v', 'error', '-i', file, '-vn', '-f', 'mp3', '-b:a', '160k', 'pipe:1'], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+      req.on('close', () => { if (!res.writableFinished) ff.kill(); });
+      ff.stdout.pipe(res); await new Promise(x => { ff.on('close', x); ff.on('error', x); });
+      if (!res.writableEnded) res.end();
+      return;
+    }
+    if (fs.existsSync(file)) return res.sendFile(file, { headers: { 'Content-Type': await cached(), 'Cache-Control': 'no-cache' } });
+    const f = this.flight(providerId, id, rec); clearTimeout(f.timer);
+    // Hold the download open while the headers are awaited; the real listener joins in the same tick as the
+    // replay of what has already arrived, so no byte is sent twice or missed.
+    let closed = false; const hold = () => {}; let sub = hold; f.subs.add(hold);
+    req.on('close', () => { closed = true; f.subs.delete(sub); if (!f.subs.size) f.idle(2500); });
+    try { await f.head; } catch (e) { f.subs.delete(hold); throw e; }
+    if (closed) return;
+    if (!f.kept && f.bytes) { // joined too late to replay from memory: wait for the finished file instead
+      if (!(await f.finished)) throw Object.assign(Error('This preview could not be downloaded from its source.'), { code: 'gone' });
+      return res.sendFile(file, { headers: { 'Content-Type': await cached(), 'Cache-Control': 'no-cache' } });
+    }
+    res.setHeader('Content-Type', f.type);
+    if (f.length) res.setHeader('Content-Length', f.length);
+    for (const c of f.chunks) res.write(c);
+    if (f.done) return res.end();
+    sub = chunk => { if (closed) return; if (chunk === null) res.end(); else res.write(chunk); };
+    f.subs.delete(hold); f.subs.add(sub);
   }
   // Media hosts are asked politely: at most two preview downloads at a time per host, and when a host
   // says "slow down" (HTTP 429) FrameCut stops asking it until the time it gave, instead of retrying
@@ -199,7 +269,7 @@ class Creative {
       const dir = path.join(this.dirs.lib, providerId); await fsp.mkdir(dir, { recursive: true });
       const src = p.download(rec);
       const tmp = path.join(dir, `.${randomUUID()}.download`);
-      const dl = await this.http.toFile(src.url, tmp, { accept: src.accept, maxBytes: src.maxBytes, timeout: src.timeout, signal, onProgress: f => progress(0.05 + (f ?? 0.5) * 0.75, 'Downloading') });
+      const dl = await this.http.toFile(src.url, tmp, { accept: src.accept, headers: src.headers, maxBytes: src.maxBytes, timeout: src.timeout, signal, onProgress: f => progress(0.05 + (f ?? 0.5) * 0.75, 'Downloading') });
       if (rec.expectedSha256 && dl.sha256 !== rec.expectedSha256) { await fsp.unlink(tmp).catch(() => {}); throw Object.assign(Error(`“${rec.title}” didn’t match the file its source published, so it wasn’t added.`), { code: 'corrupt' }); }
       // Same bytes already imported under another listing? Reuse that file.
       const twin = Object.entries(this.state.imports).find(([, v]) => v.sha256 === dl.sha256 && this.library.get(v.mediaId) && !this.library.get(v.mediaId).missing);

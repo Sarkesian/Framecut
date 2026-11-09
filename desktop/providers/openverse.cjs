@@ -65,6 +65,8 @@ class Openverse {
     const seen = new Set(); const items = []; let dropped = 0;
     for (const r of data.results || []) {
       const rec = this.normalize(r, kind); if (!rec) continue;
+      // Wikimedia Commons lists MIDI and Ogg-container files as audio; neither can be previewed or placed on a timeline.
+      if (kind !== 'sticker' && /^(mid|midi|kar|ogx)$/i.test(rec.filetype || '')) continue;
       if (!rec.licenseCheck.ok) { dropped++; continue; } // unknown / contradictory license data is never offered
       if (rec.durationMs != null && rec.durationMs < minMs) continue;
       if (LENGTHS[length] && !(rec.durationMs >= LENGTHS[length][0] && rec.durationMs < LENGTHS[length][1])) continue;

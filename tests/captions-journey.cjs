@@ -70,8 +70,11 @@ const norm = s => s.toLowerCase().replace(/[^a-z0-9' ]+/g, ' ').trim();
     assert.deepEqual(fonts, ['Anton']);
     await page.locator('.preset-card', { hasText: 'Word Pop' }).click();
     await page.locator('.cap-panel').screenshot({ path: path.join(shots, 'cap-3-styles.png') });
-    await page.locator('.cap-panel .lib-tabs button', { hasText: 'Animation' }).click();
-    await page.locator('.cap-panel').screenshot({ path: path.join(shots, 'cap-4-animation.png') });
+    // Fine-tuning lives in the details panel: select a caption, then its Animation tab.
+    await page.evaluate(id => { window.__fc.state.selection.value = [id]; }, caps[0].id);
+    await page.locator('.insp-tabs button', { hasText: 'Animation' }).click();
+    await page.locator('.cap-tune').waitFor();
+    await page.locator('.inspector').screenshot({ path: path.join(shots, 'cap-4-animation.png') });
 
     step('save and reopen');
     const pid = await page.evaluate(async () => { await window.__fc.state.saveNow(); return window.__fc.state.project.value.id; });

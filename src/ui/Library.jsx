@@ -16,7 +16,7 @@ import { svgUrl } from '../engine/raster.js';
 import { shortTime } from '../lib/format.js';
 import {
   audioTab, stickerTab, searches, search, recentSearches, lists, loadLists, loadStatus, libStatus, toggleFavorite, togglePreview, stopPreview, preview, previewTime, seekPreview, setPreviewVolume,
-  useRecord, dragRecord, dragAsset, insertAudio, insertSticker, busyKeys, selectedRecord, usageMode, setUsageMode, rightsOf, importStickerFiles, pickStickerFiles, categories, loadCategories, warmSources,
+  useRecord, dragRecord, dragAsset, insertAudio, insertSticker, busyKeys, warmPreview, selectedRecord, usageMode, setUsageMode, rightsOf, importStickerFiles, pickStickerFiles, categories, loadCategories, warmSources,
 } from '../lib/creative.js';
 
 const MUSIC_IDEAS = ['Cinematic', 'Lo-fi', 'Upbeat', 'Acoustic', 'Ambient', 'Electronic', 'Piano', 'Guitar', 'Hip hop', 'Techno', 'Rock', 'Happy', 'Chill', 'Epic', 'Jazz', 'Orchestral'];
@@ -27,7 +27,7 @@ const SOURCES = {
   music: [['', 'All sources'], ['ccmixter', 'ccMixter'], ['freesound', 'Freesound'], ['wikimedia_audio', 'Wikimedia Commons']],
   sfx: [['', 'All sources'], ['sfxkit', 'SFX Kit'], ['freesound', 'Freesound'], ['wikimedia_audio', 'Wikimedia Commons']],
 };
-const SOURCE_NAMES = { openverse: 'Openverse', ccmixter: 'ccMixter', sfxkit: 'SFX Kit', fluent: 'Fluent Emoji', pixabay: 'Pixabay' };
+const SOURCE_NAMES = { openverse: 'Openverse', ccmixter: 'ccMixter', sfxkit: 'SFX Kit', fluent: 'Fluent Emoji', pixabay: 'Pixabay', assetpolish: 'AssetPolish' };
 const reduced = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 const scrollMemory = new Map();
 
@@ -184,6 +184,7 @@ function AudioRow({ rec, panel }) {
   return <div class={`audio-row lib-row ${playing ? 'playing' : ''} ${sel ? 'sel' : ''} ${r.blocked ? 'blocked' : ''}`} role="option" aria-selected={sel} tabIndex={0} draggable={!r.blocked}
     aria-label={`${rec.title}${rec.creator ? ' by ' + rec.creator : ''}, ${rec.durationMs ? shortTime(rec.durationMs / 1000) : ''}, ${r.badge}`}
     onDragStart={e => dragRecord(e, rec)} onDblClick={() => !r.blocked && add()} onContextMenu={menu} onClick={e => { if (!e.target.closest('button')) togglePreview(rec); }}
+    onPointerEnter={() => warmPreview(rec)} onPointerLeave={() => warmPreview(null)} onFocus={() => warmPreview(rec, 400)}
     onKeyDown={e => {
       if (e.key === ' ') { e.preventDefault(); togglePreview(rec); } else if (e.key === 'Enter' || e.key === '+') { e.preventDefault(); r.blocked ? (selectedRecord.value = rec) : add(); }
       else if (e.key === 'Escape') stopPreview(); else if (e.key.toLowerCase() === 'f' && !e.ctrlKey) toggleFavorite(rec); else if (e.key === 'i') selectedRecord.value = rec;
@@ -191,10 +192,10 @@ function AudioRow({ rec, panel }) {
     <PlayButton active={playing} onClick={() => togglePreview(rec)} />
     <div class="grow lib-meta">
       <div class="ellipsis lib-title" title={rec.title}>{rec.title}</div>
-      <div class="lib-sub"><button class="lic-btn" tabIndex={-1} aria-label="License and source" onClick={() => (selectedRecord.value = rec)}><LicenseBadge rec={rec} /></button><small class="muted ellipsis">{[rec.durationMs ? shortTime(rec.durationMs / 1000) : null, rec.creator, rec.sourceName].filter(Boolean).join(' · ')}</small></div>
+      <div class="lib-sub"><button class="lic-btn" tabIndex={-1} aria-label="License and source" onClick={() => (selectedRecord.value = rec)}><LicenseBadge rec={rec} /></button><small class={`ellipsis ${busy ? 'lib-dl' : 'muted'}`}>{busy ? `Downloading${prog != null ? ' ' + Math.round(prog * 100) + '%' : '…'}` : [rec.durationMs ? shortTime(rec.durationMs / 1000) : null, rec.creator, rec.sourceName].filter(Boolean).join(' · ')}</small></div>
     </div>
     <button class={`icon-btn sm fav-btn ${rec.favorite ? 'on' : ''}`} tabIndex={-1} aria-label={rec.favorite ? 'Remove from favorites' : 'Save to favorites'} aria-pressed={rec.favorite} onClick={() => toggleFavorite(rec)}><Heart size={14} fill={rec.favorite ? 'currentColor' : 'none'} /></button>
-    {busy ? <span class="busy-ring" role="progressbar" aria-label="Adding" style={{ '--p': ((prog ?? 0.15) * 100) + '%' }}><LoaderCircle size={14} class="spin" /></span>
+    {busy ? <span class="busy-ring" role="progressbar" aria-label="Downloading" data-tip="Downloading — it is added to the timeline when it arrives" style={{ '--p': ((prog ?? 0.15) * 100) + '%' }}><LoaderCircle size={14} class="spin" /></span>
       : <button class="icon-btn sm add" tabIndex={-1} disabled={false} data-tip={r.blocked ? r.summary : rec.imported ? 'Add at playhead (already downloaded)' : 'Add at playhead'} aria-label="Add at playhead" onClick={() => (r.blocked ? (selectedRecord.value = rec) : add())}>{r.blocked ? <Info size={15} /> : rec.imported ? <Check size={15} /> : <Plus size={16} />}</button>}
   </div>;
 }
@@ -320,7 +321,7 @@ function Discover() {
       <Chips label="Illustrations & silhouettes" items={STICKER_IDEAS} onPick={q => search('stickers', { q }, { now: true })} />
     </>}
     {s.q.trim() && <div ref={gridRef}>{s.status === 'loading' ? <Skeleton grid rows={12} /> : s.status === 'empty' || s.status === 'error' ? <StateCard s={s} panel="stickers" onRetry={() => search('stickers', {}, { now: true })} /> : <><ResultCount s={s} panel="stickers" noun="sticker" /><StickerGrid items={s.results} /><MoreButton s={s} panel="stickers" /></>}</div>}
-    <p class="muted hint lib-intro">Animated emoji by Microsoft, plus free illustrations and silhouettes from Openverse{pixabay ? ' and Pixabay' : ''} — none need a credit. Only the ones you add are downloaded, then they work offline. Import your own GIF, APNG, WebP, SVG or Lottie files too.</p>
+    <p class="muted hint lib-intro">Animated emoji by Microsoft, plus free stickers, illustrations and silhouettes from AssetPolish, Openverse{pixabay ? ' and Pixabay' : ''} — none need a credit. Only the ones you add are downloaded, then they work offline. Import your own GIF, APNG, WebP, SVG or Lottie files too.</p>
   </>;
 }
 const GROUPS = [['Smileys & Emotion', '😀'], ['People & Body', '👋'], ['Animals & Nature', '🦊'], ['Food & Drink', '🍕'], ['Activities', '🎉'], ['Travel & Places', '🚀'], ['Objects', '💡'], ['Flags', '🏁']].map(([id, glyph]) => ({ id, name: id.replace(' & ', ' & '), glyph }));

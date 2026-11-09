@@ -103,7 +103,7 @@ test('Openverse adapter: search, rate limits, license re-check, bad downloads an
       res.writeHead(404); res.end();
     });
     await new Promise(r => srv.listen(0, '127.0.0.1', r)); base = `http://127.0.0.1:${srv.address().port}`;
-    s = await startServer({ dataDir: path.join(dir, 'data'), creative: { http: new SafeHttp({ allowLocal: true }), openverseBase: base + '/v1' } });
+    s = await startServer({ dataDir: path.join(dir, 'data'), creative: { http: new SafeHttp({ allowLocal: true }), openverseBase: base + '/v1', assetpolishBase: false } });
     const call = api(s.url);
     const r1 = await call('/api/creative/search?provider=openverse&kind=sfx&include=credit&q=whoosh');
     assert.equal(r1.items.length, 5, 'malformed, mature and duplicate results are dropped');
@@ -137,7 +137,7 @@ test('Openverse adapter: search, rate limits, license re-check, bad downloads an
     // Favorites and recents persist across restarts; the downloaded file keeps working offline.
     await call('/api/creative/favorite', { record: r2.items[0], on: true });
     await s.close(); srv.close(); srv = null;
-    s = await startServer({ dataDir: path.join(dir, 'data'), creative: { http: new SafeHttp({ allowLocal: true }), openverseBase: 'http://127.0.0.1:9/v1' } });
+    s = await startServer({ dataDir: path.join(dir, 'data'), creative: { http: new SafeHttp({ allowLocal: true }), openverseBase: 'http://127.0.0.1:9/v1', assetpolishBase: false } });
     const call2 = api(s.url); const lists = await call2('/api/creative/lists?kind=sfx');
     assert.equal(lists.favorites.length, 1); assert.ok(lists.recents.length >= 1);
     const media = await call2('/api/media'); const back = media.find(m => m.id === a.id); assert.ok(back && !back.missing, 'library asset available offline');

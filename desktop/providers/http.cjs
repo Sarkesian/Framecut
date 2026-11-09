@@ -71,8 +71,8 @@ class SafeHttp {
     finally { res.cleanup(); }
   }
   // Streams to `file` (via a .part file), hashing as it goes. Throws when maxBytes is exceeded.
-  async toFile(u, file, { accept, maxBytes = 200 * 1024 ** 2, signal, onProgress, timeout = 30000 } = {}) {
-    const res = await this.open(u, { accept, signal, timeout });
+  async toFile(u, file, { accept, headers, maxBytes = 200 * 1024 ** 2, signal, onProgress, timeout = 30000 } = {}) {
+    const res = await this.open(u, { accept, headers, signal, timeout });
     const declared = +res.headers.get('content-length') || 0;
     if (declared > maxBytes) { res.body?.cancel().catch(() => {}); res.cleanup(); throw Object.assign(Error('That file is too large to import.'), { code: 'size' }); }
     const part = file + '.part'; const hash = createHash('sha256'); let bytes = 0;

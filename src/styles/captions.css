@@ -52,3 +52,7 @@
 .insp-words { padding: 6px; border-radius: 8px; background: var(--bg-2); }
 .script-check { display: flex; flex-direction: column; gap: 6px; padding: 10px; margin: 6px 0; border-radius: 10px; border: 1px solid var(--accent-line); background: var(--accent-soft); font-size: 12px; }
 .script-check s { color: var(--text-3); }
+/* Caption settings in the details panel (Style / Animation / Timing tabs) */
+.cap-tune { padding: 4px 2px 12px; } .cap-tune .scope-bar { position: static; background: none; padding-top: 0; }
+.cap-tune .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; } .cap-tune .group-title:first-child { margin-top: 6px; }
+.cap-tune .cap-timing { margin-top: 0; } .cap-nudge { gap: 5px; margin: 2px 0 10px; } .cap-nudge .fchip:disabled { opacity: .35; pointer-events: none; }

@@ -150,7 +150,7 @@ test('Sticker search across Openverse images, Pixabay and Fluent: tiers, dedupe,
       res.writeHead(404); res.end();
     });
     await new Promise(r => srv.listen(0, '127.0.0.1', r)); base = `http://127.0.0.1:${srv.address().port}`;
-    s = await startServer({ dataDir: path.join(dir, 'data'), creative: { http: new SafeHttp({ allowLocal: true }), openverseBase: base + '/v1', pixabayBase: base + '/px/api/' } });
+    s = await startServer({ dataDir: path.join(dir, 'data'), creative: { http: new SafeHttp({ allowLocal: true }), openverseBase: base + '/v1', pixabayBase: base + '/px/api/', assetpolishBase: false } });
     const call = api(s.url);
     // Default: attribution-free only. Pixabay has no key yet, so only Openverse + Fluent answer.
     let r = await call('/api/creative/search?provider=all&kind=sticker&q=cat');
@@ -215,7 +215,7 @@ test('Free music & SFX sources: SFX Kit (pinned, fingerprint-checked) and ccMixt
       res.writeHead(404); res.end();
     });
     await new Promise(r => srv.listen(0, '127.0.0.1', r)); base = `http://127.0.0.1:${srv.address().port}`;
-    s = await startServer({ dataDir: path.join(dir, 'data'), creative: { http: new SafeHttp({ allowLocal: true }), openverseBase: base + '/v1', sfxkitBase: base + '/kit/', ccmixterBase: base + '/cc/api' } });
+    s = await startServer({ dataDir: path.join(dir, 'data'), creative: { http: new SafeHttp({ allowLocal: true }), openverseBase: base + '/v1', sfxkitBase: base + '/kit/', ccmixterBase: base + '/cc/api', assetpolishBase: false } });
     const call = api(s.url);
     // SFX Kit: offline index search, categories and CC0 without credit.
     assert.ok(sfxkitIndex.items.length >= 300 && /^[0-9a-f]{40}$/.test(sfxkitIndex.commit), 'index pinned to a commit');
@@ -246,6 +246,56 @@ test('Free music & SFX sources: SFX Kit (pinned, fingerprint-checked) and ccMixt
   } finally { await s?.close(); srv?.close(); await fs.rm(dir, { recursive: true, force: true }).catch(() => {}); }
 });
 
+test('AssetPolish: catalog searched locally, CC0 only, stills for animated items, fingerprint checked on import', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'fc-ap-')); let s, srv;
+  try {
+    const svg = name => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><title>${name}</title><circle cx="32" cy="32" r="28" fill="gold"/></svg>`;
+    const sha = t => require('node:crypto').createHash('sha256').update(t).digest('hex');
+    let base = '', catalogHits = 0;
+    const item = (id, name, o = {}) => ({ id, name, pack: 'party', packName: 'Party Pack', style: 'flat', subjects: ['Celebration'], tags: ['fun', 'party'], author: 'AssetPolish', license: 'CC0-1.0', url: `/assets/party/${id}.svg`, assetType: 'Sticker', sha256: sha(svg(name)), ...o });
+    const catalog = [
+      item('gold-star', 'Gold star'),
+      item('star-icon', 'Star outline', { assetType: 'Icon' }),
+      item('dancing-star', 'Dancing star', { animated: true, assetType: 'Animated sticker', staticUrl: '/assets/party/dancing-star-still.svg', tags: ['fun', 'animated', 'motion'] }),
+      item('by-star', 'Credit star', { license: 'CC-BY-4.0' }),
+      item('bad-star', 'Tampered star', { sha256: 'f'.repeat(64) }),
+      item('evil', 'Evil star', { url: 'https://example.com/x.svg' }),
+    ];
+    srv = http.createServer((req, res) => {
+      const u = new URL(req.url, base);
+      if (u.pathname === '/ap/catalog.json') { catalogHits++; res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(catalog)); }
+      const m = /^\/ap\/assets\/party\/([a-z-]+)\.svg$/.exec(u.pathname);
+      if (m) { const c = catalog.find(x => x.id === m[1].replace(/-still$/, '')); res.writeHead(200, { 'Content-Type': 'image/svg+xml' }); return res.end(svg(c ? c.name : 'x')); }
+      if (u.pathname === '/v1/images/') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ result_count: 0, page_count: 0, page: 1, results: [] })); }
+      res.writeHead(404); res.end();
+    });
+    await new Promise(r => srv.listen(0, '127.0.0.1', r)); base = `http://127.0.0.1:${srv.address().port}`;
+    s = await startServer({ dataDir: path.join(dir, 'data'), creative: { http: new SafeHttp({ allowLocal: true }), openverseBase: base + '/v1', assetpolishBase: base + '/ap' } });
+    const call = api(s.url);
+    // Local search: stickers before icons, non-CC0 and off-site entries never appear, animated ones are stills.
+    const r = await call('/api/creative/search?provider=assetpolish&kind=sticker&q=star');
+    assert.deepEqual(r.items.map(x => x.sourceId).slice(0, 2).sort(), ['dancing-star', 'gold-star']);
+    assert.ok(!r.items.some(x => ['by-star', 'evil'].includes(x.sourceId)), 'only CC0 items on the catalog host');
+    assert.equal(r.items.at(-1).sourceId, 'star-icon', 'plain icons rank last');
+    const gold = r.items.find(x => x.sourceId === 'gold-star');
+    assert.equal(gold.license, 'cc0'); assert.equal(gold.tier, 'free'); assert.equal(gold.sourceName, 'AssetPolish'); assert.equal(gold.licenseCheck.status, 'verified');
+    assert.equal(r.items.find(x => x.sourceId === 'dancing-star').animated, false);
+    assert.equal((await call('/api/creative/search?provider=assetpolish&kind=sticker&q=party%20gold')).items.length, 1, 'every word must match');
+    await call('/api/creative/search?provider=assetpolish&kind=sticker&q=dancing'); assert.equal(catalogHits, 1, 'the catalog is fetched once, not per search');
+    // It joins the combined sticker search.
+    const all = await call('/api/creative/search?provider=all&kind=sticker&q=star'); assert.ok(all.items.some(x => x.provider === 'assetpolish')); assert.ok(all.sources.some(x => x.provider === 'assetpolish'));
+    // Import: fingerprint verified, license record kept; a file that doesn't match its fingerprint is refused.
+    let j = await waitJob(call, (await call('/api/creative/import', { provider: 'assetpolish', id: 'gold-star', kind: 'sticker' })).job);
+    assert.equal(j.status, 'done', 'assetpolish import: ' + j.error); assert.equal(j.result.asset.source.license, 'cc0'); assert.equal(j.result.asset.source.licenseRecord.status, 'verified'); assert.equal(j.result.asset.source.licenseRecord.sha256, catalog[0].sha256);
+    j = await waitJob(call, (await call('/api/creative/import', { provider: 'assetpolish', id: 'bad-star', kind: 'sticker' })).job);
+    assert.equal(j.status, 'failed'); assert.match(j.error, /didn’t match the file its source published/);
+    // The still of an animated item has no published fingerprint and still imports.
+    j = await waitJob(call, (await call('/api/creative/import', { provider: 'assetpolish', id: 'dancing-star', kind: 'sticker' })).job);
+    assert.equal(j.status, 'done', 'still import: ' + j.error);
+    await assert.rejects(call('/api/creative/search?provider=nullrights&kind=music&q=x'), /permission/i);
+  } finally { await s?.close(); srv?.close(); await fs.rm(dir, { recursive: true, force: true }).catch(() => {}); }
+});
+
 test('Previews: at most two downloads per host at once, and a 429 pauses that host instead of hammering it', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'fc-pace-')); let s, srv;
   try {
@@ -262,7 +312,7 @@ test('Previews: at most two downloads per host at once, and a 429 pauses that ho
       res.writeHead(404); res.end();
     });
     await new Promise(r => srv.listen(0, '127.0.0.1', r)); base = `http://127.0.0.1:${srv.address().port}`;
-    s = await startServer({ dataDir: path.join(dir, 'data'), creative: { http: new SafeHttp({ allowLocal: true }), openverseBase: base + '/v1' } });
+    s = await startServer({ dataDir: path.join(dir, 'data'), creative: { http: new SafeHttp({ allowLocal: true }), openverseBase: base + '/v1', assetpolishBase: false } });
     const r = await api(s.url)('/api/creative/search?provider=openverse&kind=sticker&q=shape');
     const ids = r.items.map(x => x.sourceId);
     await Promise.all(ids.slice(0, 6).map(id => fetch(`${s.url}/api/creative/preview/openverse/${id}`).then(x => x.arrayBuffer())));

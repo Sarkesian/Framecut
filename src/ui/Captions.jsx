@@ -1,8 +1,10 @@
-// Captions panel: Generate → Transcript → Style → Animation, all on the shared caption engine.
-// One click generates good-looking captions; every change can target all captions, a track, a
-// caption or a single word, and inherited values stay editable at the higher levels.
+// Captions, all on the shared caption engine. The left panel is where captions start: Generate, the
+// Transcript and a gallery of ready-made Styles. Everything that fine-tunes them — text look, animation and
+// timing — is in the details panel on the right once a caption is selected (CaptionInspector), like every
+// other clip. Each change can target all captions, a track, a caption or a single word, and inherited
+// values stay editable at the higher levels.
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { Wand2, Captions as CaptionsIcon, Search, Replace, Scissors, Merge, Play, Repeat, RotateCcw, Copy, ClipboardPaste, Star, Save, Check, TriangleAlert, LoaderCircle, FileText, Download, Music2, ChevronDown, ChevronRight, Sparkles, Type, Layers, Trash2, X } from 'lucide-preact';
+import { Wand2, Captions as CaptionsIcon, Search, Replace, Scissors, Merge, Play, Repeat, RotateCcw, Copy, ClipboardPaste, Star, Save, Check, TriangleAlert, LoaderCircle, FileText, Download, Music2, ChevronDown, ChevronRight, Sparkles, Type, Layers, Trash2, X, SlidersHorizontal } from 'lucide-preact';
 import { project, selection, time, player, prefs, savePrefs, toast, commit, libraryTab } from '../lib/state.js';
 import { Segmented, Select, Slider, Toggle, Color, Progress, confirm, prompt, openMenu } from './kit.jsx';
 import { scriptSuggestions, applySuggestions } from '../lib/captions.js';
@@ -13,7 +15,7 @@ import { renderCaptionBase, renderCaptionWord, ensureFont } from '../engine/capt
 import { insertCaptions } from '../lib/edit.js';
 import { parseSubtitles } from './AssetPanel.jsx';
 import { shortTime } from '../lib/format.js';
-import { clipEnd } from '../../shared/model.mjs';
+import { clipEnd, projectDuration } from '../../shared/model.mjs';
 
 const LANGS = [['', 'Detect automatically'], ['English', 'English'], ['Spanish', 'Spanish'], ['French', 'French'], ['German', 'German'], ['Italian', 'Italian'], ['Portuguese', 'Portuguese'], ['Dutch', 'Dutch'], ['Japanese', 'Japanese'], ['Korean', 'Korean'], ['Chinese', 'Chinese'], ['Russian', 'Russian'], ['Hindi', 'Hindi'], ['Arabic', 'Arabic'], ['Turkish', 'Turkish'], ['Polish', 'Polish']];
 const FONTS = ['Inter', 'Montserrat', 'Poppins', 'Anton', 'Playfair Display', 'Segoe UI', 'Arial Black', 'Impact', 'Georgia', 'Consolas'];
@@ -26,8 +28,8 @@ export function CaptionsPanel() {
   const p = project.value, caps = captionClips(p);
   return <div class="tab-body cap-panel">
     <div class="asset-head"><h2>Captions</h2><div class="grow" />{caps.length > 0 && <span class="chip">{caps.length} captions</span>}</div>
-    <div class="lib-tabs"><Segmented label="Caption tools" value={tab} options={[['generate', 'Generate'], ['transcript', 'Transcript'], ['style', 'Style'], ['animation', 'Animation']]} onChange={setTab} /></div>
-    {tab === 'generate' ? <Generate onDone={() => setTab('style')} /> : !caps.length ? <NoCaptions go={() => setTab('generate')} /> : tab === 'transcript' ? <Transcript /> : tab === 'style' ? <StylePanel /> : <AnimationPanel />}
+    <div class="lib-tabs"><Segmented label="Caption tools" value={tab} options={[['generate', 'Generate'], ['transcript', 'Transcript'], ['style', 'Styles']]} onChange={setTab} /></div>
+    {tab === 'generate' ? <Generate onDone={() => setTab('style')} /> : !caps.length ? <NoCaptions go={() => setTab('generate')} /> : tab === 'transcript' ? <Transcript /> : <StylePanel />}
   </div>;
 }
 const NoCaptions = ({ go }) => <div class="lib-state"><CaptionsIcon size={22} /><b>No captions yet</b><span>Generate them from your video’s speech, or import an .srt / .vtt file.</span><button class="btn sm primary" onClick={go}><Wand2 size={13} />Generate captions</button></div>;
@@ -43,6 +45,12 @@ function Generate({ onDone }) {
   const sources = [['auto', p.tracks.some(t => t.voice) ? 'Voice tracks (music left out)' : 'All clips with sound'], ['all', 'Everything you can hear'], ['selected', 'Selected clips only'], ...audioTracks.map(t => ['track:' + t.id, 'Track: ' + t.name])];
   const n = captionSources(p, source).length, gs = genState.value;
   const go = async () => {
+    // The built-in engine fetches its speech model the first time. Say so before a large download starts.
+    if (engine && !engine.ready) {
+      const { whisperStatus } = await import('../lib/whisper.js');
+      const small = (await whisperStatus()).find(m => m.key === 'small');
+      if (!small?.cached && !(await confirm({ title: 'One-time download', text: 'The first time you make captions, FrameCut downloads its speech model (a few hundred MB). It is kept inside the app’s own folder, so captions work offline afterwards. Your audio never leaves this computer.', ok: 'Download and continue' }))) return;
+    }
     savePrefs({ captionLanguage: lang, captionQuality: quality, captionVocabulary: vocab }).catch(() => {});
     const ctl = new AbortController(); abort.current = ctl;
     try { const r = await generateCaptions({ source, language: lang, quality, lyrics, vocabulary: vocab, signal: ctl.signal }); if (r?.words?.length) onDone(); }
@@ -185,17 +193,26 @@ function ScopeBar() {
 }
 const effNow = () => { const p = project.value, tgt = scopeTarget(); const c = tgt.clipIds ? p.clips.find(x => x.id === tgt.clipIds[0]) : tgt.clipId ? p.clips.find(x => x.id === tgt.clipId) : captionClips(p, tgt.trackId)[0] || null; const e = effOf(p, tgt.level === 'project' ? { trackId: null } : c); if (tgt.level === 'word' && c?.words?.[tgt.i]?.style) e.style = { ...e.style, ...c.words[tgt.i].style }; return e; };
 
-// ---------------------------------------------------------------- Style
+// ---------------------------------------------------------------- Styles (left): pick a look to start from
 function StylePanel() {
-  const p = project.value, e = effNow(), s = e.style, tgt = scopeTarget(), word = tgt.level === 'word';
+  const p = project.value, tgt = scopeTarget();
   const fav = prefs.value.captionFavorites || [], def = prefs.value.captionDefault || 'word-pop';
   const presets = allPresets().sort((a, b) => fav.includes(b.id) - fav.includes(a.id));
-  const set = (k, label) => v => setCap('style', k, v, { label });
+  // Select the caption under (or after) the playhead, which opens its settings on the right.
+  const tune = () => { const caps = captionClips(p), c = caps.find(x => clipEnd(x) > time.value) || caps.at(-1); if (!c) return; selection.value = [c.id]; if (time.value < c.start || time.value >= clipEnd(c)) player.current?.seek(c.start + Math.min(0.4, c.duration / 2)); };
   return <>
     <ScopeBar />
-    {!word && <><h4 class="group-title">Styles</h4>
-      <div class="preset-gallery">{presets.map(pr => <PresetCard key={pr.id} pr={pr} on={p.captions?.preset === pr.id && tgt.level === 'project'} fav={fav.includes(pr.id)} isDefault={def === pr.id} />)}</div>
-      <div class="row wrap" style={{ margin: '8px 0' }}><button class="btn sm" onClick={async () => { const n = await prompt({ title: 'Save this caption style', label: 'Name', value: 'My style' }); if (n) saveAsPreset(n); }}><Save size={12} />Save as style</button><button class="btn sm" onClick={copyStyle}><Copy size={12} />Copy</button><button class="btn sm" onClick={pasteStyle}><ClipboardPaste size={12} />Paste</button></div></>}
+    <div class="preset-gallery">{presets.map(pr => <PresetCard key={pr.id} pr={pr} on={p.captions?.preset === pr.id && tgt.level === 'project'} fav={fav.includes(pr.id)} isDefault={def === pr.id} />)}</div>
+    <div class="row wrap" style={{ margin: '8px 0' }}><button class="btn sm" onClick={async () => { const n = await prompt({ title: 'Save this caption style', label: 'Name', value: 'My style' }); if (n) saveAsPreset(n); }}><Save size={12} />Save as style</button><button class="btn sm" onClick={copyStyle}><Copy size={12} />Copy</button><button class="btn sm" onClick={pasteStyle}><ClipboardPaste size={12} />Paste</button></div>
+    <button class="btn sm block" onClick={tune}><SlidersHorizontal size={13} />Fine-tune font, colours, animation & timing</button>
+    <p class="muted hint" style={{ marginTop: 8 }}>Fine-tuning is on the right whenever a caption is selected.</p>
+  </>;
+}
+// ---------------------------------------------------------------- Style (right): text, colours, box, position, grouping
+function StyleControls() {
+  const e = effNow(), s = e.style, word = scopeTarget().level === 'word';
+  const set = (k, label) => v => setCap('style', k, v, { label });
+  return <>
     <h4 class="group-title">{word ? 'This word' : 'Text'}</h4>
     {!word && <><div class="field-row"><div class="field"><label>Font</label><Select value={s.font} options={FONTS} onChange={set('font', 'Caption font')} /></div><div class="field"><label>Weight</label><Select value={String(s.weight)} options={[['400', 'Regular'], ['600', 'Semibold'], ['700', 'Bold'], ['800', 'Extra bold'], ['900', 'Black']]} onChange={v => setCap('style', 'weight', +v, { label: 'Caption weight' })} /></div></div>
       <Slider label="Size" value={s.size} min={0.025} max={0.14} step={0.001} def={0.058} fmt={v => Math.round(v * 1000) / 10 + '%'} onChange={set('size', 'Caption size')} />
@@ -263,12 +280,11 @@ function PresetCard({ pr, on, fav, isDefault }) {
 }
 
 // ---------------------------------------------------------------- Animation
-function AnimationPanel() {
+function AnimationControls() {
   const e = effNow(), a = e.anim, word = scopeTarget().level === 'word';
-  if (word) return <><ScopeBar /><p class="muted hint">Animations apply to whole captions. Choose Caption, Track or All captions above.</p></>;
+  if (word) return <p class="muted hint">Animations apply to whole captions. Choose Caption, Track or All above.</p>;
   const emph = a.emph || {}, level = Object.entries(POP_INTENSITY).find(([, v]) => Math.abs(v.peak - (emph.peak ?? 0)) < 0.005)?.[0];
   return <>
-    <ScopeBar />
     <AnimBlock title="Entrance" defs={ENTRANCES} spec={a.in} section="anim.in" />
     <h4 class="group-title">Word emphasis</h4>
     <Select value={emph.type || 'none'} options={EMPHASES.map(x => [x.id, x.name])} onChange={v => setCap('anim.emph', 'type', v, { label: 'Word emphasis', coalesce: false })} />
@@ -304,23 +320,45 @@ function Params({ def, spec = {}, section, style }) {
   return <div class="anim-params">{def.params.map(k => P[k]?.())}</div>;
 }
 
-// Inspector for a selected caption: only what matters for captions.
-export function CaptionInspector({ c }) {
+// Timing (right): when this caption shows and for how long, and one slider that moves every caption together.
+function TimingControls({ c }) {
+  const p = project.value, caps = captionClips(p, c.trackId), i = caps.findIndex(x => x.id === c.id);
+  const prevEnd = i > 0 ? clipEnd(caps[i - 1]) : 0, nextStart = i >= 0 && caps[i + 1] ? caps[i + 1].start : Math.max(projectDuration(p), clipEnd(c)) + 5;
+  const lo = +prevEnd.toFixed(3), hi = +(nextStart - c.duration).toFixed(3), room = +(nextStart - c.start).toFixed(3);
+  const put = (label, key, fn) => commit(label, d => { const x = d.clips.find(k => k.id === c.id); if (!x) return false; fn(x); }, { key: key + ':' + c.id });
+  const start = v => put('Caption start', 'capstart', x => { x.start = +Math.min(Math.max(hi, lo), Math.max(lo, v)).toFixed(3); });
+  const sec = v => v.toFixed(2) + ' s';
+  return <>
+    <h4 class="group-title">This caption</h4>
+    {hi - lo > 0.02 ? <Slider label="Appears at" min={lo} max={hi} step={0.01} value={c.start} fmt={sec} onChange={start} />
+      : <small class="muted">This caption has no room to move — it touches the captions before and after it.</small>}
+    <div class="row wrap cap-nudge">{[[-0.25, '−0.25 s'], [-0.05, '−0.05 s'], [0.05, '+0.05 s'], [0.25, '+0.25 s']].map(([d, label]) => <button key={d} class="fchip" disabled={d < 0 ? c.start <= lo + 1e-3 : c.start >= hi - 1e-3} onClick={() => start(c.start + d)}>{label}</button>)}</div>
+    <Slider label="Stays on screen for" min={0.1} max={Math.max(0.2, Math.min(15, room))} step={0.01} value={c.duration} fmt={sec} onChange={v => put('Caption length', 'caplen', x => { x.duration = +Math.max(0.1, Math.min(room, v)).toFixed(3); })} />
+    <small class="muted">Moves the whole caption; the words keep their timing inside it. Pop-in speed and delay are on the Animation tab.</small>
+    <h4 class="group-title">All captions</h4>
+    <CaptionTiming />
+  </>;
+}
+
+// Details panel for a selected caption. Caption: its words. Style / Animation / Timing: every caption setting,
+// applied to whatever the scope bar says (all captions, this track, this caption or one word).
+export function CaptionInspector({ c, tab = 'Caption' }) {
   const p = project.value, e = effOf(p, c);
+  if (tab === 'Timing') return <div class="cap-tune"><TimingControls c={c} /></div>;
+  if (tab !== 'Caption') return <div class="cap-tune"><ScopeBar />{tab === 'Style' ? <StyleControls /> : <AnimationControls />}</div>;
   const [text, setText] = useState(c.text); useEffect(() => setText(c.text), [c.id, c.text]);
   const flagged = (c.words || []).filter(w => w.flag).length;
-  const openPanel = scope => { capScope.value = scope; libraryTab.value = 'captions'; setTimeout(() => window.__fcOpenCaptions?.(), 0); };
+  const openStyles = () => { libraryTab.value = 'captions'; setTimeout(() => window.__fcOpenCaptions?.(), 0); };
   return <div class="cap-insp">
     <div class="field"><label>Text</label><textarea class="input" rows={3} value={text} onInput={ev => { setText(ev.target.value); commit('Edit caption', d => { const x = d.clips.find(k => k.id === c.id); x.text = ev.target.value; x.name = ev.target.value.replace(/\n/g, ' ').slice(0, 40); }, { key: 'captext:' + c.id }); }} /><small class="muted">Changes show in the video as you type. Word timing is kept; new words are timed between their neighbours.</small></div>
     {(c.words || []).length > 0 && <div class="cap-words insp-words">{c.words.map((w, i) => <span key={i} class={`cap-word ${w.flag ? 'flag' : ''} ${w.timing === 'estimated' ? 'edited' : ''}`} data-tip={`${w.start.toFixed(2)}–${w.end.toFixed(2)} s${w.flag ? ' · check this word' : ''}${w.timing === 'estimated' ? ' · timing estimated' : ''}`} onClick={() => seekWord(c, w)}>{w.text}</span>)}</div>}
     {flagged > 0 && <div class="notice warn"><TriangleAlert size={14} /><div>{flagged} word{flagged > 1 ? 's' : ''} may be wrong (underlined). Click to hear them.</div></div>}
     <div class="row wrap">
-      <button class="btn sm" onClick={() => openPanel('caption')}><Sparkles size={12} />Style this caption</button>
-      <button class="btn sm" onClick={() => openPanel('project')}><Layers size={12} />Style all captions</button>
+      <button class="btn sm" data-tip="Ready-made caption looks, on the left" onClick={openStyles}><Sparkles size={12} />Browse styles</button>
       {c.words?.some(w => w.timing === 'estimated' || w.edited) && <button class="btn sm" onClick={() => import('../lib/captions.js').then(m => m.realign(c.id))}><RotateCcw size={12} />Re-align timing</button>}
       <button class="btn sm" onClick={() => mergeWithNext(c.id)}><Merge size={12} />Merge with next</button>
     </div>
-    <small class="muted">Style: {allPresets().find(x => x.id === p.captions?.preset)?.name || 'Custom'}{c.capStyle ? ' · this caption has its own changes' : ''} · {e.style.font} {Math.round(e.style.size * 1000) / 10}%</small>
+    <small class="muted">Font, colours, animation and timing are on the tabs above. Style: {allPresets().find(x => x.id === p.captions?.preset)?.name || 'Custom'}{c.capStyle ? ' · this caption has its own changes' : ''} · {e.style.font} {Math.round(e.style.size * 1000) / 10}%</small>
   </div>;
 }
 

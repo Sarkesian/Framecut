@@ -21,7 +21,7 @@ export const searches = { music: signal(blank()), sfx: signal(blank()), fluent: 
 // them. The Animated tab browses Fluent Emoji only. Picking a source in the filter narrows to it.
 const PROVIDER = { music: 'all', sfx: 'all', fluent: 'fluent', stickers: 'all' };
 const KIND = { music: 'music', sfx: 'sfx', fluent: 'sticker', stickers: 'sticker' };
-const OWN_SOURCES = ['ccmixter', 'sfxkit', 'pixabay', 'openverse']; // source filter values that are whole providers
+const OWN_SOURCES = ['ccmixter', 'sfxkit', 'pixabay', 'openverse', 'assetpolish']; // source filter values that are whole providers
 // Category browsing (no search words) is answered by the source that owns the categories.
 const CATEGORY_PROVIDER = { sfx: 'sfxkit', fluent: 'fluent' };
 
@@ -104,6 +104,27 @@ const tick = () => { cancelAnimationFrame(raf); if (!audioEl || audioEl.paused |
 const patch = x => { if (preview.value.key) preview.value = { ...preview.value, ...x }; };
 export function stopPreview() { cancelAnimationFrame(raf); if (audioEl) { audioEl.pause(); audioEl.removeAttribute('src'); audioEl.load(); } preview.value = { key: null, state: 'idle', d: 0, title: '' }; previewTime.value = 0; }
 export function pausePreview() { if (audioEl && preview.value.key && !audioEl.paused) audioEl.pause(); }
+const previewUrl = rec => `/api/creative/preview/${rec.provider}/${encodeURIComponent(rec.sourceId)}`;
+// The player gave up on a preview. Formats it cannot decode (or that the source labels wrongly) are tried once
+// more as MP3, converted by FrameCut; if that fails too, the message says what actually went wrong.
+async function previewFailed() {
+  const key = preview.value.key, src = audioEl.getAttribute('src') || ''; if (!key) return;
+  if (src.startsWith('/api/creative/preview/') && !src.includes('as=mp3')) {
+    patch({ state: 'loading' }); audioEl.src = src + (src.includes('?') ? '&' : '?') + 'as=mp3';
+    audioEl.play().catch(() => {}); return;
+  }
+  let why = 'The file may be unavailable right now.';
+  if (src.startsWith('/api/creative/preview/')) try { const ctl = new AbortController(), r = await fetch(src.replace(/[?&]as=mp3/, ''), { signal: ctl.signal }); if (!r.ok) { const d = await r.json().catch(() => null); throw Object.assign(Error(d?.error || `The source answered ${r.status}.`), { code: d?.code, retryAfter: d?.retryAfter }); } ctl.abort(); why = 'It is in a format FrameCut cannot play. You can still add it to the timeline.'; } catch (e) { why = e.code === 'offline' ? 'You appear to be offline.' : e.code === 'gone' ? 'It is no longer available from its source.' : e.code === 'quota' ? `The source is busy — try again in ${e.retryAfter || 60} seconds.` : e.message; }
+  if (preview.value.key !== key) return;
+  toast(`“${preview.value.title || 'This preview'}” could not be played. ${why}`, 'warn', { timeout: 8000 }); stopPreview();
+}
+// Pointing at a result starts fetching its preview, so the click that follows plays almost at once.
+let warmTimer, warmed = new Set();
+export function warmPreview(rec, delay = 160) {
+  clearTimeout(warmTimer);
+  if (!rec || rec.url || rec.imported || !rec.provider || warmed.has(rec.key) || preview.value.key === rec.key) return;
+  warmTimer = setTimeout(() => { if (warmed.size > 400) warmed = new Set(); warmed.add(rec.key); api('/api/creative/warm-preview', { provider: rec.provider, id: rec.sourceId }).catch(() => {}); }, delay);
+}
 // rec: a library record, or { key, url, title, durationMs } for a file that is already local.
 export async function togglePreview(rec) {
   if (preview.value.key === rec.key && audioEl) {
@@ -120,7 +141,7 @@ export async function togglePreview(rec) {
     audioEl.addEventListener('waiting', () => patch({ state: 'loading' }));
     audioEl.addEventListener('seeked', () => { previewTime.value = audioEl.currentTime; });
     audioEl.addEventListener('ended', stopPreview);
-    audioEl.addEventListener('error', () => { if (preview.value.key) { toast('This preview could not be played. The file may be unavailable right now.', 'warn'); stopPreview(); } });
+    audioEl.addEventListener('error', previewFailed);
   }
   player.current?.pause();
   const key = rec.key;
@@ -129,8 +150,9 @@ export async function togglePreview(rec) {
   if (audioEl.setSinkId) await audioEl.setSinkId(sink).catch(() => {});
   if (preview.value.key !== key) return; // another item was clicked while switching outputs
   audioEl.volume = Math.min(1, Math.max(0, prefs.value.libraryPreviewVolume ?? 0.8));
-  audioEl.src = rec.url || (rec.imported && asset(rec.imported) ? asset(rec.imported).url : `/api/creative/preview/${rec.provider}/${encodeURIComponent(rec.sourceId)}`);
-  audioEl.play().catch(e => { if (e.name !== 'AbortError') { toast('Preview failed to start: ' + e.message, 'warn'); stopPreview(); } });
+  audioEl.src = rec.url || (rec.imported && asset(rec.imported) ? asset(rec.imported).url : previewUrl(rec));
+  // A file the player cannot load is reported through its 'error' event (previewFailed), which retries as MP3.
+  audioEl.play().catch(e => { if (e.name !== 'AbortError' && e.name !== 'NotSupportedError') { toast('Preview failed to start: ' + e.message, 'warn'); stopPreview(); } });
 }
 // Starting the timeline pauses a preview, so two things never play over each other.
 effect(() => { if (playing.value) pausePreview(); });
@@ -145,6 +167,8 @@ export async function obtain(rec) {
   if (r.blocked) { toast(r.summary + (r.badge === 'Non-commercial' ? ' Switch the project to personal use if this is a non-commercial video.' : ''), 'warn', { timeout: 9000 }); return null; }
   if (busyKeys.value.has(rec.key)) return null;
   setBusy(rec.key, null);
+  // Adding from the library downloads the file first; say so, since a long track can take a moment.
+  toast(`Downloading “${rec.title}”… it is added as soon as it arrives.`, 'info', { timeout: 3500 });
   try {
     const res = await api('/api/creative/import', { provider: rec.provider, id: rec.sourceId, kind: rec.kind, usage: usageMode() });
     const out = res.asset || (await waitJob(res.job, p => setBusy(rec.key, p))).asset;

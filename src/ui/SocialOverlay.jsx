@@ -6,8 +6,7 @@
 // the width and sits between the status bar and the bar under the player, so the bottom navigation is NOT
 // on top of the video; what is: the top tabs, the action column on the right (ending in the sound disc at
 // the very bottom) and the username + caption bottom-left. Screenshot pixels map onto TikTok's 1080×1920
-// frame as x × 1.563 and (y − 70) × 1.563. The dashed box is the area those elements leave clear, with room
-// for a second caption line. Exact details vary a little by phone and app version.
+// frame as x × 1.563 and (y − 70) × 1.563. Exact details vary a little by phone and app version.
 import { Smartphone } from 'lucide-preact';
 import { ui, setUi } from '../lib/uiprefs.js';
 import { openMenu } from './kit.jsx';
@@ -31,7 +30,6 @@ export const SocialButton = () => {
 
 const W = 1080, H = 1920, RED = '#FE2C55';
 const shadow = { filter: 'url(#tt-shadow)' };
-const SAFE = { l: 40, r: 170, t: 135, b: 230 };
 
 // Icons in a 100×100 box, drawn white.
 const HEART = 'M50 90C22 68 5 53 5 33 5 18 16 7 30 7c9 0 16 5 20 12 4-7 11-12 20-12 14 0 25 11 25 26 0 20-17 35-45 57z';
@@ -64,10 +62,6 @@ export function SocialOverlay({ cw, ch }) {
       {/* Shading the app adds behind its text */}
       <rect x="0" y="0" width={W} height="200" fill="url(#tt-top)" />
       <rect x="0" y="1620" width={W} height="300" fill="url(#tt-bottom)" />
-
-      {/* Safe zone: keep titles and important content inside */}
-      <rect x={SAFE.l} y={SAFE.t} width={W - SAFE.l - SAFE.r} height={H - SAFE.t - SAFE.b} rx="10" fill="none" stroke="rgba(255,255,255,.55)" stroke-width="3" stroke-dasharray="14 10" />
-      <text x={SAFE.l + 14} y={SAFE.t + 34} font-size="24" font-weight="600" fill="rgba(255,255,255,.7)">Safe zone</text>
 
       {/* Top bar: LIVE · (a tab scrolled half out of view) · Local · Following · Shop · For You · search */}
       <g style={shadow} fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">

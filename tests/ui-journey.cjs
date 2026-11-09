@@ -51,9 +51,8 @@ const step = n => console.log('· ' + n);
     await page.locator('.insp-text textarea').fill('Hello FrameCut');
     await page.locator('.insp-text textarea').blur();
     step('transition between main clips');
-    await page.locator('.rail-btn', { hasText: 'Transitions' }).click();
     await page.evaluate(() => { window.__fc.state.selection.value = []; window.__fc.state.player.current.seek(6); });
-    await page.locator('.tr-tile', { hasText: 'Dissolve' }).click();
+    await page.keyboard.press('r'); // add a transition at the cut nearest the playhead
     const tr = await page.evaluate(() => window.__fc.state.project.value.clips.filter(c => c.transition).length); assert.ok(tr >= 1, 'transition applied');
     step('transition panel: selected on the timeline, edited in the details panel');
     await page.locator('.tr-inspector').waitFor(); assert.ok(await page.locator('.tr-block.sel').count(), 'the new transition is selected on the timeline');

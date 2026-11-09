@@ -31,6 +31,12 @@ export const PROVIDERS = {
     note: 'Community music with per-track Creative Commons licenses. Attribution-free mode shows only tracks their creators released under CC0; each license is re-read from ccMixter before adding.',
     preview: true, storage: 'license', export: 'license',
   },
+  assetpolish: {
+    id: 'assetpolish', name: 'AssetPolish', kinds: ['sticker'], enabled: true,
+    home: 'https://www.assetpolish.com', terms: 'https://www.assetpolish.com/licenses/',
+    note: 'About 3,900 vector stickers, illustrations and icons that AssetPolish publishes under CC0, so they need no credit. FrameCut reads its public catalog once a day, and each file you add is checked against the fingerprint the catalog publishes. Animated items are offered as stills for now.',
+    preview: true, storage: true, export: true, license: { id: 'cc0', version: '1.0', url: 'https://creativecommons.org/publicdomain/zero/1.0/', holder: null },
+  },
   pixabay: {
     id: 'pixabay', name: 'Pixabay', kinds: ['sticker'], enabled: true, needsKey: true, optional: true,
     home: 'https://pixabay.com', terms: 'https://pixabay.com/api/docs/',
@@ -53,6 +59,10 @@ export const PROVIDERS = {
   lottiefiles: { id: 'lottiefiles', name: 'LottieFiles', kinds: ['sticker'], enabled: false, reason: 'Its license forbids collecting its files into another service, and API access terms are not public.' },
   uppbeat: { id: 'uppbeat', name: 'Uppbeat', kinds: ['music'], enabled: false, reason: 'No open API (waitlist only), and free tracks need a per-video credit code tied to the creator’s own account.' },
   'pixabay-audio': { id: 'pixabay-audio', name: 'Pixabay music & sound effects', kinds: ['music', 'sfx'], enabled: false, reason: 'Pixabay’s API only serves images and videos; its audio cannot be searched or downloaded by apps.' },
+  nullrights: { id: 'nullrights', name: 'nullrights', kinds: ['music'], enabled: false, reason: 'A large CC0 music catalog with a working search, but it publishes no terms for apps and asks automated clients to stay off its search and download addresses. Needs the operator’s permission first.' },
+  opengameart: { id: 'opengameart', name: 'OpenGameArt', kinds: ['music', 'sfx', 'sticker'], enabled: false, reason: 'No API or search feed, so every search would mean scraping a volunteer-run site that asks for ten seconds between requests. Suitable for hand-picked CC0 items only.' },
+  cchound: { id: 'cchound', name: 'CCHound', kinds: ['music'], enabled: false, reason: 'An index only: it has no API and hosts no files, and most of what it lists needs a credit. Its CC0 sources are better reached directly.' },
+  kenney: { id: 'kenney', name: 'Kenney', kinds: ['sfx', 'sticker'], enabled: false, reason: 'CC0 packs with no per-file catalog, and the site asks automated clients not to fetch its downloads. Suitable as a hand-picked bundled starter pack instead.' },
   giphy: { id: 'giphy', name: 'GIPHY', kinds: ['sticker'], enabled: false, reason: 'API rules forbid caching media, so stickers could not be saved in projects or exported.' },
   tenor: { id: 'tenor', name: 'Tenor', kinds: ['sticker'], enabled: false, reason: 'Tenor stopped accepting new API clients in January 2026.' },
 };

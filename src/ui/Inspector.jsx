@@ -40,13 +40,13 @@ export function Inspector() {
   // Audio controls only for a video that has its own sound: none when the file is silent, or when the sound
   // was separated into its own clip (edit it there).
   const silent = c.kind === 'video' && (!asset(c.mediaId)?.audio || c.detachedAudio);
-  const tabs = isCaption ? ['Caption', 'Basic'] : (TABS[c.kind] || ['Basic']).filter(t => !(silent && t === 'Audio')); const active = tabs.includes(tab[c.kind]) ? tab[c.kind] : tabs[0];
+  const tabs = isCaption ? ['Caption', 'Style', 'Animation', 'Timing', 'Basic'] : (TABS[c.kind] || ['Basic']).filter(t => !(silent && t === 'Audio')); const active = tabs.includes(tab[c.kind]) ? tab[c.kind] : tabs[0];
   const [label, Icon] = KIND[c.kind] || ['Clip', Film];
   return <div class="inspector">
     <div class="insp-head"><span class={`kind-dot k-${c.kind}`}><Icon size={13} /></span><div class="grow ellipsis"><b class="ellipsis">{c.caption ? 'Caption' : c.name || label}</b><small class="muted">{label} · {shortTime(c.duration)}{n > 1 ? ` · ${n} selected` : ''}</small></div></div>
     <div class="insp-tabs" role="tablist">{tabs.map(t => <button key={t} role="tab" aria-selected={active === t} class={active === t ? 'on' : ''} onClick={() => setTab({ ...tab, [c.kind]: t })}>{t}</button>)}</div>
     <div class="insp-scroll">{
-      active === 'Caption' ? <CaptionInspector c={c} /> : active === 'Basic' ? <BasicPanel c={c} /> : active === 'Color' ? <ColorPanel c={c} /> : active === 'Effects' ? <EffectsPanel c={c} /> : active === 'Animation' ? <AnimPanel c={c} />
+      isCaption && active !== 'Basic' ? <CaptionInspector c={c} tab={active} /> : active === 'Basic' ? <BasicPanel c={c} /> : active === 'Color' ? <ColorPanel c={c} /> : active === 'Effects' ? <EffectsPanel c={c} /> : active === 'Animation' ? <AnimPanel c={c} />
         : active === 'Speed' ? <SpeedPanel c={c} /> : active === 'Audio' ? <AudioPanel c={c} /> : active === 'Text' ? <TextPanel c={c} /> : null}<SourceSection c={c} /></div>
   </div>;
 }

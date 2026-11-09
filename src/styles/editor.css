@@ -73,7 +73,7 @@
 .tr-pick { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px 5px; margin-bottom: 8px; }
 .tr-pick-tile { display: flex; flex-direction: column; gap: 3px; padding: 0; border: 0; background: none; color: var(--text-2); font-size: 10.5px; cursor: pointer; text-align: center; min-width: 0; }
 .tr-pick-tile .tr-demo { width: 100%; aspect-ratio: 5/3; border-radius: 8px; background: var(--bg-3); box-shadow: 0 0 0 1px var(--line-2); transition: box-shadow .12s; }
-.tr-pick-tile .tr-demo { box-shadow: 0 0 0 2px var(--accent-line); } .tr-pick-tile.on .tr-demo { box-shadow: 0 0 0 2px var(--accent); } .tr-pick-tile.on span { color: var(--accent); font-weight: 600; }
+.tr-pick-tile:hover .tr-demo { box-shadow: 0 0 0 2px var(--accent-line); } .tr-pick-tile.on .tr-demo { box-shadow: 0 0 0 2px var(--accent); } .tr-pick-tile.on span { color: var(--accent); font-weight: 600; }
 .tr-lengths { margin: -2px 0 8px; } .tr-actions { display: flex; align-items: center; gap: 6px; padding: 12px 14px 16px; flex-wrap: wrap; }
 /* Transition demos: play on hover in the library and in the panel; the selected type keeps playing. */
 .tr-pick-tile .tr-demo .b, .tr-pick-tile.on .tr-demo .b, .tile:hover .tr-whip-left .b, .tr-pick-tile .tr-whip-left .b, .tr-pick-tile.on .tr-whip-left .b { animation-duration: 1.4s; }

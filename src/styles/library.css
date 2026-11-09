@@ -23,7 +23,7 @@
 .lib-row.sel { box-shadow: inset 0 0 0 1px var(--accent-line); }
 .lib-row.blocked .lib-title { color: var(--text-2); }
 .lib-meta { min-width: 0; display: flex; flex-direction: column; gap: 1px; } .lib-title { font-weight: 550; color: var(--text); }
-.lib-meta small { font-size: 11.5px; }
+.lib-meta small { font-size: 11.5px; } .lib-meta small.lib-dl { color: var(--accent); font-weight: 600; }
 .lib-play { --p: 0%; flex: none; width: 30px; height: 30px; padding: 0; border-radius: 50%; border: 0; display: grid; place-items: center; cursor: pointer; color: var(--text); background: conic-gradient(var(--accent) var(--p), var(--bg-4) 0); position: relative; transition: color .12s; }
 .lib-play::before { content: ''; position: absolute; inset: 2px; border-radius: 50%; background: var(--bg-3); transition: background .12s; }
 .lib-play svg { position: relative; } .lib-play .play-glyph { margin-left: 2px; } .lib-play.on::before { background: var(--bg-2); } .lib-play.on { color: var(--accent); }

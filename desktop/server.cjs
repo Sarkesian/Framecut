@@ -113,6 +113,7 @@ async function startServer({ dataDir = path.join(__dirname, '..', '.workspace'),
   app.get('/api/creative/search', wrap(async (req, res) => res.json(await creative.search(String(req.query.provider || ''), { ...req.query }))));
   app.get('/api/creative/lists', (req, res) => res.json(creative.lists(String(req.query.kind || ''))));
   app.post('/api/creative/favorite', wrap(async (req, res) => { const r = req.body.record || {}; if (!creative.providers[r.provider] || !r.sourceId) throw Error('Unknown item.'); res.json(creative.toggleFavorite(await creative.record(r.provider, String(r.sourceId)).catch(() => r), !!req.body.on)); }));
+  app.post('/api/creative/warm-preview', (req, res) => { const b = req.body || {}; if (creative.providers[b.provider] && b.id) creative.warmPreview(String(b.provider), String(b.id)); res.json({ ok: true }); });
   app.get('/api/creative/preview/:provider/:id', wrap(async (req, res) => creative.preview(req.params.provider, req.params.id, req, res)));
   app.post('/api/creative/import', wrap(async (req, res) => res.json(creative.importAsset({ provider: String(req.body.provider), id: String(req.body.id), kind: req.body.kind, usage: req.body.usage }))));
   app.post('/api/creative/stickers/import', wrap(async (req, res) => res.json(await creative.importStickers((req.body.paths || []).map(String)))));

@@ -59,7 +59,8 @@ class CcMixter {
     Object.defineProperty(rec, 'downloadUrl', { value: file.download_url, enumerable: false });
     return rec;
   }
-  download(rec) { return { url: rec.downloadUrl, accept: /^(audio\/|application\/ogg|application\/octet-stream|binary\/octet-stream)/i, maxBytes: 200 * 1024 ** 2, timeout: 60000 }; }
+  // ccMixter's file host refuses downloads that don't come from one of its own pages (HTTP 403 without a Referer).
+  download(rec) { return { url: rec.downloadUrl, headers: { Referer: rec.sourcePageUrl || 'https://ccmixter.org/' }, accept: /^(audio\/|application\/ogg|application\/octet-stream|binary\/octet-stream)/i, maxBytes: 200 * 1024 ** 2, timeout: 60000 }; }
   preview(rec) { return this.download(rec); }
 }
 module.exports = { CcMixter };

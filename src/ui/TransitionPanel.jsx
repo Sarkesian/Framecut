@@ -69,9 +69,9 @@ export function TransitionInspector({ c }) {
         <small class="muted">How much of the clips around the cut the loop plays, so you see the transition in context.</small>
       </Section>
       <Section title="Type">
-        <div class="tr-pick" role="radiogroup" aria-label="Transition type">{groups.flatMap(g => TRANSITION_FAMILIES.filter(f => f.group === g)).map(f => <button key={f.id} role="radio" aria-checked={def.family === f.id} class={`tr-pick-tile ${def.family === f.id ? 'on' : ''}`} onClick={() => { hoverType(c.id, null); pickFamily(f); }} data-tip={f.name}
+        <div role="radiogroup" aria-label="Transition type">{groups.map(g => <div key={g} class="tr-pick-group"><small class="muted">{g}</small><div class="tr-pick">{TRANSITION_FAMILIES.filter(f => f.group === g).map(f => <button key={f.id} role="radio" aria-checked={def.family === f.id} class={`tr-pick-tile ${def.family === f.id ? 'on' : ''}`} onClick={() => { hoverType(c.id, null); pickFamily(f); }} data-tip={f.name}
             onPointerEnter={() => hoverType(c.id, transitionIn(f.id, def.dir && f.dirs.includes(def.dir) ? def.dir : f.dirs[0]).id)} onPointerLeave={() => hoverType(c.id, null)}>
-          <div class={`tr-demo tr-${f.first}`}><i class="a" /><i class="b" /><i class="dip" /></div><span class="ellipsis">{f.name}</span></button>)}</div>
+          <div class={`tr-demo tr-${f.first}`}><i class="a" /><i class="b" /><i class="dip" /></div><span class="ellipsis">{f.name}</span></button>)}</div></div>)}</div>
         {caps.dirs.length > 0 && <div class="field"><label>Direction</label><Segmented label="Direction" value={def.dir} options={caps.dirs.map(dir => [dir, dir, DIR_ICON[dir], DIR_TIP[dir]])} onChange={dir => set('Transition direction', t => { t.id = transitionIn(def.family, dir).id; })} /></div>}
       </Section>
       <Section title="Timing">
