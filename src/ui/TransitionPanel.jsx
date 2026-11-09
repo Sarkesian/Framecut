@@ -1,8 +1,11 @@
 // Details panel for a selected transition (click a transition block on the timeline). Takes over the
 // right-hand panel the way a selected clip does. Simple first: pick a type, its direction and length;
 // timing, look and sound controls sit in their own sections below.
-import { Blend, Play, Trash2, CopyCheck, ArrowLeft, ArrowRight, ArrowUp, ArrowDown } from 'lucide-preact';
-import { project, player, time, toast } from '../lib/state.js';
+import { Blend, Play, Square, RotateCcw, Trash2, CopyCheck, ArrowLeft, ArrowRight, ArrowUp, ArrowDown } from 'lucide-preact';
+import { signal } from '@preact/signals';
+import { ui, setUi } from '../lib/uiprefs.js';
+import { useEffect } from 'preact/hooks';
+import { project, player, time, toast, transitionHover } from '../lib/state.js';
 import { updateClip, removeTransition, transitionToAllCuts } from '../lib/edit.js';
 import { Slider, Segmented, Select, Color, Section } from './kit.jsx';
 import { TRANSITION_FAMILIES, TRANSITION_EASES, TRANSITION_ALIGN, transitionDef, transitionIn, transitionWindow, transitionCaps } from '../../shared/catalog.mjs';
@@ -14,16 +17,38 @@ const DIR_TIP = { left: 'Moves to the left', right: 'Moves to the right', up: 'M
 const LENGTHS = [0.3, 0.5, 0.8, 1, 1.5, 2];
 const clipName = c => (c ? c.name || ({ video: 'Video', image: 'Photo', text: 'Text', sticker: 'Sticker' })[c.kind] || 'Clip' : '');
 
-let stopTimer = 0;
-// Plays a little before to a little after the transition, then stops.
-function previewTransition(c, d) {
-  const pl = player.current; if (!pl) return;
-  const [T0, T1] = transitionWindow(c, d), from = Math.max(0, T0 - 0.7);
-  clearTimeout(stopTimer); pl.pause(); pl.seek(from); time.value = from; pl.play();
-  stopTimer = setTimeout(() => pl.pause(), (T1 + 0.7 - from) * 1000);
+// While a transition is selected the viewer loops it: from a moment before to a moment after, over and
+// over, following its current length and placement. Pausing, scrubbing or seeking hands control back;
+// hovering a type (or pressing Play) loops again. Deselecting stops and returns the playhead to where it was.
+// How much of the clips before and after the transition the loop shows is adjustable (ui.trPad, seconds).
+const loopOn = signal(false);
+export const transitionLoop = { start: null, stop: null };
+function useTransitionLoop(clipId) {
+  useEffect(() => {
+    const pl = player.current; if (!pl) return;
+    const t0 = time.value; let mine = false, alive = true, raf = 0;
+    const span = () => {
+      const p = project.value, cl = p.clips.find(x => x.id === clipId); if (!cl?.transition) return null;
+      const d = Math.min(cl.transition.duration || 0.6, Math.max(0.1, maxTransition(p, cl))); const [T0, T1] = transitionWindow(cl, d);
+      const pad = ui.value.trPad ?? 0.5; return [Math.max(0, T0 - pad), T1 + pad];
+    };
+    const start = (restart = false) => { const w = span(); if (!w) return; if (restart || pl.t < w[0] || pl.t >= w[1] - 0.02) pl.seek(w[0]); if (!pl.playing) pl.play(); mine = true; loopOn.value = true; };
+    const stop = () => { if (mine) pl.pause(); mine = false; loopOn.value = false; };
+    const tick = () => {
+      if (!alive) return;
+      if (mine) { const w = span(); if (!pl.playing || !w) { mine = false; loopOn.value = false; } else if (pl.t >= w[1] || pl.t < w[0] - 0.1) pl.seek(w[0]); }
+      raf = requestAnimationFrame(tick);
+    };
+    transitionLoop.start = start; transitionLoop.stop = stop; start(); tick();
+    return () => { alive = false; cancelAnimationFrame(raf); transitionLoop.start = transitionLoop.stop = null; loopOn.value = false; transitionHover.value = null; if (mine) { pl.pause(); pl.seek(t0); } };
+  }, [clipId]);
 }
+// Hover a type: the loop shows that type (not saved until clicked).
+export const hoverType = (clipId, id) => { transitionHover.value = id ? { clipId, id } : null; if (id) transitionLoop.start?.(); };
 
 export function TransitionInspector({ c }) {
+  useTransitionLoop(c.id);
+  const previewTransition = () => (loopOn.value ? transitionLoop.stop?.() : transitionLoop.start?.(true));
   const p = project.value, a = transitionPartner(p, c), tr = c.transition;
   const def = transitionDef(tr.id) || transitionDef('dissolve'); const caps = transitionCaps(def);
   const max = Math.max(0.1, maxTransition(p, c)); const d = Math.min(tr.duration || 0.6, max);
@@ -33,10 +58,19 @@ export function TransitionInspector({ c }) {
   const groups = [...new Set(TRANSITION_FAMILIES.map(f => f.group))];
   return <div class="inspector tr-inspector">
     <div class="insp-head"><span class="kind-dot k-transition"><Blend size={13} /></span><div class="grow ellipsis"><b class="ellipsis">{def.family && def.dir ? TRANSITION_FAMILIES.find(f => f.id === def.family)?.name : def.name}</b><small class="muted ellipsis">Transition · {shortTime(d)} · {clipName(a)} → {clipName(c)}</small></div>
-      <button class="icon-btn sm" data-tip="Play the transition" aria-label="Play the transition" onClick={() => previewTransition(c, d)}><Play size={14} /></button></div>
+      <button class={`icon-btn sm ${loopOn.value ? 'on' : ''}`} data-tip={loopOn.value ? 'Stop the preview loop' : 'Play the preview loop'} aria-label={loopOn.value ? 'Stop preview' : 'Play preview'} aria-pressed={loopOn.value} onClick={previewTransition}>{loopOn.value ? <Square size={13} /> : <Play size={14} />}</button></div>
     <div class="insp-scroll">
+      <Section title="Preview">
+        <div class="row">
+          <button class={`btn sm ${loopOn.value ? 'primary' : ''}`} aria-pressed={loopOn.value} onClick={previewTransition}>{loopOn.value ? <><Square size={12} />Stop preview</> : <><Play size={13} />Play preview</>}</button>
+          <button class="btn sm" data-tip="Start the loop again from the top" onClick={() => transitionLoop.start?.(true)}><RotateCcw size={13} />Restart</button>
+        </div>
+        <Slider label="Show before & after" min={0} max={3} step={0.1} value={ui.value.trPad ?? 0.5} def={0.5} unit=" s" onChange={v => setUi({ trPad: v })} />
+        <small class="muted">How much of the clips around the cut the loop plays, so you see the transition in context.</small>
+      </Section>
       <Section title="Type">
-        <div class="tr-pick" role="radiogroup" aria-label="Transition type">{groups.flatMap(g => TRANSITION_FAMILIES.filter(f => f.group === g)).map(f => <button key={f.id} role="radio" aria-checked={def.family === f.id} class={`tr-pick-tile ${def.family === f.id ? 'on' : ''}`} onClick={() => pickFamily(f)} data-tip={f.name}>
+        <div class="tr-pick" role="radiogroup" aria-label="Transition type">{groups.flatMap(g => TRANSITION_FAMILIES.filter(f => f.group === g)).map(f => <button key={f.id} role="radio" aria-checked={def.family === f.id} class={`tr-pick-tile ${def.family === f.id ? 'on' : ''}`} onClick={() => { hoverType(c.id, null); pickFamily(f); }} data-tip={f.name}
+            onPointerEnter={() => hoverType(c.id, transitionIn(f.id, def.dir && f.dirs.includes(def.dir) ? def.dir : f.dirs[0]).id)} onPointerLeave={() => hoverType(c.id, null)}>
           <div class={`tr-demo tr-${f.first}`}><i class="a" /><i class="b" /><i class="dip" /></div><span class="ellipsis">{f.name}</span></button>)}</div>
         {caps.dirs.length > 0 && <div class="field"><label>Direction</label><Segmented label="Direction" value={def.dir} options={caps.dirs.map(dir => [dir, dir, DIR_ICON[dir], DIR_TIP[dir]])} onChange={dir => set('Transition direction', t => { t.id = transitionIn(def.family, dir).id; })} /></div>}
       </Section>
@@ -57,7 +91,7 @@ export function TransitionInspector({ c }) {
         <small class="muted">Smooth fade dips the clips’ own sound around the cut so it doesn’t jump.</small>
       </Section>
       <div class="tr-actions">
-        <button class="btn sm" onClick={() => previewTransition(c, d)}><Play size={13} />Play</button>
+        
         <button class="btn sm" data-tip="Use these settings on every cut on this track" onClick={() => { const n = transitionToAllCuts(c.id); toast(n ? `Applied to ${n} more cut${n === 1 ? '' : 's'} on this track. Ctrl+Z to undo.` : 'There are no other cuts on this track.'); }}><CopyCheck size={13} />Apply to all cuts</button>
         <span class="grow" />
         <button class="btn sm ghost danger" onClick={() => removeTransition(c.id)}><Trash2 size={13} />Remove</button>

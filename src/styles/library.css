@@ -104,3 +104,22 @@
 .st-card .st-src { position: absolute; left: 4px; bottom: 4px; max-width: calc(100% - 8px); padding: 1px 5px; border-radius: 6px; font-size: 9.5px; background: color-mix(in srgb, var(--bg-1) 82%, transparent); color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0; transition: opacity .12s; pointer-events: none; }
 .st-card:hover .st-src, .st-card:focus-visible .st-src { opacity: 1; }
 .lib-count .lib-retry { padding: 0 6px; height: 20px; margin-left: 2px; }
+/* Templates tab: collapsible categories, style options folded behind one button */
+.tpl-style-btn { height: 30px; flex: none; gap: 5px; } .tpl-style-btn.on { background: var(--accent-soft); color: var(--accent); }
+.tpl-style-btn b { min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; display: inline-grid; place-items: center; font-size: 10.5px; background: var(--accent); color: var(--accent-ink); }
+.tpl-options { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 0 0 8px; padding: 8px; border-radius: 10px; background: var(--bg-2); border: 1px solid var(--line); } .tpl-options .select { width: 100%; } .tpl-options .btn { grid-column: 1 / -1; justify-self: start; }
+.tpl-active { display: flex; flex-wrap: wrap; gap: 5px; margin: 0 0 8px; } .tpl-active .fchip { display: inline-flex; align-items: center; gap: 4px; padding: 0 7px 0 10px; }
+.tpl-sec { border-top: 1px solid var(--line); } .tpl-sec:last-of-type { border-bottom: 1px solid var(--line); }
+.tpl-sec-head { position: sticky; top: 46px; z-index: 1; display: flex; align-items: center; gap: 6px; width: 100%; height: 36px; padding: 0 4px 0 2px; border: 0; background: var(--bg-1); color: var(--text-2); cursor: pointer; font-size: 12.5px; font-weight: 650; text-align: left; }
+.tpl-sec-head:hover, .tpl-sec.open > .tpl-sec-head { color: var(--text); } .tpl-sec-head svg { color: var(--text-3); flex: none; }
+.tpl-sec-head small { min-width: 22px; height: 18px; padding: 0 6px; border-radius: 9px; display: inline-grid; place-items: center; font-size: 10.5px; font-weight: 600; background: var(--bg-3); color: var(--text-3); }
+.tpl-sec-head:focus-visible { outline: 2px solid var(--accent-line); outline-offset: -2px; border-radius: 6px; }
+.tpl-sec-body { padding: 2px 0 12px; } .tpl-sec-body .tile-grid.two { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
+.look-tile .tpl-swatch { height: auto; position: relative; display: grid; place-items: center; } .look-tile .tpl-swatch i { font: 600 10.5px var(--mono); font-style: normal; padding: 1px 5px; border-radius: 5px; background: rgba(0,0,0,.45); color: #fff; }
+.tpl-foot { margin: 10px 2px 0; line-height: 1.45; }
+.look-on { position: absolute; right: 4px; top: 4px; width: 17px; height: 17px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--accent-ink); }
+.look-card { position: sticky; bottom: 8px; z-index: 3; margin-top: 10px; padding: 10px; border-radius: 12px; background: var(--bg-3); border: 1px solid var(--line-2); box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 7px; font-size: 12px; animation: drawer-in .18s var(--ease); }
+.look-card-head { display: flex; align-items: center; gap: 9px; } .look-card-head div { display: flex; flex-direction: column; min-width: 0; } .look-card-head b { font-size: 13px; } .look-card-head small, .look-card > small { font-size: 11.5px; line-height: 1.4; }
+.look-card-head .tpl-swatch { width: 34px; height: 26px; }
+@media (prefers-reduced-motion: reduce) { .look-card { animation: none; } }
+.group-title small { font-weight: 500; margin-left: 4px; }

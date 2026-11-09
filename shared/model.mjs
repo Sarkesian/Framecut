@@ -44,10 +44,22 @@ export function newProject({ name = 'Untitled project', ratio = '16:9', resoluti
 
 const KIND_TRACK = { video: 'video', image: 'video', audio: 'audio', text: 'text', sticker: 'text', adjust: 'effect' };
 export const trackKindFor = kind => KIND_TRACK[kind] || 'video';
+// Track stacking rule: picture tracks (overlays, text, effects) on top, then the Main track as the bottom
+// picture layer, then every audio track. A picture track below Main would be hidden by it, so it never goes there.
+const band = t => (t.kind === 'audio' ? 2 : t.main ? 1 : 0);
+export const orderTracks = tracks => tracks.map((t, i) => ({ t, i })).sort((a, b) => band(a.t) - band(b.t) || a.i - b.i).map(x => x.t);
+// The nearest allowed insert position (a boundary before tracks[index]) for a new or moved track of `kind`.
+export function clampTrackIndex(p, kind, index) {
+  const m = p.tracks.findIndex(t => t.main); if (m < 0) return index;
+  return kind === 'audio' ? Math.max(index, m + 1) : Math.min(index, m);
+}
 export const isVisual = c => c.kind !== 'audio';
 export const hasMedia = c => ['video', 'image', 'audio'].includes(c.kind);
 // A sticker from the Creative Library or the user's files: an image or looping transparent video asset.
 export const stickerMedia = c => c.kind === 'sticker' && c.sticker?.type === 'media' && !!c.mediaId;
+// Playback rate of a clip's source. A sticker may be set to 0×: its animation holds still on one frame.
+// Everything else treats a missing or zero speed as normal speed.
+export const clipSpeed = c => (c.kind === 'sticker' && c.speed === 0 ? 0 : c.speed || 1);
 export const clipEnd = c => c.start + c.duration;
 export const srcOut = c => c.in + c.duration * (c.speed || 1);
 
@@ -83,6 +95,7 @@ export function normalizeProject(raw) {
   p.created ||= new Date().toISOString(); p.modified ||= p.created;
   p.tracks = Array.isArray(p.tracks) && p.tracks.length ? p.tracks : base.tracks;
   if (!p.tracks.some(t => t.main)) { const v = p.tracks.find(t => t.kind === 'video'); if (v) v.main = true; else p.tracks.splice(Math.max(0, p.tracks.findIndex(t => t.kind === 'audio')), 0, { id: 'main', kind: 'video', name: 'Main', main: true }); }
+  p.tracks = orderTracks(p.tracks); // repairs projects where a video track ended up under Main (hidden)
   p.mediaIds = Array.isArray(p.mediaIds) ? p.mediaIds : []; p.markers = Array.isArray(p.markers) ? p.markers : []; p.favorites = Array.isArray(p.favorites) ? p.favorites : [];
   // Library license / attribution records (see rights.mjs) travel with the project.
   p.attributions = p.attributions && typeof p.attributions === 'object' && !Array.isArray(p.attributions) ? p.attributions : {};
@@ -90,10 +103,13 @@ export function normalizeProject(raw) {
   p.clips = (Array.isArray(p.clips) ? p.clips : []).filter(c => c && c.kind && trackIds.has(c.trackId)).map(c => {
     const full = deepMerge(newClip(c.kind), c);
     full.start = num(full.start, 0, 86400, 0); full.duration = num(full.duration, 0.04, 86400, 1);
-    if (hasMedia(full)) { full.in = num(full.in, 0, 86400, 0); full.speed = num(full.speed, 0.1, 10, 1); full.volume = num(full.volume, 0, 4, 1); }
+    if (hasMedia(full)) { full.in = num(full.in, 0, 86400, 0); full.speed = num(full.speed, 0.1, 10, 1); full.volume = num(full.volume, 0, 16, 1); } // up to +24 dB
     return full;
   });
   for (const c of p.clips) if (c.mediaId && !p.mediaIds.includes(c.mediaId)) p.mediaIds.push(c.mediaId);
+  // A link to separated audio that no longer exists: the video simply stays muted (unmute to hear it).
+  const ids = new Set(p.clips.map(c => c.id));
+  for (const c of p.clips) if (c.detachedAudio && !ids.has(c.detachedAudio)) delete c.detachedAudio;
   migrateCaptions(p);
   return p;
 }
@@ -151,6 +167,47 @@ export const mainTrack = p => p.tracks.find(t => t.main);
 export function packMain(p) {
   const main = mainTrack(p); if (!main || !p.settings.magnetic) return p;
   let t = 0; for (const c of trackClips(p, main.id)) { c.start = t; t += c.duration; }
+  return p;
+}
+
+// Linked video + separated audio stay in sync through every edit (moves, trims, ripple, gap closing, gapless
+// packing, speed, paste…). After an edit, a pair that came apart is re-aligned: the half that was edited
+// leads and the other follows — except a video on the gapless Main track, which can't be moved off its
+// packed position, so its audio follows it. A follower that would overlap another clip moves to a free
+// track of its own kind (a new one if needed).
+const sameTiming = (x, y) => !!x && !!y && Math.abs(x.start - y.start) < 1e-6 && Math.abs(x.duration - y.duration) < 1e-6 && Math.abs((x.in || 0) - (y.in || 0)) < 1e-6 && (x.speed || 1) === (y.speed || 1);
+export function syncLinked(prev, p) {
+  const before = new Map((prev?.clips || []).map(c => [c.id, c]));
+  const main = mainTrack(p);
+  for (const v of p.clips) {
+    if (v.kind !== 'video' || !v.detachedAudio) continue;
+    const a = p.clips.find(x => x.id === v.detachedAudio); if (!a || sameTiming(v, a)) continue;
+    const vChanged = !sameTiming(v, before.get(v.id)), aChanged = !sameTiming(a, before.get(a.id));
+    const pinned = v.trackId === main?.id && p.settings.magnetic;
+    const [src, dst] = aChanged && !vChanged && !pinned ? [a, v] : [v, a];
+    dst.start = src.start; dst.duration = src.duration; dst.in = src.in; dst.speed = src.speed;
+    const clash = p.clips.some(o => o !== dst && o.trackId === dst.trackId && o.start < clipEnd(dst) - 1e-4 && clipEnd(o) > dst.start + 1e-4);
+    if (clash) {
+      const kind = dst.kind === 'audio' ? 'audio' : 'video';
+      const free = p.tracks.find(t => t.kind === kind && !t.main && !t.locked && !t.captions && !p.clips.some(o => o !== dst && o.trackId === t.id && o.start < clipEnd(dst) - 1e-4 && clipEnd(o) > dst.start + 1e-4));
+      if (free) dst.trackId = free.id;
+      else {
+        const t = { id: kind + '-' + uid().slice(0, 8), kind, name: (kind === 'audio' ? 'Audio ' : 'Video ') + (p.tracks.filter(x => x.kind === kind).length + 1), autoRemove: true };
+        const m = p.tracks.findIndex(x => x.main); p.tracks.splice(kind === 'audio' ? p.tracks.length : Math.max(0, m), 0, t); dst.trackId = t.id;
+      }
+    }
+  }
+  return p;
+}
+
+// After any edit: no clip may point at something that's gone. A link to deleted separated audio is dropped
+// (the video stays muted), and a transition whose neighbouring clip moved away or was deleted is removed.
+export function cleanRefs(p) {
+  const ids = new Set(p.clips.map(c => c.id));
+  for (const c of p.clips) {
+    if (c.detachedAudio && !ids.has(c.detachedAudio)) delete c.detachedAudio;
+    if (c.transition && !transitionPartner(p, c)) c.transition = null;
+  }
   return p;
 }
 

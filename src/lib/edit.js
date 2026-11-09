@@ -1,9 +1,10 @@
 // Editing commands. Each runs inside commit(), so everything is undoable and autosaved.
 import { shiftKeys } from '../../shared/keys.mjs';
 import { spanTo } from '../../shared/snap.mjs';
-import { newClip, uid, clipEnd, srcOut, trackClips, mainTrack, transitionPartner, maxTransition, hasMedia, trackKindFor } from '../../shared/model.mjs';
+import { newClip, uid, clipEnd, srcOut, trackClips, mainTrack, transitionPartner, maxTransition, hasMedia, trackKindFor, clipSpeed, clampTrackIndex } from '../../shared/model.mjs';
 import { CAPTION_STYLE, TEXT_STYLE, effectDef } from '../../shared/catalog.mjs';
 import { commit, project, selection, time, asset, toast, player, transitionSel } from './state.js';
+import { ui } from './uiprefs.js';
 
 const EPS = 1e-4;
 const KIND_NAMES = { video: 'Video', audio: 'Audio', text: 'Text', effect: 'Effects' };
@@ -20,6 +21,26 @@ export function addTrack(p, kind, { above } = {}) {
   else if (kind === 'video') at = p.tracks.findIndex(x => x.kind === 'video');
   else at = p.tracks.length;
   p.tracks.splice(Math.max(0, at), 0, t); return t;
+}
+// A new track at an exact position in the stack (0 = top layer). Tracks made this way go away again when
+// they end up empty.
+export function insertTrack(p, kind, index) {
+  const t = addTrack(p, kind); p.tracks.splice(p.tracks.indexOf(t), 1);
+  t.autoRemove = true; p.tracks.splice(Math.max(0, Math.min(p.tracks.length, clampTrackIndex(p, kind, index))), 0, t); return t;
+}
+// Remove tracks an edit just emptied: the given tracks (where clips were taken from) and any auto-made
+// track. The main track, caption tracks and locked tracks always stay.
+export function pruneTracks(p, emptied = []) {
+  const from = new Set(emptied);
+  p.tracks = p.tracks.filter(t => t.main || t.captions || t.locked || p.clips.some(c => c.trackId === t.id) || !(t.autoRemove || from.has(t.id)));
+}
+// Main stays put (it is the boundary); other tracks move within their band (see clampTrackIndex).
+export function moveTrack(p, id, index) {
+  const i = p.tracks.findIndex(t => t.id === id); if (i < 0 || p.tracks[i].main) return false;
+  index = clampTrackIndex(p, p.tracks[i].kind, index);
+  const [t] = p.tracks.splice(i, 1); const at = index > i ? index - 1 : index;
+  if (at === i) { p.tracks.splice(i, 0, t); return false; }
+  p.tracks.splice(Math.max(0, Math.min(p.tracks.length, at)), 0, t);
 }
 // A track of `kind` with room for [start, end), creating one if needed.
 export function freeTrack(p, kind, start, end, { prefer, ignore = new Set(), allowMain = false } = {}) {
@@ -133,16 +154,21 @@ export function splitAt(t = time.value, ids) {
   if (!targets.length) targets = p0.clips.filter(c => t > c.start + 0.03 && t < clipEnd(c) - 0.03 && trackOf(p0, c.trackId)?.main);
   if (!targets.length) { const any = p0.clips.filter(c => t > c.start + 0.03 && t < clipEnd(c) - 0.03 && !trackOf(p0, c.trackId)?.locked); targets = any; }
   if (!targets.length) return toast('Move the playhead over a clip to split it.', 'warn');
+  // Linked video + separated audio are cut together, so each piece keeps its own sound in sync.
+  if (ui.value.linked) for (const c of [...targets]) { const o = partnerOf(p0, c); if (o && !targets.includes(o) && t > o.start + 0.03 && t < clipEnd(o) - 0.03 && !trackOf(p0, o.trackId)?.locked) targets.push(o); }
   const right = [];
   commit('Split', p => {
+    const rightOf = new Map();
     for (const t0 of targets) {
       const c = p.clips.find(x => x.id === t0.id); if (!c || trackOf(p, c.trackId)?.locked) continue;
-      const r = cutClip(p, c, t - c.start); if (r) right.push(r.id);
+      const r = cutClip(p, c, t - c.start); if (r) { right.push(r.id); rightOf.set(c.id, r); }
     }
     if (!right.length) return false; // nothing unlocked to split: no empty undo entry
+    // Left pieces keep their link; right pieces are linked to each other.
+    for (const [id, r] of rightOf) { const c = p.clips.find(x => x.id === id); if (c.detachedAudio && rightOf.has(c.detachedAudio)) r.detachedAudio = rightOf.get(c.detachedAudio).id; }
   });
   // Keep the right-hand piece selected (computed after the commit ran) so the Inspector stays open.
-  if (right.length) selection.value = right.slice(0, 1);
+  if (right.length) { const p1 = project.value; selection.value = [right.find(id => p1.clips.find(c => c.id === id)?.kind !== 'audio') || right[0]]; }
 }
 // Split clip `c` (inside a commit draft) at clip-local time `local`. Returns the new right-hand clip, or
 // null when the cut would leave a piece shorter than 0.03 s. Everything time-based is divided between the
@@ -153,7 +179,7 @@ export function cutClip(p, c, local) {
   if (!(local > MIN_PIECE && local < c.duration - MIN_PIECE)) return null;
   const r = structuredClone(c); r.id = uid(); r.start = c.start + local; r.duration = c.duration - local; r.transition = null; r.animIn = null;
   delete r.detachedAudio;
-  if (hasMedia(c) || c.sticker?.type === 'media') r.in = (c.in || 0) + local * (c.speed || 1);
+  if (hasMedia(c) || c.sticker?.type === 'media') r.in = (c.in || 0) + local * clipSpeed(c);
   if (c.words) { r.words = c.words.filter(w => w.start >= local).map(w => ({ ...w, start: w.start - local, end: w.end - local })); c.words = c.words.filter(w => w.start < local); }
   if (c.keyframes) { shiftKeys(r, local, r.duration); shiftKeys(c, 0, local); }
   if (c.volumeKeys) {
@@ -170,11 +196,16 @@ function unlinkCopy(c) { if (c.detachedAudio) { delete c.detachedAudio; c.muted 
 export function deleteClips(ids = selection.value, { ripple = false } = {}) {
   const p0 = project.value; ids = ids.filter(id => { const c = p0.clips.find(x => x.id === id); return c && !trackOf(p0, c.trackId)?.locked; });
   if (!ids.length) return;
+  // Deleting a video takes its linked (separated) audio with it. Deleting only the audio leaves the video
+  // muted — unmute it to hear its original sound again.
+  if (ui.value.linked) for (const id of [...ids]) { const c = p0.clips.find(x => x.id === id); const o = c?.detachedAudio && partnerOf(p0, c); if (o && !ids.includes(o.id) && !trackOf(p0, o.trackId)?.locked) ids.push(o.id); }
   commit(ids.length > 1 ? `Delete ${ids.length} clips` : 'Delete clip', p => {
     const removed = p.clips.filter(c => ids.includes(c.id));
     p.clips = p.clips.filter(c => !ids.includes(c.id));
+    for (const c of p.clips) if (c.detachedAudio && !p.clips.some(x => x.id === c.detachedAudio)) delete c.detachedAudio;
     if (ripple) for (const r of removed.sort((a, b) => b.start - a.start)) for (const c of p.clips) if (c.trackId === r.trackId && c.start >= clipEnd(r) - EPS) c.start -= r.duration;
     for (const c of p.clips) if (c.transition && !transitionPartner(p, c)) c.transition = null;
+    pruneTracks(p, removed.map(c => c.trackId));
   }, { select: [] });
 }
 export function duplicateClips(ids = selection.value) {
@@ -202,8 +233,11 @@ export function pasteClips(at = time.value, { inPlace = false } = {}) {
   commit('Paste', p => {
     // Make room on the main track once, for all pasted main clips together, so they keep their order.
     const main = mainTrack(p), mainLen = clipboard.filter(s => s._main).reduce((n, s) => n + s.duration, 0);
-    if (mainLen) for (const x of p.clips) if (x.trackId === main.id && x.start >= at - EPS) x.start += mainLen;
-    let mainAt = at;
+    // Pasting onto Main with the playhead inside a clip goes in after that clip, never on top of it.
+    const under = p.clips.find(x => x.trackId === main.id && x.start < at - EPS && clipEnd(x) > at + EPS);
+    const mainStart = under ? clipEnd(under) : at;
+    if (mainLen) for (const x of p.clips) if (x.trackId === main.id && x.start >= mainStart - EPS) x.start += mainLen;
+    let mainAt = mainStart;
     for (const s of [...clipboard].sort((a, b) => a._offset - b._offset)) {
       const c = structuredClone(s); delete c._offset; delete c._kind; delete c._main; c.id = uid(); c.start = at + s._offset; c.transition = null; unlinkCopy(c);
       if (s._main) { c.trackId = main.id; c.start = mainAt; mainAt += c.duration; }
@@ -232,12 +266,21 @@ export function placeClips(moves, { label = 'Move clip' } = {}) {
   });
 }
 // Where an edge can go: media clips can't reveal source before 0 or past the file's end; every clip keeps ≥ 0.05 s.
-export function trimLimits(c, a = c.mediaId ? asset(c.mediaId) : null) {
+// An edge also can't be stretched over the neighbouring clip on its track — unless ripple is on (later clips
+// make room) or it is the gapless Main track (which re-packs itself).
+export function trimLimits(c, a = c.mediaId ? asset(c.mediaId) : null, { p = project.value, ripple = false } = {}) {
   const speed = c.speed || 1, end = clipEnd(c), media = hasMedia(c) && c.kind !== 'image';
-  return {
+  const L = {
     minStart: Math.max(0, media ? c.start - c.in / speed : 0), maxStart: end - 0.05,
     minEnd: c.start + 0.05, maxEnd: media && a ? c.start + (a.duration - c.in) / speed : Infinity,
   };
+  const tr = p && trackOf(p, c.trackId);
+  if (tr && !(tr.main && p.settings.magnetic)) {
+    const others = p.clips.filter(o => o.trackId === c.trackId && o.id !== c.id);
+    if (!(ripple && !tr.main)) L.minStart = Math.max(L.minStart, ...others.filter(o => clipEnd(o) <= c.start + EPS).map(clipEnd));
+    if (!ripple) L.maxEnd = Math.min(L.maxEnd, ...others.filter(o => o.start >= end - EPS).map(o => o.start));
+  }
+  return L;
 }
 // Trim an edge to a new timeline time.
 export function trimClip(id, edge, t, { ripple = false, key } = {}) { return trimClips([{ id, edge, t }], { ripple, key: key === undefined ? 'trim:' + id + edge : key }); }
@@ -247,7 +290,7 @@ export function trimClips(list, { ripple = false, key = null, label = 'Trim' } =
     let any = false;
     for (const { id, edge, t } of list) {
       const c = p.clips.find(x => x.id === id); if (!c) continue; any = true;
-      const L = trimLimits(c), speed = c.speed || 1, end = clipEnd(c);
+      const L = trimLimits(c, undefined, { p, ripple }), speed = c.speed || 1, end = clipEnd(c);
       if (edge === 'start') {
         const ns = Math.min(L.maxStart, Math.max(L.minStart, t));
         const d = ns - c.start;
@@ -292,7 +335,9 @@ export function closeGap(trackId, at) {
 export function setSpeed(id, speed) {
   commit('Change speed', p => {
     const c = p.clips.find(x => x.id === id); if (!c) return false;
-    const srcLen = c.duration * (c.speed || 1), k = (c.speed || 1) / speed; c.speed = speed; c.duration = srcLen / speed;
+    const srcLen = c.duration * (c.speed || 1), k = (c.speed || 1) / speed, oldEnd = clipEnd(c); c.speed = speed; c.duration = srcLen / speed;
+    // On Main, the clips after it make room (or close up) by the change in length, so nothing overlaps.
+    if (trackOf(p, c.trackId).main) { const d = clipEnd(c) - oldEnd; for (const x of p.clips) if (x.id !== c.id && x.trackId === c.trackId && x.start >= oldEnd - EPS) x.start += d; }
     if (c.keyframes) for (const p2 of Object.keys(c.keyframes)) c.keyframes[p2] = c.keyframes[p2].map(x => ({ ...x, t: x.t * k }));
     // The volume envelope and caption words are clip-local times too: they follow the new speed.
     if (c.volumeKeys) c.volumeKeys = c.volumeKeys.map(x => ({ ...x, t: x.t * k }));
@@ -342,6 +387,11 @@ export function removeTrack(trackId) {
 }
 export function updateClip(id, fn, { label = 'Edit clip', key, window } = {}) { commit(label, p => { const c = p.clips.find(x => x.id === id); if (!c) return false; return fn(c, p); }, { key, window }); }
 export function updateClips(ids, fn, { label = 'Edit clips', key, window } = {}) { commit(label, p => { for (const c of p.clips) if (ids.includes(c.id)) fn(c, p); }, { key, window }); }
+// Add an emoji (or any string) to the end of a text clip; it takes the text's style and animation.
+export function appendToText(id, str) {
+  updateClip(id, x => { if (x.kind !== 'text') return false; const sep = x.text && !/\s$/.test(x.text) ? ' ' : ''; x.text = (x.text || '') + sep + str; x.name = x.text.split('\n')[0].slice(0, 40); x.words = null; }, { label: 'Add emoji to text' });
+  selection.value = [id];
+}
 // Live text edit: every keystroke updates the clip (and the preview); one undo entry per editing session.
 export function setClipText(id, v, session) {
   updateClip(id, x => { if (x.text === v) return false; x.text = v; x.name = v.split('\n')[0].slice(0, 40); if (x.words && x.words.length !== v.split(/\s+/).filter(Boolean).length) x.words = null; }, { label: 'Edit text', key: 'text:' + id + ':' + session, window: Infinity });

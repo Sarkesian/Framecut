@@ -2,22 +2,22 @@
 import { LiveTakeRow } from './LiveTake.jsx';
 import { useEffect, useRef, useState, useMemo } from 'preact/hooks';
 import { signal } from '@preact/signals';
-import { Slice, FoldHorizontal, GalleryHorizontalEnd, ChevronDown } from 'lucide-preact';
+import { Slice, FoldHorizontal, GalleryHorizontalEnd, ChevronDown, CopyPlus, Link2Off } from 'lucide-preact';
 import { Scissors, Trash2, Copy, Undo2, Redo2, Magnet, ZoomIn, ZoomOut, Maximize, Eye, EyeOff, Lock, LockOpen, Volume2, VolumeX, Plus, Film, Music, Type, Layers, Snowflake, Unlink, Link2, Pencil, ArrowLeftRight, ArrowLeftToLine, ArrowRightToLine, Diamond, Gauge, Blend, Captions, Sparkles, Mic, MoreHorizontal } from 'lucide-preact';
-import { project, selection, time, zoom, media, asset, player, history, undo, redo, commit, toast, drag, playing, duration, libraryTab , transitionSel } from '../lib/state.js';
+import { project, selection, time, zoom, media, asset, player, history, undo, redo, commit, toast, drag, playing, duration, libraryTab, transitionSel, rememberMedia, trackImport } from '../lib/state.js';
 import { closeAllGaps, bladeCut } from '../lib/edit.js';
-import { splitAt, deleteClips, duplicateClips, copyClips, cutClips, pasteClips, placeClips, trimClips, trimLimits, setTrack, removeTrack, addTrack, closeGaps, closeGap, trackGaps, detachAudio, addAssets, addText, addSticker, applyEffect, applyFilter, applyTransition, selectTransition, removeTransition, trackOf, overlaps, freeTrack, updateClip, partnerOf, unlinkClip } from '../lib/edit.js';
+import { splitAt, deleteClips, duplicateClips, copyClips, cutClips, pasteClips, placeClips, trimClips, trimLimits, setTrack, removeTrack, addTrack, closeGaps, closeGap, trackGaps, detachAudio, addAssets, addText, addSticker, applyEffect, applyFilter, applyTransition, selectTransition, removeTransition, trackOf, overlaps, freeTrack, updateClip, partnerOf, unlinkClip, insertTrack, pruneTracks, moveTrack, appendToText } from '../lib/edit.js';
 import { beginDrag } from '../lib/drag.js';
 import { timelineTargets, snapEdges, toFrame } from '../../shared/snap.mjs';
 import { keySel, keyDrag, keyTimes, isKeySelected, toggleKey, clearKeys, moveKeys, deleteKeys, setKeyEasing, copyKeys, pasteKeys } from '../lib/keyedit.js';
 import { EASINGS } from '../../shared/keys.mjs';
 import { ui, setUi } from '../lib/uiprefs.js';
 import { timecode } from '../lib/format.js';
-import { clipEnd, trackKindFor, mainTrack, transitionPartner, maxTransition, newClip, uid } from '../../shared/model.mjs';
+import { clipEnd, trackKindFor, mainTrack, transitionPartner, maxTransition, newClip, uid, clampTrackIndex } from '../../shared/model.mjs';
 import { transitionDef, effectDef, filterDef, transitionWindow } from '../../shared/catalog.mjs';
 import { openMenu, prompt } from './kit.jsx';
 import { importFiles } from '../lib/api.js';
-import { fitTimeline, zoomAround } from './commands.jsx';
+import { fitTimeline, zoomAround, run } from './commands.jsx';
 import { addTextTemplate } from './AssetPanel.jsx';
 import { openStudio } from './Studio.jsx';
 import { TEXT_TEMPLATES } from '../../shared/templates.mjs';
@@ -27,6 +27,10 @@ import { keyGain } from '../../shared/audio.mjs';
 const HEADER_W = 168, RULER_H = 26;
 const H = { video: 58, main: 66, audio: 52, text: 32, effect: 30 };
 const trackH = t => (t.main ? H.main : H[t.kind] || 40);
+// A clip whose own sound plays: audio clips, and videos with an audio stream that wasn't separated off.
+const hasSound = c => c.kind === 'audio' || (c.kind === 'video' && !!asset(c.mediaId)?.audio && !c.detachedAudio);
+// Video tracks only get mute controls while something on them makes sound (audio tracks always do).
+const trackHasSound = (p, t) => t.kind === 'audio' || (t.kind === 'video' && p.clips.some(c => c.trackId === t.id && hasSound(c)));
 const KIND_ICON = { video: Film, audio: Music, text: Type, effect: Layers };
 const scroll = signal({ left: 0, width: 1000, top: 0 });
 const snapLine = signal(null); // { t, kind } while an edge is snapped
@@ -34,6 +38,8 @@ const bladeLine = signal(null); // timeline time under the pointer while the bla
 const readout = signal(null); // { t, text } floating timecode/duration readout while scrubbing, moving or trimming
 const marquee = signal(null);
 const dropHint = signal(null);
+const SNAP_NAMES = { edge: 'Cut', start: 'Start', end: 'End', marker: 'Marker', playhead: 'Playhead' };
+const insertLine = signal(null); // { y } where a new track will open (clip drag) or a dragged track will land
 
 export function Timeline() {
   const p = project.value, z = zoom.value;
@@ -118,12 +124,14 @@ export function Timeline() {
         {p.tracks.map(t => <TrackRow key={t.id} t={t} z={z} width={width} />)}
         <LiveTakeRow z={z} width={width} />
         <div class="tl-tail" style={{ width: width + HEADER_W }} />
-        {snapLine.value && <div class={`snap-line k-${snapLine.value.kind}`} style={{ left: HEADER_W + snapLine.value.t * z }} />}
+        {snapLine.value && <div class={`snap-line k-${snapLine.value.kind} ${snapLine.value.near ? 'near' : ''}`} style={{ left: HEADER_W + snapLine.value.t * z }} />}
+        {snapLine.value && !snapLine.value.near && <div class={`snap-tag k-${snapLine.value.kind}`} style={{ left: HEADER_W + snapLine.value.t * z, top: scroll.value.top + 3 }}>{SNAP_NAMES[snapLine.value.kind] || 'Snap'}</div>}
         {ui.value.blade && bladeLine.value !== null && <div class="blade-line" style={{ left: HEADER_W + bladeLine.value * z }}><span class="mono">{timecode(bladeLine.value, fpsOf(p))}{snapLine.value && Math.abs(snapLine.value.t - bladeLine.value) < 1e-6 ? ' · ' + ({ edge: 'clip edge', marker: 'marker', playhead: 'playhead', end: 'project end', start: 'start' }[snapLine.value.kind] || 'snap') : ''}</span></div>}
         {readout.value && <div class="tl-readout mono" style={{ left: HEADER_W + readout.value.t * z, top: scroll.value.top + RULER_H + 4 }}>{readout.value.text}</div>}
         {dropHint.value && <div class="drop-hint" style={{ left: HEADER_W + dropHint.value.x, top: dropHint.value.y, width: dropHint.value.w, height: dropHint.value.h }} />}
+        {insertLine.value && <div class="track-insert" style={{ top: insertLine.value.y, width: width + HEADER_W }} />}
         {marquee.value && <div class="marquee" style={{ left: HEADER_W + marquee.value.x, top: marquee.value.y, width: marquee.value.w, height: marquee.value.h }} />}
-        <div class="playhead" style={{ transform: `translateX(${HEADER_W + ph}px)` }}><div class="ph-head" onPointerDown={scrub} /></div>
+        <div class="playhead" style={{ transform: `translateX(${HEADER_W + ph}px)`, visibility: ph < scroll.value.left - 1 ? 'hidden' : undefined }}><div class="ph-head" onPointerDown={scrub} /></div>
       </div>
       {!p.clips.length && <div class="tl-empty"><Film size={20} /><div><b>Drag media here to start</b><span>Or double-click a file in the Media panel.</span></div></div>}
     </div>
@@ -137,7 +145,19 @@ function Ruler({ width, z, onPointerDown }) {
   const t0 = Math.max(0, Math.floor((left - HEADER_W) / z / major) * major), t1 = (left + vw) / z + major;
   const ticks = [];
   for (let t = t0; t <= t1; t += minor) { const isMajor = Math.abs(t / major - Math.round(t / major)) < 1e-6; ticks.push(<div key={t.toFixed(3)} class={`tick ${isMajor ? 'major' : ''}`} style={{ left: t * z }}>{isMajor && <span>{fmtRuler(t, major)}</span>}</div>); }
-  return <div class="ruler" style={{ width }} onPointerDown={onPointerDown}>{ticks}{project.value.markers.map((m, i) => <div key={i} class="marker" style={{ left: m.t * z }} data-tip={m.label || 'Marker'} />)}</div>;
+  return <div class="ruler" style={{ width }} onPointerDown={onPointerDown}>{ticks}{project.value.markers.map((m, i) => <div key={i} class="marker" style={{ left: m.t * z }} data-tip={(m.label || 'Marker') + ' · right-click to rename or delete'} onPointerDown={e => e.button === 2 && e.stopPropagation()} onContextMenu={e => markerMenu(e, i)} />)}</div>;
+}
+// Project markers: right-click on the ruler to jump to, rename or delete one.
+function markerMenu(e, i) {
+  e.preventDefault(); e.stopPropagation();
+  const m = project.value.markers[i]; if (!m) return;
+  openMenu(e, [
+    { label: (m.label || 'Marker') + ' · ' + timecode(m.t, fpsOf(project.value)) },
+    { text: 'Go to marker', onClick: () => player.current?.seek(m.t) },
+    { text: 'Rename…', icon: Pencil, onClick: async () => { const v = await prompt({ title: 'Rename marker', label: 'Marker name', value: m.label || '' }); if (v !== null && v !== undefined) commit('Rename marker', d => { if (d.markers[i]) d.markers[i].label = v.trim(); }); } },
+    { divider: true },
+    { text: 'Delete marker', icon: Trash2, danger: true, onClick: () => commit('Delete marker', d => { d.markers.splice(i, 1); }) },
+  ]);
 }
 const fmtRuler = (t, step) => { const m = Math.floor(t / 60), s = t % 60; if (step < 1) return `${m}:${s.toFixed(step < 0.1 ? 2 : 1).padStart(step < 0.1 ? 5 : 4, '0')}`; return `${m}:${String(Math.round(s)).padStart(2, '0')}`; };
 
@@ -147,22 +167,22 @@ function TrackRow({ t, z, width }) {
   const menu = e => openMenu(e, [
     { text: 'Rename…', icon: Pencil, onClick: async () => { const n = await prompt({ title: 'Rename track', label: 'Track name', value: t.name }); if (n?.trim()) setTrack(t.id, { name: n.trim() }, 'Rename track'); } },
     t.kind !== 'audio' && { text: t.hidden ? 'Show track' : 'Hide track', icon: t.hidden ? Eye : EyeOff, onClick: () => setTrack(t.id, { hidden: !t.hidden }, 'Toggle visibility') },
-    (t.kind === 'video' || t.kind === 'audio') && { text: t.muted ? 'Unmute track' : 'Mute track', icon: t.muted ? Volume2 : VolumeX, onClick: () => setTrack(t.id, { muted: !t.muted }, 'Toggle mute') },
+    (trackHasSound(p, t) || t.muted) && { text: t.muted ? 'Unmute track' : 'Mute track', icon: t.muted ? Volume2 : VolumeX, onClick: () => setTrack(t.id, { muted: !t.muted }, 'Toggle mute') },
     { text: t.locked ? 'Unlock track' : 'Lock track', icon: t.locked ? LockOpen : Lock, onClick: () => setTrack(t.id, { locked: !t.locked }, 'Toggle lock') },
-    !t.main && { text: 'Close gaps', onClick: () => closeGaps(t.id) },
+    !t.locked && !t.captions && !(t.main && p.settings.magnetic) && { text: 'Close gaps on this track', icon: FoldHorizontal, onClick: () => closeAllGaps({ trackIds: [t.id] }) },
     { text: 'Select all on track', onClick: () => (selection.value = clips.map(c => c.id)) },
     t.kind === 'audio' && { text: t.voice ? 'Unmark as voice track' : 'Mark as voice track (for ducking)', icon: Mic, onClick: () => setTrack(t.id, { voice: !t.voice }, 'Voice track') },
     { divider: true },
     !t.main && { text: 'Delete track', icon: Trash2, danger: true, onClick: () => removeTrack(t.id) },
   ]);
   return <div class={`track-row k-${t.kind} ${t.main ? 'main' : ''} ${t.hidden ? 'is-hidden' : ''} ${t.locked ? 'is-locked' : ''}`} style={{ height: trackH(t), width: width + HEADER_W }} data-track={t.id}>
-    <div class="track-head" onContextMenu={menu}>
+    <div class={`track-head ${t.main ? 'fixed' : ''}`} onContextMenu={menu} onPointerDown={e => headDown(e, t)} data-tip={t.main ? 'Main track — the base picture layer. Overlays and text sit above it, audio below.' : t.kind === 'audio' ? 'Drag to reorder audio tracks' : 'Drag to reorder — higher tracks are drawn on top'}>
       <span class={`th-icon k-${t.kind}`}><Icon size={13} /></span>
       <span class="th-name ellipsis" title={t.name}>{t.main ? 'Main' : t.name}</span>
       <div class="th-btns">
-        {t.kind !== 'audio' && <button class={`icon-btn sm ${t.hidden ? 'on' : ''}`} data-tip={t.hidden ? 'Show' : 'Hide'} onClick={() => setTrack(t.id, { hidden: !t.hidden }, 'Toggle visibility')}>{t.hidden ? <EyeOff size={13} /> : <Eye size={13} />}</button>}
-        {(t.kind === 'video' || t.kind === 'audio') && <button class={`icon-btn sm ${t.muted ? 'on' : ''}`} data-tip={t.muted ? 'Unmute' : 'Mute'} onClick={() => setTrack(t.id, { muted: !t.muted }, 'Toggle mute')}>{t.muted ? <VolumeX size={13} /> : <Volume2 size={13} />}</button>}
-        <button class={`icon-btn sm ${t.locked ? 'on' : ''}`} data-tip={t.locked ? 'Unlock' : 'Lock'} onClick={() => setTrack(t.id, { locked: !t.locked }, 'Toggle lock')}>{t.locked ? <Lock size={13} /> : <LockOpen size={13} />}</button>
+        {t.kind !== 'audio' && <button class={`icon-btn sm ${t.hidden ? 'on' : ''}`} data-tip={t.hidden ? 'Show track' : 'Hide track'} aria-label={t.hidden ? 'Show track' : 'Hide track'} aria-pressed={!!t.hidden} onClick={() => setTrack(t.id, { hidden: !t.hidden }, 'Toggle visibility')}>{t.hidden ? <EyeOff size={13} /> : <Eye size={13} />}</button>}
+        {(trackHasSound(p, t) || t.muted) && <button class={`icon-btn sm ${t.muted ? 'on' : ''}`} data-tip={t.muted ? 'Unmute track' : 'Mute track'} aria-label={t.muted ? 'Unmute track' : 'Mute track'} aria-pressed={!!t.muted} onClick={() => setTrack(t.id, { muted: !t.muted }, 'Toggle mute')}>{t.muted ? <VolumeX size={13} /> : <Volume2 size={13} />}</button>}
+        <button class={`icon-btn sm ${t.locked ? 'on' : ''}`} data-tip={t.locked ? 'Unlock track' : 'Lock track'} aria-label={t.locked ? 'Unlock track' : 'Lock track'} aria-pressed={!!t.locked} onClick={() => setTrack(t.id, { locked: !t.locked }, 'Toggle lock')}>{t.locked ? <Lock size={13} /> : <LockOpen size={13} />}</button>
       </div>
     </div>
     <div class="track-lane" style={{ width }}>{clips.map(c => <Clip key={c.id} c={c} t={t} z={z} />)}<Gaps t={t} z={z} /></div>
@@ -171,11 +191,11 @@ function TrackRow({ t, z, width }) {
 
 // Empty space between clips: shown subtly so accidental gaps are easy to spot; right-click or double-click closes one.
 function Gaps({ t, z }) {
-  const p = project.value; if (t.hidden || (t.main && p.settings.magnetic)) return null;
+  const p = project.value; if (t.hidden || t.locked || t.captions || (t.main && p.settings.magnetic)) return null;
   const min = 1 / fpsOf(p) - 1e-6;
   return trackGaps(p, t.id, min).filter(g => (g.end - g.start) * z >= 3 && (g.start > 0 || t.main)).map(g => <div key={g.start} class="gap" style={{ left: g.start * z, width: (g.end - g.start) * z }}
     data-tip={`Gap · ${durText(g.end - g.start, fpsOf(p))} — double-click to close`} onDblClick={e => { e.stopPropagation(); closeGap(t.id, (g.start + g.end) / 2); }}
-    onContextMenu={e => openMenu(e, [{ text: 'Close gap', onClick: () => closeGap(t.id, (g.start + g.end) / 2) }, { text: 'Close all gaps on track', onClick: () => closeGaps(t.id) }])} />);
+    onContextMenu={e => openMenu(e, [{ text: 'Close gap', onClick: () => closeGap(t.id, (g.start + g.end) / 2) }, { text: 'Close all gaps on this track', onClick: () => closeAllGaps({ trackIds: [t.id] }) }])} />);
 }
 
 // Volume envelope: drag points to shape the level, double-click the line to add one, double-click a point to remove it.
@@ -225,19 +245,21 @@ function Clip({ c, t, z }) {
   const a = c.mediaId ? asset(c.mediaId) : null;
   const left = start * z, w = Math.max(2, dur * z);
   const p = project.value;
-  const partner = c.kind !== 'audio' && transitionPartner(p, c);
+  const partner = c.kind !== 'audio' && c.kind !== 'adjust' && transitionPartner(p, c);
+  // The edge another clip is snapping to glows, so you can see exactly which cut it lines up with.
+  const sn = snapLine.value, snapSide = sn && !sn.near && sn.clipId === c.id ? (Math.abs(sn.t - c.start) < 1e-6 ? 'snap-l' : Math.abs(sn.t - clipEnd(c)) < 1e-6 ? 'snap-r' : '') : '';
   const label = c.kind === 'text' ? c.text : c.kind === 'sticker' ? (c.sticker?.type === 'emoji' ? c.sticker.value : c.name || 'Sticker') : c.kind === 'adjust' ? [c.filter?.id && filterDef(c.filter.id)?.name, ...(c.effects || []).map(e => effectDef(e.id)?.name)].filter(Boolean).join(' + ') || c.name : c.name || a?.name || 'Clip';
-  return <div class={`clip k-${c.kind} ${c.caption ? 'caption' : ''} ${sel ? 'sel' : ''} ${a?.missing ? 'missing' : ''} ${c.muted ? 'muted' : ''} ${d?.ids.includes(c.id) ? 'dragging' : ''} ${d?.copy && d.ids.includes(c.id) ? 'copying' : ''} ${c.locked ? 'locked' : ''}`}
+  return <div class={`clip k-${c.kind} ${c.caption ? 'caption' : ''} ${sel ? 'sel' : ''} ${a?.missing ? 'missing' : ''} ${c.muted ? 'muted' : ''} ${d?.ids.includes(c.id) ? 'dragging' : ''} ${d?.copy && d.ids.includes(c.id) ? 'copying' : ''} ${c.locked ? 'locked' : ''} ${snapSide}`}
     style={{ transform: `translate(${left}px, ${shiftY}px)`, width: w }} data-clip={c.id}
     onPointerDown={e => clipDown(e, c, t, z)} onPointerMove={e => { if (ui.value.blade) bladeLine.value = bladeTimeAt(e, z); }} onPointerLeave={() => { if (ui.value.blade) { bladeLine.value = null; snapLine.value = null; bladePrev = null; } }} onContextMenu={e => clipMenu(e, c, t, bladeTimeAt(e, z))} onDblClick={() => { if (c.kind === 'text') setTimeout(() => document.querySelector('.insp-text textarea')?.focus(), 30); }}>
     {(c.kind === 'video' || c.kind === 'image') && a && <Filmstrip c={c} a={a} start={start} w={w} z={z} h={trackH(t) - 18} />}
     {(c.kind === 'audio' || (c.kind === 'video' && t.main)) && a?.audio && !c.muted && <Wave c={c} a={a} start={start} w={w} z={z} tall={c.kind === 'audio'} h={trackH(t)} />}
-    {((c.kind === 'audio') || (c.kind === 'video' && a?.audio)) && !c.muted && (sel || c.volumeKeys?.length > 0) && <Envelope c={c} w={w} z={z} sel={sel} />}
+    {hasSound(c) && !c.muted && (sel || c.volumeKeys?.length > 0) && <Envelope c={c} w={w} z={z} sel={sel} />}
     <div class="clip-label">
       {c.speed && c.speed !== 1 && <span class="badge"><Gauge size={10} />{+c.speed.toFixed(2)}×</span>}
       {c.locked && <Lock size={10} />}
       {c.muted && <VolumeX size={11} />}
-      {c.detachedAudio && ui.value.linked && <Link2 size={10} />}
+      {ui.value.linked && (c.detachedAudio || c.kind === 'audio') && partnerOf(p, c) && <span data-tip={c.kind === 'audio' ? 'Linked to its video — moves, trims, splits with it' : 'Sound separated — linked audio moves, trims and splits with this clip'}><Link2 size={10} /></span>}
       {c.filter?.id && c.kind !== 'adjust' && <span class="badge">{filterDef(c.filter.id)?.name || 'LUT'}</span>}
       {c.effects?.length > 0 && c.kind !== 'adjust' && <Sparkles size={10} />}
       {c.takes?.length > 1 && <span class="badge" data-tip="Recording takes">{(c.takes.findIndex(k => k.mediaId === c.mediaId) + 1) || 1}/{c.takes.length} takes</span>}
@@ -314,8 +336,15 @@ const fpsOf = p => p.settings.fps || 30;
 const durText = (d, fps) => timecode(Math.max(0, d), fps).slice(3);
 function snapDelta(p, candidates, exclude, z, alt, prev) {
   if (!p.settings.snapping || alt) { snapLine.value = null; return null; }
-  const hit = snapEdges(candidates, timelineTargets(p, { exclude, playhead: time.value }), ui.value.snapPx / z, prev);
-  snapLine.value = hit ? { t: hit.target.t, kind: hit.target.kind } : null;
+  const targets = timelineTargets(p, { exclude, playhead: time.value }), th = ui.value.snapPx / z;
+  const hit = snapEdges(candidates, targets, th, prev);
+  if (hit) snapLine.value = { t: hit.target.t, kind: hit.target.kind, clipId: hit.target.clipId };
+  else {
+    // Not snapped yet but close: a faint guide shows which cut is about to catch the edge.
+    let near = null;
+    for (const c of candidates) for (const x of targets) { const d = Math.abs(x.t - c); if (d <= th * 3 && (!near || d < near.d)) near = { d, x }; }
+    snapLine.value = near ? { t: near.x.t, kind: near.x.kind, clipId: near.x.clipId, near: true } : null;
+  }
   return hit;
 }
 function trackAtY(clientY) { const rows = [...document.querySelectorAll('.track-row')]; for (const r of rows) { const b = r.getBoundingClientRect(); if (clientY >= b.top && clientY < b.bottom) return { id: r.dataset.track, el: r, rect: b }; } return null; }
@@ -331,7 +360,65 @@ function withPartners(p, ids, alignedEdge) {
   }
   return [...out];
 }
-const endDragUi = () => { drag.value = null; snapLine.value = null; readout.value = null; };
+const endDragUi = () => { drag.value = null; snapLine.value = null; readout.value = null; insertLine.value = null; };
+
+// Track rows on screen, top to bottom, with their index in p.tracks.
+const trackRows = (sc, p) => [...sc.querySelectorAll('.track-row[data-track]')].map(el => ({ id: el.dataset.track, el, rect: el.getBoundingClientRect(), index: p.tracks.findIndex(t => t.id === el.dataset.track) })).filter(r => r.index >= 0);
+const boundaryIndex = (p, rows, i) => (i < rows.length ? rows[i].index : p.tracks.length);
+// Screen y of the boundary before p.tracks[index] (the bottom of the last row past the end).
+const boundaryY = (rows, index) => { const r = rows.find(x => x.index >= index); return r ? r.rect.top : rows.at(-1).rect.bottom; };
+const yInContent = (sc, clientY) => clientY - sc.getBoundingClientRect().top + sc.scrollTop;
+
+// Where a clip dragged up or down should go. Over a track that takes this kind of clip: that track. Over
+// the seam between two tracks, over a track of another kind, or above/below every track: a new track of
+// the right kind opens there (shown by the insert line). Caption clips stay on their caption track.
+function verticalTarget(ev, p, c, t, el, ids) {
+  if (c.caption) return null;
+  const sc = el.closest('.tl-scroll'), sr = sc.getBoundingClientRect();
+  if (ev.clientX < sr.left || ev.clientX > sr.right || ev.clientY < sr.top || ev.clientY > sr.bottom) return null;
+  const rows = trackRows(sc, p), own = rows.find(r => r.id === t.id); if (!own) return null;
+  const kind = trackKindFor(c.kind), y = ev.clientY, EDGE = 7;
+  // Taking the only clip(s) off a track and opening a new track right beside it would change nothing.
+  const alone = !t.main && p.clips.every(k => k.trackId !== t.id || ids.includes(k.id));
+  // i: a boundary between on-screen rows. It is moved to the nearest place this kind of track may go
+  // (picture above Main, sound below it), and the line is drawn where the track will really open.
+  const insert = i => {
+    const at = clampTrackIndex(p, kind, boundaryIndex(p, rows, i));
+    if (alone && (at === own.index || at === own.index + 1)) return null;
+    const by = boundaryY(rows, at);
+    return { insertAt: at, dy: by - own.rect.top - own.rect.height / 2, lineY: yInContent(sc, by) };
+  };
+  if (y < rows[0].rect.top) return insert(0);
+  if (y >= rows.at(-1).rect.bottom) return insert(rows.length);
+  const i = rows.findIndex(r => y >= r.rect.top && y < r.rect.bottom); if (i < 0) return null;
+  const r = rows[i], tr = trackOf(p, r.id);
+  const nearEdge = y - r.rect.top < EDGE || r.rect.bottom - y <= EDGE;
+  if (r.id === t.id) return null;
+  if (tr && tr.kind === kind && !tr.locked && !tr.captions && !nearEdge) return { target: tr.id, dy: r.rect.top - own.rect.top };
+  return insert(y < r.rect.top + r.rect.height / 2 ? i : i + 1);
+}
+
+// Drag a track's header up or down to restack it.
+function headDown(e, t) {
+  if (e.button !== 0 || e.target.closest('button') || t.main) return; // Main is the fixed base layer
+  const sc = e.currentTarget.closest('.tl-scroll'), row = e.currentTarget.closest('.track-row');
+  let at = null;
+  const stop = () => { insertLine.value = null; row.classList.remove('reordering'); };
+  beginDrag(e, {
+    threshold: 4, cursor: 'grabbing',
+    move: ev => {
+      const p = project.value, rows = trackRows(sc, p), sr = sc.getBoundingClientRect();
+      if (ev.clientY < sr.top + 34) sc.scrollTop -= 10; else if (ev.clientY > sr.bottom - 20) sc.scrollTop += 10;
+      let i = rows.findIndex(r => ev.clientY < r.rect.top + r.rect.height / 2); if (i < 0) i = rows.length;
+      const own = p.tracks.findIndex(x => x.id === t.id); row.classList.add('reordering');
+      const want = clampTrackIndex(p, t.kind, boundaryIndex(p, rows, i));
+      if (want === own || want === own + 1) { at = null; insertLine.value = null; return; }
+      at = want; insertLine.value = { y: yInContent(sc, boundaryY(rows, want)) };
+    },
+    cancel: stop,
+    end: () => { stop(); if (at !== null) commit('Reorder tracks', d => moveTrack(d, t.id, at)); },
+  });
+}
 
 // Time under the pointer inside a clip lane, frame-exact. With snapping on (Alt bypasses) the blade pulls to
 // anything worth cutting at: edges of clips on every other track (cut video to the end of the music, a
@@ -377,12 +464,10 @@ function clipDown(e, c, t, z) {
       const hit = snapDelta(p, edges.map(x => x + raw), toggle ? new Set() : new Set(ids), z, ev.altKey, prev); prev = hit;
       let dt = hit ? hit.target.t - edges[hit.edge] : toFrame(first + raw, fps) - first;
       if (first + dt < 0) { dt = -first; snapLine.value = null; }
-      const over = trackAtY(ev.clientY); const target = over && trackOf(p, over.id);
-      const okTrack = target && target.kind === t.kind && !target.locked && base.length === 1;
-      const dy = okTrack ? over.rect.top - el.closest('.track-row').getBoundingClientRect().top : 0;
-      // Dropping in the timeline's empty space above/below the tracks makes a new track; outside the timeline it doesn't.
-      const sr = el.closest('.tl-scroll').getBoundingClientRect(), inside = ev.clientX >= sr.left && ev.clientX <= sr.right && ev.clientY >= sr.top && ev.clientY <= sr.bottom;
-      drag.value = { mode: 'move', ids, dt, dy, dyId: c.id, copy: toggle, target: okTrack ? target.id : null, newTrack: !over && inside && base.length === 1 ? (ev.clientY < sr.top + 60 ? 'top' : 'bottom') : null };
+      // Up/down: onto another track, or into a new track between tracks (one clip at a time).
+      const v = base.length === 1 ? verticalTarget(ev, p, c, t, el, ids) : null;
+      insertLine.value = v?.lineY !== undefined ? { y: v.lineY } : null;
+      drag.value = { mode: 'move', ids, dt, dy: v?.dy || 0, dyId: c.id, copy: toggle, target: v?.target || null, insertAt: v?.insertAt ?? null };
       readout.value = { t: c.start + dt, text: `${timecode(c.start + dt, fps)}  ${dt >= 0 ? '+' : '−'}${durText(Math.abs(dt), fps)}${toggle ? '  copy' : ''}` };
     },
     cancel: endDragUi,
@@ -398,7 +483,8 @@ function clipDown(e, c, t, z) {
           work = ids.map(id => map.get(id)); out = work.filter((_, i) => base.includes(ids[i]));
         }
         const lead = work[ids.indexOf(c.id)];
-        if (d.newTrack) { const tr = addTrack(pp, t.kind === 'video' && t.main ? 'video' : t.kind); d.target = tr.id; }
+        const from = d.copy ? [] : work.map(id => pp.clips.find(k => k.id === id).trackId);
+        if (d.insertAt !== null) d.target = insertTrack(pp, trackKindFor(c.kind), d.insertAt).id;
         const before = new Map(work.map(id => [id, pp.clips.find(k => k.id === id).start]));
         const main = mainTrack(pp);
         for (const id of work) {
@@ -415,7 +501,9 @@ function clipDown(e, c, t, z) {
           const bad = work.some(id => { const x = pp.clips.find(k => k.id === id); return x.trackId === main.id && pp.clips.some(o => o.id !== x.id && o.trackId === main.id && o.start < clipEnd(x) - 1e-4 && clipEnd(o) > x.start + 1e-4); });
           if (bad) { toast('Clips on the main track can’t overlap. Drop it in a gap, or turn on Gapless main.', 'warn'); return false; }
         }
-        for (const id of work) { const x = pp.clips.find(k => k.id === id); const tr = trackOf(pp, x.trackId); if (!tr.main && overlaps(pp, x.trackId, x.start, clipEnd(x), keep)) x.trackId = freeTrack(pp, tr.kind, x.start, clipEnd(x), { ignore: keep }).id; }
+        // Every moved clip already has its final time, so each only ignores itself: two clips from the same drag
+        // (or a copy and its original) can never end up on top of each other.
+        for (const id of work) { const x = pp.clips.find(k => k.id === id); const tr = trackOf(pp, x.trackId); const self = new Set([x.id]); if (!tr.main && overlaps(pp, x.trackId, x.start, clipEnd(x), self)) x.trackId = freeTrack(pp, tr.kind, x.start, clipEnd(x), { ignore: self }).id; }
         // magnetic main track: order by new start, then pack
         const mains = pp.clips.filter(k => k.trackId === main.id).sort((a2, b2) => a2.start - b2.start); let tt = 0; if (pp.settings.magnetic) for (const k of mains) { k.start = tt; tt += k.duration; }
         // Linked halves keep their offset to the half on the (packed) main track.
@@ -426,9 +514,11 @@ function clipDown(e, c, t, z) {
           const tr = trackOf(pp, o.trackId); if (!tr.main && overlaps(pp, o.trackId, o.start, clipEnd(o), new Set([o.id]))) o.trackId = freeTrack(pp, tr.kind, o.start, clipEnd(o), { ignore: new Set([o.id]) }).id;
         }
         for (const k of pp.clips) if (k.transition && !transitionPartner(pp, k)) k.transition = null;
-        pp.tracks = pp.tracks.filter(tr => tr.main || tr.captions || pp.clips.some(k => k.trackId === tr.id) || !tr.autoRemove);
+        // Tracks this move left empty close up (CapCut-style); main, caption and locked tracks stay.
+        pruneTracks(pp, from);
       });
-      if (out) selection.value = out;
+      // Only select the copies if the edit went through (a refused drop creates nothing).
+      if (out) { const live = out.filter(id => project.value.clips.some(k => k.id === id)); if (live.length) selection.value = live; }
     },
   });
 }
@@ -443,14 +533,18 @@ function edgeDown(e, c, edge, z) {
   let base = selection.value.filter(id => movable(p, id));
   if (!base.includes(c.id)) base = [c.id];
   const ids = withPartners(p, base, edge), clips = ids.map(id => p.clips.find(k => k.id === id));
-  const lim = new Map(clips.map(x => [x.id, trimLimits(x)]));
+  const lim = new Map(clips.map(x => [x.id, trimLimits(x, undefined, { ripple: ui.value.ripple })]));
   const e0 = edge === 'start' ? c.start : clipEnd(c);
   const r0 = e.currentTarget.closest('.track-lane').getBoundingClientRect();
+  // The playhead never moves while trimming: the edge timecode and length show in the readout instead.
+  // Playback pauses for the drag and carries on afterwards.
+  const wasPlaying = playing.value; let paused = false;
+  const restore = () => { if (paused && wasPlaying) player.current?.play(); };
   let prev = null;
   beginDrag(e, {
     threshold: 2, cursor: 'ew-resize',
     move: ev => {
-      player.current?.pause();
+      if (!paused) { player.current?.pause(); paused = true; }
       const raw = (ev.clientX - r0.left) / z;
       const hit = snapDelta(p, [raw], new Set(ids), z, ev.altKey, prev); prev = hit;
       let dt = (hit ? hit.target.t : toFrame(raw, fps)) - e0;
@@ -463,12 +557,12 @@ function edgeDown(e, c, edge, z) {
       const nt = exact ?? e0 + dt, dur = edge === 'start' ? clipEnd(c) - nt : nt - c.start;
       drag.value = { mode: 'trim', edge, ids, dt, exact, ripple: ui.value.ripple };
       readout.value = { t: nt, text: `${edge === 'start' ? 'In' : 'Out'} ${timecode(nt, fps)} · ${durText(dur, fps)}` };
-      player.current?.seek(edge === 'start' ? nt : Math.max(c.start, nt - 1 / fps));
     },
-    cancel: endDragUi,
+    cancel: () => { endDragUi(); restore(); },
     end: () => {
-      const d = drag.value; endDragUi(); if (!d || !d.dt) return;
-      trimClips(clips.map(x => ({ id: x.id, edge, t: x.id === c.id && d.exact !== null ? d.exact : (edge === 'start' ? x.start : clipEnd(x)) + d.dt })), { ripple: ui.value.ripple, key: null });
+      const d = drag.value; endDragUi();
+      if (d?.dt) trimClips(clips.map(x => ({ id: x.id, edge, t: x.id === c.id && d.exact !== null ? d.exact : (edge === 'start' ? x.start : clipEnd(x)) + d.dt })), { ripple: ui.value.ripple, key: null });
+      restore();
     },
   });
 }
@@ -514,19 +608,21 @@ function clipMenu(e, c, t, at = null) {
   const n = selection.value.length, p = project.value, partner = partnerOf(p, c);
   openMenu(e, [
     at !== null && at > c.start + 0.03 && at < clipEnd(c) - 0.03 && { text: 'Split here', icon: Slice, onClick: () => bladeCut(at, [c.id]) },
-    { text: 'Split at playhead', icon: Scissors, sc: 'Ctrl+B', onClick: () => splitAt() },
-    { text: 'Duplicate', icon: Copy, sc: 'Ctrl+D', onClick: () => duplicateClips() },
-    { text: 'Copy', sc: 'Ctrl+C', onClick: () => copyClips() }, { text: 'Cut', sc: 'Ctrl+X', onClick: () => cutClips() }, { text: 'Paste at playhead', sc: 'Ctrl+V', onClick: () => pasteClips() }, { text: 'Paste in place', sc: 'Ctrl+Shift+V', onClick: () => pasteClips(undefined, { inPlace: true }) },
+    { text: 'Split at playhead', icon: Scissors, sc: 'Ctrl+B', disabled: !(time.value > c.start + 0.03 && time.value < clipEnd(c) - 0.03), onClick: () => run('split') },
+    { text: 'Duplicate', icon: CopyPlus, sc: 'Ctrl+D', onClick: () => run('duplicate') },
+    { text: 'Copy', icon: Copy, sc: 'Ctrl+C', onClick: () => run('copy') }, { text: 'Cut', sc: 'Ctrl+X', onClick: () => run('cut') }, { text: 'Paste at playhead', sc: 'Ctrl+V', onClick: () => run('paste') }, { text: 'Paste in place', sc: 'Ctrl+Shift+V', onClick: () => run('paste-in-place') },
     { divider: true },
     c.kind === 'video' && asset(c.mediaId)?.audio && !c.detachedAudio && { text: 'Separate audio', icon: Unlink, onClick: () => detachAudio(c.id) },
-    partner && { text: 'Unlink audio and video', icon: Unlink, onClick: () => unlinkClip(c.id) },
-    (c.kind === 'video' || c.kind === 'audio') && { text: c.muted ? 'Unmute' : 'Mute', icon: c.muted ? Volume2 : VolumeX, sc: 'Ctrl+M', onClick: () => updateClip(c.id, x => { x.muted = !x.muted; }, { label: 'Mute' }) },
-    c.kind !== 'audio' && c.kind !== 'adjust' && transitionPartner(project.value, c) && { text: c.transition ? 'Remove transition' : 'Add transition', icon: Blend, onClick: () => c.transition ? updateClip(c.id, x => { x.transition = null; }, { label: 'Remove transition' }) : applyTransition('dissolve', c.id) },
-    { text: c.locked ? 'Unlock clip' : 'Lock clip', icon: c.locked ? LockOpen : Lock, onClick: () => updateClip(c.id, x => { x.locked = !x.locked; }, { label: c.locked ? 'Unlock clip' : 'Lock clip' }) },
+    partner && { text: 'Unlink audio and video', icon: Link2Off, onClick: () => unlinkClip(c.id) },
+    hasSound(c) && { text: c.muted ? 'Unmute' : 'Mute', icon: c.muted ? Volume2 : VolumeX, sc: 'Ctrl+M', onClick: () => run('mute') },
+    c.kind !== 'audio' && c.kind !== 'adjust' && transitionPartner(project.value, c) && { text: c.transition ? 'Remove transition' : 'Add transition', icon: Blend, onClick: () => c.transition ? removeTransition(c.id) : applyTransition('dissolve', c.id) },
+    { text: c.locked ? 'Unlock clip' : 'Lock clip', icon: c.locked ? LockOpen : Lock, sc: 'Ctrl+L', onClick: () => run('lock') },
     { divider: true },
-    { text: n > 1 ? `Delete ${n} clips` : 'Delete', icon: Trash2, sc: 'Del', danger: true, onClick: () => deleteClips(undefined, { ripple: ui.value.ripple && !t.main }) },
-    !t.main && { text: 'Delete and close gap', sc: 'Shift+Del', danger: true, onClick: () => deleteClips(undefined, { ripple: true }) },
+    { text: n > 1 ? `Delete ${n} clips` : 'Delete', icon: Trash2, sc: 'Delete', danger: true, onClick: () => run('delete') },
+    !(t.main && p.settings.magnetic) && { text: 'Delete and close gap', sc: 'Shift+Delete', danger: true, onClick: () => run('ripple-delete') },
   ]);
+  // Right-click works out a cut position for "Split here"; don't leave its snap guide on screen afterwards.
+  if (!ui.value.blade) { snapLine.value = null; bladePrev = null; }
 }
 
 // ---------- Drops from the asset panel ----------
@@ -547,7 +643,8 @@ function useDrop(sc, z) {
       e.preventDefault(); dropHint.value = null; const { t, track } = locate(e); const d = window.__fcDrag; window.__fcDrag = null;
       if (!d) {
         if (!e.dataTransfer.files.length) return;
-        try { const r = await importFiles([...e.dataTransfer.files]); const m = new Map(media.value); for (const a of r.assets) m.set(a.id, a); media.value = m; if (r.errors.length) toast(r.errors.map(x => `${x.name}: ${x.error}`).join('\n'), 'error'); addAssets(r.assets, { at: t, trackId: track?.id }); } catch (err) { toast(err.message, 'error'); }
+        const files = [...e.dataTransfer.files];
+        try { const r = await trackImport(files.length, () => importFiles(files)); rememberMedia(r.assets); if (r.errors.length) toast(r.errors.map(x => `${x.name}: ${x.error}`).join('\n'), 'error'); addAssets(r.assets, { at: t, trackId: track?.id }); } catch (err) { toast(err.message, 'error'); }
         return;
       }
       const p = project.value;
@@ -558,8 +655,10 @@ function useDrop(sc, z) {
         if (toMain) addAssets([a], { at: t }); else addAssets([a], { at: t, trackId: track?.kind === trackKindFor(a.kind === 'image' ? 'image' : a.kind) ? track.id : undefined, overlay: a.kind !== 'audio' });
       }
       if (d.type === 'text') addText({ style: d.style, at: t });
-      if (d.type === 'textTemplate') addTextTemplate(TEXT_TEMPLATES.find(x => x.id === d.id), t);
-      if (d.type === 'sticker') addSticker(d.sticker, { at: t });
+      if (d.type === 'textTemplate') addTextTemplate(d.tpl || TEXT_TEMPLATES.find(x => x.id === d.id), t);
+      const textClip = () => { const id = document.elementFromPoint(e.clientX, e.clientY)?.closest('.clip.k-text:not(.caption)')?.dataset.clip; return id && p.clips.find(c => c.id === id); };
+      if (d.type === 'sticker' && d.sticker?.type === 'emoji' && textClip()) appendToText(textClip().id, d.sticker.value); // emoji dropped on a text clip joins its text
+      else if (d.type === 'sticker') addSticker(d.sticker, { at: t });
       if (d.type === 'library') d.drop({ at: t, track });
       if (d.type === 'transition') { const target = p.clips.filter(c => c.kind !== 'audio' && (!track || c.trackId === track.id) && transitionPartner(p, c)).sort((a2, b2) => Math.abs(a2.start - t) - Math.abs(b2.start - t))[0]; applyTransition(d.id, target?.id); }
       const onClip = () => { const el = document.elementFromPoint(e.clientX, e.clientY)?.closest('.clip'); return el?.dataset.clip; };
@@ -572,16 +671,16 @@ function useDrop(sc, z) {
 function Toolbar() {
   const p = project.value, h = history.value, sel = selection.value.length > 0, z = zoom.value;
   return <div class="tl-toolbar">
-    <button class="icon-btn" data-tip="Undo" data-kbd="Ctrl+Z" disabled={!h.past.length} onClick={() => undo()}><Undo2 size={16} /></button>
-    <button class="icon-btn" data-tip="Redo" data-kbd="Ctrl+Y" disabled={!h.future.length} onClick={() => redo()}><Redo2 size={16} /></button>
+    <button class="icon-btn" data-tip="Undo" aria-label="Undo" data-kbd="Ctrl+Z" disabled={!h.past.length} onClick={() => run('undo')}><Undo2 size={16} /></button>
+    <button class="icon-btn" data-tip="Redo" aria-label="Redo" data-kbd="Ctrl+Y" disabled={!h.future.length} onClick={() => run('redo')}><Redo2 size={16} /></button>
     <span class="sep" />
     <button class="icon-btn" data-tip="Split at playhead" data-kbd="Ctrl+B" onClick={() => splitAt()}><Scissors size={16} /></button>
-    <button class={`icon-btn ${ui.value.blade ? 'on' : ''}`} aria-pressed={ui.value.blade} data-tip={ui.value.blade ? 'Blade on — click a clip to cut it there, Shift+click cuts every track. Press C or Esc to stop.' : 'Blade — click anywhere on a clip to cut it'} data-kbd="C" onClick={() => setUi({ blade: !ui.value.blade })}><Slice size={16} /></button>
-    <button class="icon-btn" data-tip="Trim start to playhead" data-kbd="Q" onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'q' }))}><ArrowLeftToLine size={16} /></button>
-    <button class="icon-btn" data-tip="Trim end to playhead" data-kbd="W" onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }))}><ArrowRightToLine size={16} /></button>
-    <button class="icon-btn" data-tip="Delete" data-kbd="Del" disabled={!sel} onClick={() => deleteClips()}><Trash2 size={16} /></button>
-    <button class="icon-btn" data-tip="Duplicate" data-kbd="Ctrl+D" disabled={!sel} onClick={() => duplicateClips()}><Copy size={16} /></button>
-    <button class="icon-btn" data-tip="Add marker at playhead" data-kbd="" onClick={() => commit('Add marker', d => { d.markers.push({ t: time.value, label: '' }); d.markers.sort((a, b) => a.t - b.t); })}><Diamond size={15} /></button>
+    <button class={`icon-btn ${ui.value.blade ? 'on' : ''}`} aria-pressed={ui.value.blade} data-tip={ui.value.blade ? 'Blade on — click a clip to cut it there, Shift+click cuts every track. Press C or Esc to stop.' : 'Blade — click anywhere on a clip to cut it'} aria-label="Blade tool" data-kbd="C" onClick={() => run('blade')}><Slice size={16} /></button>
+    <button class="icon-btn" data-tip="Trim start to playhead" aria-label="Trim start to playhead" data-kbd="Q" onClick={() => run('trim-start')}><ArrowLeftToLine size={16} /></button>
+    <button class="icon-btn" data-tip="Trim end to playhead" aria-label="Trim end to playhead" data-kbd="W" onClick={() => run('trim-end')}><ArrowRightToLine size={16} /></button>
+    <button class="icon-btn" data-tip="Delete" aria-label="Delete" data-kbd="Delete" disabled={!(sel || transitionSel.value || keySel.value.length)} onClick={() => run('delete')}><Trash2 size={16} /></button>
+    <button class="icon-btn" data-tip="Duplicate" aria-label="Duplicate" data-kbd="Ctrl+D" disabled={!sel} onClick={() => run('duplicate')}><CopyPlus size={16} /></button>
+    <button class="icon-btn" data-tip="Add marker at playhead — right-click a marker on the ruler to rename or delete it" aria-label="Add marker" onClick={() => commit('Add marker', d => { if (d.markers.some(m => Math.abs(m.t - time.value) < 1 / fpsOf(d))) return false; d.markers.push({ t: time.value, label: '' }); d.markers.sort((a, b) => a.t - b.t); })}><Diamond size={15} /></button>
     <button class="icon-btn" data-tip="Record voiceover" onClick={openStudio}><Mic size={16} /></button>
     <div class="grow" />
     <span class="tl-gaps"><button class="tl-toggle" data-tip="Close every gap on every track (captions and locked tracks stay put). Ctrl+Z undoes it." data-kbd="Alt+G" onClick={() => closeAllGaps()}><FoldHorizontal size={14} />Close gaps</button><button class="tl-toggle tl-more" aria-label="Close gaps options" onClick={e => openMenu(e, [{ text: 'Close gaps on all tracks', onClick: () => closeAllGaps() }, { text: 'Close gaps on the main track', onClick: () => closeAllGaps({ trackIds: [mainTrack(p).id] }) }, { text: 'Close gaps on the selected clips’ tracks', disabled: !sel, onClick: () => closeAllGaps({ trackIds: [...new Set(p.clips.filter(c => selection.value.includes(c.id)).map(c => c.trackId))] }) }], { align: 'below' })}><ChevronDown size={12} /></button></span>
@@ -589,10 +688,10 @@ function Toolbar() {
     <button class={`tl-toggle ${p.settings.snapping ? 'on' : ''}`} aria-pressed={!!p.settings.snapping} data-tip={`Snap ${p.settings.snapping ? 'on' : 'off'} — while dragging, clip edges stick to other edges, the playhead and markers. Hold Alt to bypass.`} data-kbd="N" onClick={() => commit('Toggle snapping', d => { d.settings.snapping = !d.settings.snapping; })}><Magnet size={14} />Snap</button>
     <button class={`tl-toggle ${p.settings.magnetic ? 'on' : ''}`} aria-pressed={!!p.settings.magnetic} data-tip={`Gapless main track ${p.settings.magnetic ? 'on' : 'off'} — clips on the Main track always sit end to end; removing one pulls the rest left.`} onClick={() => commit('Toggle gapless main track', d => { d.settings.magnetic = !d.settings.magnetic; })}><GalleryHorizontalEnd size={14} />Gapless main</button>
     <span class="sep" />
-    <button class={`icon-btn ${ui.value.ripple ? 'on' : ''}`} aria-pressed={ui.value.ripple} data-tip={`Ripple edits ${ui.value.ripple ? 'on' : 'off'} — trimming and deleting closes or opens space on other tracks too`} onClick={() => setUi({ ripple: !ui.value.ripple })}><ArrowLeftRight size={16} /></button>
-    <button class={`icon-btn ${ui.value.linked ? 'on' : ''}`} aria-pressed={ui.value.linked} data-tip={`Linked audio/video ${ui.value.linked ? 'on' : 'off'} — separated audio moves and trims with its video`} onClick={() => setUi({ linked: !ui.value.linked })}><Link2 size={16} /></button>
+    <button class={`icon-btn ${ui.value.ripple ? 'on' : ''}`} aria-pressed={ui.value.ripple} data-tip={`Ripple edits ${ui.value.ripple ? 'on' : 'off'} — trimming or deleting a clip closes or opens space after it on the same track`} aria-label="Ripple edits" onClick={() => setUi({ ripple: !ui.value.ripple })}><ArrowLeftRight size={16} /></button>
+    <button class={`icon-btn ${ui.value.linked ? 'on' : ''}`} aria-pressed={ui.value.linked} data-tip={`Linked audio/video ${ui.value.linked ? 'on' : 'off'} — separated audio moves, trims, splits and deletes with its video. Off: edit them independently.`} onClick={() => setUi({ linked: !ui.value.linked })}><Link2 size={16} /></button>
     <span class="sep" />
-    <button class="icon-btn" data-tip="Zoom out" data-kbd="−" onClick={() => zoomAround(1 / 1.4)}><ZoomOut size={16} /></button>
+    <button class="icon-btn" data-tip="Zoom out" aria-label="Zoom out" data-kbd="-" onClick={() => zoomAround(1 / 1.4)}><ZoomOut size={16} /></button>
     <input type="range" class="zoom-range" min={Math.log(4)} max={Math.log(800)} step={0.01} value={Math.log(z)} style={{ '--fill': ((Math.log(z) - Math.log(4)) / (Math.log(800) - Math.log(4)) * 100) + '%' }} onInput={e => zoomAround(Math.exp(+e.target.value) / zoom.value)} aria-label="Timeline zoom" />
     <button class="icon-btn" data-tip="Zoom in" data-kbd="=" onClick={() => zoomAround(1.4)}><ZoomIn size={16} /></button>
     <button class="icon-btn" data-tip="Fit to window" data-kbd="F" onClick={fitTimeline}><Maximize size={15} /></button>

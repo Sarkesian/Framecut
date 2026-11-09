@@ -43,7 +43,9 @@ const shots = path.resolve('test-output');
     await check('split with Ctrl+B', async () => { await page.evaluate(() => window.__fc.state.player.current.seek(2)); await page.locator('.track-row.main .clip').first().click(); await page.keyboard.press('Control+b'); });
     await check('blade cut (toolbar button focused)', async () => { await page.locator('.tl-toolbar button[data-kbd="C"]').click(); const z = await page.evaluate(() => window.__fc.state.zoom.value); await page.locator('.track-row.main .clip').first().click({ position: { x: 1 * z, y: 20 } }); await page.keyboard.press('Escape'); });
     await check('Snap toggle (button focused)', () => page.locator('.tl-toggle', { hasText: 'Snap' }).click(), { focusIs: /button/ });
-    await check('track mute button', () => page.locator('.track-row.main button[data-tip*="ute"]').first().click());
+    // The test clips are silent, so the Main track offers no mute; audio tracks always do.
+    assert.equal(await page.locator('.track-row.main button[data-tip*="ute"]').count(), 0, 'a silent video track shows no mute button');
+    await check('track mute button', () => page.locator('.track-row.k-audio button[data-tip*="ute"]').first().click());
     await check('add text with T', async () => { await page.locator('body').click({ position: { x: 800, y: 900 } }); await page.keyboard.press('t'); });
     await check('emoji sticker click', async () => { await page.locator('.rail-btn', { hasText: 'Stickers' }).click(); await page.locator('.lib-tabs button', { hasText: 'Static' }).click(); await page.locator('.fchip', { hasText: 'Smileys' }).click(); await page.locator('.emoji').first().click(); });
     await check('library sticker dragged in while the search box has focus', async () => {

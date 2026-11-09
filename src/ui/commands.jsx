@@ -1,6 +1,6 @@
 // Central command registry: menu bar, keyboard shortcuts and the shortcut reference.
 import { Scissors, Copy, ClipboardPaste, Trash2, Undo2, Redo2, Type, Upload, Mic, Captions, ZoomIn, ZoomOut, Maximize, Settings, Keyboard, Download, FolderOpen, Plus, Save, ArrowLeft, Magnet, Sparkles, Film, Blend } from 'lucide-preact';
-import { project, selection, player, time, undo, redo, toast, saveNow, saveState, commit, zoom, libraryTab, duration, primary, history, menu, transitionSel } from '../lib/state.js';
+import { project, selection, player, time, undo, redo, toast, saveNow, saveState, commit, zoom, libraryTab, duration, primary, history, menu, transitionSel, rememberMedia, asset, importing } from '../lib/state.js';
 import { leaveProject, canSwitchProject } from './exitGuard.jsx';
 import { effect } from '@preact/signals';
 import { isDragging, stopDrag } from '../lib/drag.js';
@@ -18,7 +18,7 @@ import { ui, setUi } from '../lib/uiprefs.js';
 
 const fps = () => project.value?.settings.fps || 30;
 const seek = t => player.current?.seek(t);
-export async function importMedia(opts) { try { const r = await pickMedia(); if (!r) return; if (r.errors.length) toast(r.errors.map(e => `${e.name}: ${e.error}`).join('\n'), 'error'); if (r.assets.length) { commit('Import media', p => { for (const a of r.assets) if (!p.mediaIds.includes(a.id)) p.mediaIds.push(a.id); }); if (opts?.add) addAssets(r.assets); else toast(`${r.assets.length} file${r.assets.length > 1 ? 's' : ''} imported. Drag onto the timeline or press + to add.`); } } catch (e) { toast(e.message, 'error'); } }
+export async function importMedia(opts) { try { const r = await pickMedia({ onPicked: n => (importing.value += n), onDone: n => (importing.value = Math.max(0, importing.value - n)) }); if (!r) return; if (r.errors.length) toast(r.errors.map(e => `${e.name}: ${e.error}`).join('\n'), 'error'); if (r.assets.length) { rememberMedia(r.assets); commit('Import media', p => { for (const a of r.assets) if (!p.mediaIds.includes(a.id)) p.mediaIds.push(a.id); }); if (opts?.add) addAssets(r.assets); } } catch (e) { toast(e.message, 'error'); } }
 function cuts() { const p = project.value; const s = new Set([0]); for (const c of p.clips) { s.add(+c.start.toFixed(4)); s.add(+clipEnd(c).toFixed(4)); } return [...s].sort((a, b) => a - b); }
 // Zoom the timeline by k, keeping a point of interest still: the given time at the given x (pixels from the
 // lane's left edge), else the playhead when it is on screen, else the middle of the view.
@@ -44,7 +44,10 @@ const delSel = () => { if (transitionSel.value) return removeTransition(transiti
 const copySel = () => { if (keySel.value.length) { if (copyKeys()) toast(`Copied ${keySel.value.length} keyframe${keySel.value.length > 1 ? 's' : ''}.`); return; } if (copyClips()) { lastCopy.kind = 'clips'; toast('Copied.'); } };
 const pasteSel = () => { if (lastCopy.kind === 'keys' && pasteKeys()) return; pasteClips(); };
 function trimTo(edge) { const c = primary.value; if (!c) return toast('Select a clip first.', 'warn'); const t = time.value; if (t <= c.start || t >= clipEnd(c)) return toast('Put the playhead inside the selected clip.', 'warn'); trimClip(c.id, edge, t); if (edge === 'start' && mainTrack(project.value).id === c.trackId) seek(c.start); }
-function toggleMute() { const ids = selection.value; if (!ids.length) return toast('Select a clip to mute.', 'warn'); const p = project.value; const anyOn = p.clips.some(c => ids.includes(c.id) && !c.muted); updateClips(ids, c => { if ('muted' in c) c.muted = anyOn; }, { label: anyOn ? 'Mute' : 'Unmute' }); }
+// Only clips that make their own sound: a silent video has nothing to mute, and a video whose audio was
+// separated must stay muted (unmuting it would play the sound twice).
+const ownSound = c => c.kind === 'audio' || (c.kind === 'video' && !!asset(c.mediaId)?.audio && !c.detachedAudio);
+function toggleMute() { const sel = selection.value; if (!sel.length) return toast('Select a clip to mute.', 'warn'); const p = project.value; const ids = p.clips.filter(c => sel.includes(c.id) && ownSound(c)).map(c => c.id); if (!ids.length) return toast('The selected clip has no sound of its own.', 'warn'); const anyOn = p.clips.some(c => ids.includes(c.id) && !c.muted); updateClips(ids, c => { c.muted = anyOn; }, { label: anyOn ? 'Mute' : 'Unmute' }); }
 
 export const ACTIONS = [
   { id: 'play', label: 'Play / pause', keys: ['Space'], run: () => player.current?.toggle(), group: 'Playback' },
@@ -58,7 +61,7 @@ export const ACTIONS = [
   { id: 'nudge-down', label: 'Nudge down 10 px (viewer)', keys: ['Shift+ArrowDown'], run: () => viewerNudge(0, 10), group: 'Viewer' },
   { id: 'start', label: 'Go to start', keys: ['Home'], run: () => seek(0), group: 'Playback' },
   { id: 'end', label: 'Go to end', keys: ['End'], run: () => seek(duration.value), group: 'Playback' },
-  { id: 'shuttle-back', label: 'Play backwards / slower', keys: ['J'], run: () => { player.current?.pause(); seek(time.value - 0.5); }, group: 'Playback' },
+  { id: 'shuttle-back', label: 'Back half a second', keys: ['J'], run: () => { player.current?.pause(); seek(time.value - 0.5); }, group: 'Playback' },
   { id: 'shuttle-stop', label: 'Pause', keys: ['K'], run: () => player.current?.pause(), group: 'Playback' },
   { id: 'shuttle-fwd', label: 'Play faster (1×, 2×, 4×)', keys: ['L'], run: () => { const pl = player.current; if (!pl) return; if (!pl.playing) { pl.setRate(1); pl.play(); } else pl.setRate(Math.min(4, pl.rate * 2)); toast(`Playback ${pl.rate}×`); }, group: 'Playback' },
   { id: 'fullscreen', label: 'Full-screen preview', keys: ['Shift+F'], run: () => document.querySelector('.preview')?.requestFullscreen?.(), group: 'Playback' },
@@ -155,10 +158,10 @@ export function menus() {
   const item = (id, extra = {}) => ({ text: byId[id].label, sc: scOf(id), icon: byId[id].icon, onClick: byId[id].run, ...extra });
   const sel = () => selection.value.length > 0;
   return {
-    File: () => [item('new'), item('open', { text: 'Back to projects', icon: ArrowLeft }), { divider: true }, { text: 'Import media…', icon: Upload, sc: 'V', onClick: () => importMedia() }, { text: 'Save project as file…', onClick: saveAsFile }, { text: 'Project settings…', icon: Settings, onClick: openProjectSettings }, { divider: true }, item('save'), item('export'), { divider: true }, { text: 'Preferences…', onClick: openPreferences }],
-    Edit: () => [item('undo'), item('redo'), { divider: true }, item('cut', { disabled: !sel() }), item('copy', { disabled: !sel() }), item('paste'), item('duplicate', { disabled: !sel() }), item('delete', { disabled: !sel() }), item('ripple-delete', { disabled: !sel() }), { divider: true }, item('split'), item('blade'), item('close-gaps'), item('trim-start'), item('trim-end'), item('select-all')],
-    View: () => [item('zoom-in'), item('zoom-out'), item('zoom-fit'), { divider: true }, { text: 'Timeline snapping', checked: !!project.value?.settings.snapping, onClick: byId.snap.run, sc: 'N' }, { text: 'Viewer snapping', checked: !!ui.value.viewSnap, onClick: byId['view-snap'].run, sc: 'Shift+N' }, { text: 'Safe-area guides', checked: !!ui.value.safeArea, onClick: byId['safe-area'].run, sc: "'" }, { text: 'Magnetic main track', checked: !!project.value?.settings.magnetic, onClick: () => commit('Toggle magnetic track', p => { p.settings.magnetic = !p.settings.magnetic; }) }, { text: 'Ripple edits', checked: !!ui.value.ripple, onClick: () => setUi({ ripple: !ui.value.ripple }) }, { text: 'Linked audio/video', checked: !!ui.value.linked, onClick: () => setUi({ linked: !ui.value.linked }) }, { divider: true }, item('fullscreen')],
-    Insert: () => [item('add-text'), { text: 'Sticker', onClick: () => (libraryTab.value = 'stickers') }, item('add-transition'), { text: 'Captions…', icon: Captions, onClick: () => (libraryTab.value = 'captions') }, { text: 'Effects', icon: Sparkles, onClick: () => (libraryTab.value = 'effects') }, { text: 'Record voiceover…', icon: Mic, onClick: openStudio }, { divider: true }, item('add-video'), item('add-audio')],
+    File: () => [item('new'), item('open', { text: 'Back to projects', icon: ArrowLeft }), { divider: true }, item('add-video', { text: 'Import media…' }), { text: 'Save project as file…', onClick: saveAsFile }, { text: 'Project settings…', icon: Settings, onClick: openProjectSettings }, { divider: true }, item('save'), item('export'), { divider: true }, { text: 'Preferences…', onClick: openPreferences }],
+    Edit: () => [item('undo'), item('redo'), { divider: true }, item('cut', { disabled: !sel() }), item('copy', { disabled: !sel() }), item('paste'), item('duplicate', { disabled: !sel() }), item('delete', { disabled: !sel() && !transitionSel.value && !keySel.value.length }), item('ripple-delete', { disabled: !sel() }), { divider: true }, item('split'), item('blade'), item('close-gaps'), item('trim-start'), item('trim-end'), item('select-all')],
+    View: () => [item('zoom-in'), item('zoom-out'), item('zoom-fit'), { divider: true }, { text: 'Timeline snapping', checked: !!project.value?.settings.snapping, onClick: byId.snap.run, sc: 'N' }, { text: 'Viewer snapping', checked: !!ui.value.viewSnap, onClick: byId['view-snap'].run, sc: 'Shift+N' }, { text: 'Safe-area guides', checked: !!ui.value.safeArea, onClick: byId['safe-area'].run, sc: "'" }, { text: 'Gapless main track', checked: !!project.value?.settings.magnetic, onClick: () => commit('Toggle gapless main track', p => { p.settings.magnetic = !p.settings.magnetic; }) }, { text: 'Ripple edits', checked: !!ui.value.ripple, onClick: () => setUi({ ripple: !ui.value.ripple }) }, { text: 'Linked audio/video', checked: !!ui.value.linked, onClick: () => setUi({ linked: !ui.value.linked }) }, { divider: true }, item('fullscreen')],
+    Insert: () => [item('add-text'), item('add-sticker'), item('add-transition'), { text: 'Captions…', icon: Captions, onClick: () => (libraryTab.value = 'captions') }, { text: 'Effects', icon: Sparkles, onClick: () => (libraryTab.value = 'effects') }, { text: 'Record voiceover…', icon: Mic, onClick: openStudio }, { divider: true }, item('add-video'), item('add-audio')],
     Help: () => [item('shortcuts'), { text: 'Getting started', onClick: openHelp }],
   };
 }

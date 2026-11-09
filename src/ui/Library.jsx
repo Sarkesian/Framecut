@@ -393,7 +393,7 @@ function StaticStickers() {
   return <>
     <div class="filter-chips">{cats.map(c => <button key={c} class={`fchip ${cat === c ? 'on' : ''}`} onClick={() => setCat(c)}>{c}</button>)}</div>
     {cat === 'Shapes' ? <div class="tile-grid">{SHAPE_STICKERS.map(s => <button key={s.id} class="tile sticker-tile" data-tip={s.name} draggable onDragStart={e => { e.dataTransfer.setData('application/x-framecut', '{}'); window.__fcDrag = { type: 'sticker', sticker: { type: 'shape', value: s.id } }; }} onClick={() => addSticker({ type: 'shape', value: s.id, name: s.name })}><img src={svgUrl(s.svg)} alt={s.name} draggable={false} /></button>)}</div>
-      : <div class="emoji-grid">{EMOJI[cat].map(e => <button key={e} class="emoji" draggable onDragStart={ev => { ev.dataTransfer.setData('application/x-framecut', '{}'); window.__fcDrag = { type: 'sticker', sticker: { type: 'emoji', value: e } }; }} onClick={() => addSticker({ type: 'emoji', value: e })}>{e}</button>)}</div>}
+      : <div class="emoji-grid">{EMOJI[cat].map(e => <button key={e} class="emoji" draggable data-tip="Drag onto the video or the timeline, or into a text box to add it to the text" onDragStart={ev => { ev.dataTransfer.setData('application/x-framecut', '{}'); ev.dataTransfer.setData('text/plain', e); ev.dataTransfer.effectAllowed = 'copy'; window.__fcDrag = { type: 'sticker', sticker: { type: 'emoji', value: e } }; }} onClick={() => addSticker({ type: 'emoji', value: e })}>{e}</button>)}</div>}
     <p class="muted hint">Built-in shapes and your system’s emoji. Select one and open <b>Animation</b> to make it bounce, pulse or spin.</p>
   </>;
 }

@@ -34,11 +34,13 @@ export async function importFiles(files) {
   return res;
 }
 export async function importPaths(paths) { return api('/api/media/import', { paths }); }
-export async function pickMedia() {
-  if (native) { const paths = await native.openMedia(); return paths?.length ? importPaths(paths) : null; }
-  return new Promise(resolve => {
+// onPicked(n) / onDone(n): bracket the actual import (after the file dialog closes) for progress display.
+export async function pickMedia({ onPicked, onDone } = {}) {
+  const run = async (n, fn) => { onPicked?.(n); try { return await fn(); } finally { onDone?.(n); } };
+  if (native) { const paths = await native.openMedia(); return paths?.length ? run(paths.length, () => importPaths(paths)) : null; }
+  return new Promise((resolve, reject) => {
     const input = document.createElement('input'); input.type = 'file'; input.multiple = true; input.accept = 'video/*,audio/*,image/*,.mkv,.mov,.avi,.flv,.wmv';
-    input.onchange = () => resolve(input.files.length ? importFiles([...input.files]) : null); input.click();
+    input.onchange = () => (input.files.length ? run(input.files.length, () => importFiles([...input.files])) : Promise.resolve(null)).then(resolve, reject); input.click();
   });
 }
 export async function pickFile({ title, extensions, accept }) {

@@ -77,7 +77,7 @@ export function Home() {
         <section id="templates" class="home-section">
           <div class="section-title"><h2>Start from a template</h2><span class="muted">Ready-made looks, titles and caption styles</span></div>
           <div class="template-row">{PROJECT_TEMPLATES.map(t => <button key={t.id} class={`template-card tpl-${t.id}`} onClick={async () => { const p = projectFromTemplate(t); await createProject({ project: p }); }}>
-            <div class="template-art"><span class="ratio-shape light" style={ratioBox(t.ratio)} /><Sparkles size={14} class="tpl-spark" /></div>
+            <div class="template-art" style={t.swatch ? { background: t.swatch } : undefined}><span class="ratio-shape light" style={ratioBox(t.ratio)} /><Sparkles size={14} class="tpl-spark" /></div>
             <b>{t.name}</b><small>{t.hint}</small>
           </button>)}</div>
         </section>

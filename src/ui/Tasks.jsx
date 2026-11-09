@@ -5,7 +5,9 @@ import { api } from '../lib/api.js';
 import { openMenu } from './kit.jsx';
 
 export function TaskIndicator() {
-  const active = jobs.value.filter(j => ['queued', 'running'].includes(j.status));
+  // Only work that takes a while: a job that finishes within a second or two never flashes up here.
+  const now = Date.now();
+  const active = jobs.value.filter(j => ['queued', 'running'].includes(j.status) && now - (j.started || j.created || now) > 1500);
   if (!active.length) return null;
   const main = active.find(j => j.status === 'running') || active[0];
   const pct = Math.round((main.progress || 0) * 100);

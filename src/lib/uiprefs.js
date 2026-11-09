@@ -3,7 +3,7 @@
 import { signal, effect } from '@preact/signals';
 
 const KEY = 'fc:ui';
-const DEFAULTS = { viewSnap: true, safeArea: false, ripple: false, linked: true, zoom: 80, snapPx: 8, blade: false };
+const DEFAULTS = { viewSnap: true, safeArea: false, ripple: false, linked: true, zoom: 80, snapPx: 8, blade: false, social: 'none', trPad: 0.5 };
 let saved = {};
 try { saved = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch {}
 saved.blade = false; // the blade tool always starts off

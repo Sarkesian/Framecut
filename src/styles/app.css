@@ -94,3 +94,16 @@ input[type=range]:hover::-webkit-slider-thumb { transform: scale(1.15); }
 @keyframes fade-in { from { opacity: 0; } } @keyframes pop-in { from { opacity: 0; transform: scale(.97) translateY(4px); } } @keyframes toast-in { from { opacity: 0; transform: translateY(10px); } }
 @keyframes spin { to { transform: rotate(360deg); } } @keyframes indet { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
 .exit-issues { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; color: var(--text-2); line-height: 1.45; } .warn-icon { color: var(--warn); flex: none; }
+/* Combo box: type or pick from the full list (see Combo in kit.jsx). */
+.combo { position: relative; } .combo .input { width: 100%; padding-right: 28px; }
+.combo-btn { position: absolute; right: 3px; top: 50%; transform: translateY(-50%); width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--text-3); display: grid; place-items: center; cursor: pointer; }
+.combo-btn:hover { color: var(--text); background: var(--bg-3); }
+.combo-list { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 60; max-height: 260px; overflow-y: auto; padding: 4px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--bg-2); box-shadow: 0 10px 30px rgba(0,0,0,.5); }
+.combo-list button { display: block; width: 100%; padding: 6px 8px; border: 0; border-radius: 5px; background: transparent; color: var(--text); font-size: 13.5px; text-align: left; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.combo-list button:hover { background: var(--bg-3); } .combo-list button.on { color: var(--accent); background: var(--accent-soft); }
+.combo-empty { padding: 8px; color: var(--text-3); font-size: 12px; }
+.mute-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; color: var(--text-3); cursor: pointer; }
+.import-bar { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 10px; padding: 9px 11px; border-radius: 8px; background: var(--accent-soft); border: 1px solid var(--accent-line); font-size: 12px; font-weight: 600; color: var(--text-2); animation: fc-fade-in .15s ease-out; }
+.card-prep { position: absolute; left: 6px; right: 6px; bottom: 5px; pointer-events: auto; } .card-prep .progress { height: 3px; }
+.task-pill { animation: fc-fade-in .2s ease-out; }
+@keyframes fc-fade-in { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }

@@ -2,7 +2,7 @@
 // both consume this plan, so positioning, timing, transitions and animations are computed once.
 import { substitute, EASE, EASE_PRESET, evaluate, fmtNum } from './expr.mjs';
 import { transitionDef, animDef, effectDef, fx, transitionWindow, transitionCaps } from './catalog.mjs';
-import { clipEnd, srcOut, isVisual, transitionPartner, stickerMedia } from './model.mjs';
+import { clipEnd, srcOut, isVisual, transitionPartner, stickerMedia, clipSpeed } from './model.mjs';
 import { resolveCaption, captionMotion, wordOverlays } from './captions.mjs';
 
 // Library stickers start at this fraction of the canvas height (longest side), before the clip's scale.
@@ -199,7 +199,7 @@ export const activeLayers = (plan, t) => plan.layers.filter(L => t >= L.vs - 1e-
 // Source time for a media layer at timeline time t (frozen at the source's edges for transition handles).
 export function sourceTime(L, t) {
   const c = L.clip; if (L.image) return 0;
-  const raw = (c.in || 0) + (t - c.start) * (c.speed || 1);
+  const raw = (c.in || 0) + (t - c.start) * clipSpeed(c);
   if (L.loop && L.srcDuration > 0) { const d = L.srcDuration; return ((raw % d) + d) % d; }
   return Math.min(Math.max(0, raw), Math.max(0, (L.srcDuration || Infinity) - 0.04));
 }

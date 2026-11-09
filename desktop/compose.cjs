@@ -1,7 +1,7 @@
 // Builds the FFmpeg command for an export from the shared layer plan (shared/plan.mjs).
 const path = require('node:path');
-const { buildPlan } = require('../shared/plan.mjs');
-const { dimensions, normalizeProject, stickerMedia } = require('../shared/model.mjs');
+const { buildPlan, sourceTime } = require('../shared/plan.mjs');
+const { dimensions, normalizeProject, stickerMedia, clipSpeed } = require('../shared/model.mjs');
 const { fx, filterDef } = require('../shared/catalog.mjs');
 const { fmtNum: f, evaluate } = require('../shared/expr.mjs');
 const { keyExpr } = require('../shared/audio.mjs');
@@ -102,6 +102,13 @@ function renderPlan(raw, { assets, rasters = {}, luts = {}, processedAudio = {},
       // media (video / image) and blurred canvas background
       const a = media(L.mediaId); const c = L.clip;
       if (L.image) idx = addInput(['-loop', '1', '-framerate', String(fps), '-t', f(dur + 0.1), '-i', a.path]);
+      else if (clipSpeed(c) === 0) {
+        // 0× sticker: one frame (the same one the preview holds), repeated for the whole window.
+        const at = sourceTime(L, vs);
+        idx = addInput([...alphaDecoder(a), '-ss', f(at), '-t', '0.5', '-i', a.path]);
+        if (!a.colorspace || a.colorspace === 'unknown') chain.push('setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv');
+        chain.push('trim=end_frame=1', 'setpts=PTS-STARTPTS', `fps=${fps}`, `tpad=stop_duration=${f(dur + 0.1)}:stop_mode=clone`);
+      }
       else if (L.loop) {
         // Looping sticker: the source repeats endlessly and is cut to the window, at the same phase the preview uses.
         const speed = c.speed || 1, d = Math.max(0.04, a.duration || 1), rawA = (c.in || 0) + (vs - c.start) * speed, phase = ((rawA % d) + d) % d;

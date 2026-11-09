@@ -1,7 +1,7 @@
 // Right panel: properties for whatever is selected.
 import { useEffect, useState, useRef } from 'preact/hooks';
 import { useDraft } from './kit.jsx';
-import { Lock, FlipHorizontal2, FlipVertical2, RotateCcw, Trash2, Rewind, Snowflake, Gauge, Scissors, AudioLines, Unlink, Wand2, X, Plus, AlignLeft, AlignCenter, AlignRight, Bold, Italic, CaseUpper, Film, Type, Music, Sparkles, LoaderCircle, Scan, Layers } from 'lucide-preact';
+import { Lock, FlipHorizontal2, FlipVertical2, RotateCcw, Trash2, Rewind, Snowflake, Gauge, Scissors, AudioLines, Unlink, Wand2, X, Plus, AlignLeft, AlignCenter, AlignRight, Bold, Italic, CaseUpper, Film, Type, Music, Sparkles, LoaderCircle, Scan, Layers, Smile } from 'lucide-preact';
 import { project, primary, selection, time, toast, asset, media, player, commit, fonts, prefs, transitionSel } from '../lib/state.js';
 import { TransitionInspector } from './TransitionPanel.jsx';
 import { selectTransition, applyTransition } from '../lib/edit.js';
@@ -9,9 +9,10 @@ import { transitionDef } from '../../shared/catalog.mjs';
 import { api, waitJob } from '../lib/api.js';
 import { updateClip, updateClips, setSpeed, detachAudio, cutClip, trackOf, freeTrack, setClipText } from '../lib/edit.js';
 import { toggleLock } from '../lib/viewport.js';
-import { dimensions } from '../../shared/model.mjs';
-import { Slider, Toggle, Segmented, Select, Color, Section, Empty } from './kit.jsx';
-import { ANIMATIONS, EFFECTS, FILTERS, TRANSITIONS, effectDef, filterDef, TEXT_STYLE, CAPTION_STYLE } from '../../shared/catalog.mjs';
+import { dimensions, clipSpeed } from '../../shared/model.mjs';
+import { Slider, Toggle, Segmented, Select, Color, Section, Empty, Combo } from './kit.jsx';
+import { ANIMATIONS, EFFECTS, FILTERS, TRANSITIONS, effectDef, filterDef, TEXT_STYLE, CAPTION_STYLE, TEXT_PRESETS, EMOJI } from '../../shared/catalog.mjs';
+import { restyleText } from './AssetPanel.jsx';
 import { RATIOS, RESOLUTIONS, FRAME_RATES, clipEnd, transitionPartner, maxTransition, newClip, DEFAULT_COLOR, DEFAULT_TRANSFORM } from '../../shared/model.mjs';
 import { shortTime } from '../lib/format.js';
 import { userLuts } from '../lib/state.js';
@@ -36,7 +37,10 @@ export function Inspector() {
   if (tc) return <TransitionInspector c={tc} />;
   if (!c) return <ProjectPanel />;
   const isCaption = c.kind === 'text' && (c.caption || project.value.tracks.find(t => t.id === c.trackId)?.captions);
-  const tabs = isCaption ? ['Caption', 'Basic'] : TABS[c.kind] || ['Basic']; const active = tabs.includes(tab[c.kind]) ? tab[c.kind] : tabs[0];
+  // Audio controls only for a video that has its own sound: none when the file is silent, or when the sound
+  // was separated into its own clip (edit it there).
+  const silent = c.kind === 'video' && (!asset(c.mediaId)?.audio || c.detachedAudio);
+  const tabs = isCaption ? ['Caption', 'Basic'] : (TABS[c.kind] || ['Basic']).filter(t => !(silent && t === 'Audio')); const active = tabs.includes(tab[c.kind]) ? tab[c.kind] : tabs[0];
   const [label, Icon] = KIND[c.kind] || ['Clip', Film];
   return <div class="inspector">
     <div class="insp-head"><span class={`kind-dot k-${c.kind}`}><Icon size={13} /></span><div class="grow ellipsis"><b class="ellipsis">{c.caption ? 'Caption' : c.name || label}</b><small class="muted">{label} · {shortTime(c.duration)}{n > 1 ? ` · ${n} selected` : ''}</small></div></div>
@@ -80,15 +84,15 @@ function KeyNav({ c }) {
 // Library / imported stickers: loop, animation speed and duration, independent of size and position.
 function StickerPlayback({ c }) {
   const a = asset(c.mediaId); if (!a) return null;
-  const animated = a.kind === 'video', speed = c.speed || 1, once = a.duration / speed;
+  const animated = a.kind === 'video', speed = clipSpeed(c), once = speed > 0 ? a.duration / speed : null;
   return <Section title="Sticker">
     {animated ? <>
       <Toggle label="Loop animation" on={c.loop !== false} onChange={v => updateClip(c.id, x => { x.loop = v; }, { label: v ? 'Loop sticker' : 'Play sticker once' })} hint="When off, the animation plays once and holds its last frame." />
-      <Slider label="Animation speed" value={speed} min={0.25} max={4} step={0.05} def={1} fmt={v => v.toFixed(2) + '×'} onChange={v => updateClip(c.id, x => { x.speed = v; }, { label: 'Sticker speed', key: 'stspeed' + c.id })} />
+      <Slider label="Animation speed" value={speed} min={0} max={4} step={0.05} def={1} fmt={v => (v === 0 ? 'Still' : v.toFixed(2) + '×')} onChange={v => updateClip(c.id, x => { x.speed = v; }, { label: 'Sticker speed', key: 'stspeed' + c.id })} />
     </> : <p class="muted hint">Still sticker · transparency kept.</p>}
     <Slider label="Duration" value={c.duration} min={0.2} max={Math.max(30, c.duration)} step={0.05} def={3} fmt={v => v.toFixed(1) + ' s'} onChange={v => trimClip(c.id, 'end', c.start + v)} />
     <div class="row">
-      {animated && <button class="btn sm" data-tip="Make the clip exactly one play of the animation" onClick={() => trimClip(c.id, 'end', c.start + once)}>One play · {shortTime(once)}</button>}
+      {animated && once !== null && <button class="btn sm" data-tip="Make the clip exactly one play of the animation" onClick={() => trimClip(c.id, 'end', c.start + once)}>One play · {shortTime(once)}</button>}
       <button class="btn sm" onClick={() => updateClip(c.id, x => { x.transform = { ...x.transform, x: 0, y: 0 }; }, { label: 'Center sticker' })}><Crosshair size={13} />Center</button>
     </div>
     {animated && <small class="muted">{shortTime(a.duration)} animation · {Math.round(a.fps || 0)} fps · {a.width}×{a.height}</small>}
@@ -277,19 +281,44 @@ function TextPanel({ c }) {
   const [text, setText] = useDraft(c.text);
   const session = useRef(Date.now());
   const [allCaps, setAllCaps] = useState(true);
+  // Parts of the same added template (e.g. a lower third's name and title) edit together while this is on.
+  const [allParts, setAllParts] = useState(true);
+  const groupIds = c.group ? project.value.clips.filter(x => x.kind === 'text' && x.group?.id === c.group.id).map(x => x.id) : [];
+  const targets = () => { const sel = selection.value.filter(id => project.value.clips.find(x => x.id === id)?.kind === 'text'); return [...new Set([...(sel.length ? sel : [c.id]), ...(allParts ? groupIds : [])])]; };
   const st = (k, label) => v => {
-    if (c.caption && allCaps) commit(label, p => { for (const x of p.clips) if (x.trackId === c.trackId) x.style = { ...x.style, [k]: v }; }, { key: 'ts' + k });
-    else updateClips(selection.value.filter(id => project.value.clips.find(x => x.id === id)?.kind === 'text'), x => { x.style = { ...x.style, [k]: v }; }, { label, key: 'ts' + k + c.id });
+    if (c.caption && allCaps) return commit(label, p => { for (const x of p.clips) if (x.trackId === c.trackId) x.style = { ...x.style, [k]: v }; }, { key: 'ts' + k });
+    // Size keeps the parts in proportion: each part scales by the same factor as this one.
+    const k0 = k === 'size' ? v / (s.size || 0.075) : 1;
+    updateClips(targets(), x => { x.style = { ...x.style, [k]: k === 'size' && x.id !== c.id ? Math.max(0.01, Math.min(0.4, (x.style?.size ?? TEXT_STYLE.size) * k0)) : v }; }, { label, key: 'ts' + k + c.id });
   };
+  const insertAtCaret = str => {
+    const ta = taRef.current, a = ta?.selectionStart ?? text.length, b = ta?.selectionEnd ?? text.length;
+    const v = text.slice(0, a) + str + text.slice(b); setText(v); setClipText(c.id, v, session.current);
+    requestAnimationFrame(() => { if (ta) { ta.focus(); ta.selectionStart = ta.selectionEnd = a + str.length; } });
+  };
+  const taRef = useRef(null); const [emojiOpen, setEmojiOpen] = useState(false); const [emojiCat, setEmojiCat] = useState(Object.keys(EMOJI)[0]);
   const fontList = [...new Set([...fonts.value.user.map(f => f.family), ...fonts.value.system])];
   return <div class="insp-text">
     <Section title={c.caption ? 'Caption text' : 'Text'}>
       {/* Every keystroke updates the preview; the whole typing session (focus → blur) is one undo step. */}
-      <textarea class="input" rows={3} value={text} onFocus={() => { session.current = Date.now(); }} onInput={e => { const v = e.target.value; setText(v); setClipText(c.id, v, session.current); }} aria-label="Text content" />
+      {/* Emoji can also be dragged in from Stickers › emoji; they are part of the text, so every style and animation applies. */}
+      <textarea ref={taRef} class="input" rows={3} value={text} onFocus={() => { session.current = Date.now(); }} onInput={e => { const v = e.target.value; setText(v); setClipText(c.id, v, session.current); }} onDrop={() => { window.__fcDrag = null; }} aria-label="Text content" />
+      <div class="row emoji-row">
+        <button class={`btn sm ${emojiOpen ? 'primary' : ''}`} aria-expanded={emojiOpen} onClick={() => setEmojiOpen(!emojiOpen)}><Smile size={13} />Emoji</button>
+        <small class="muted">Click to insert at the cursor, or drag one from Stickers into the box.</small>
+      </div>
+      {emojiOpen && <div class="emoji-pick">
+        <div class="filter-chips">{Object.keys(EMOJI).map(k => <button key={k} class={`fchip ${emojiCat === k ? 'on' : ''}`} onClick={() => setEmojiCat(k)}>{k}</button>)}</div>
+        <div class="emoji-grid">{EMOJI[emojiCat].map(e => <button key={e} class="emoji" aria-label={'Insert ' + e} onPointerDown={ev => ev.preventDefault()} onClick={() => insertAtCaret(e)}>{e}</button>)}</div>
+      </div>}
       {c.caption && <Toggle label="Apply style to all captions" on={allCaps} onChange={setAllCaps} />}
+      {groupIds.length > 1 && <Toggle label={`Edit the whole “${c.group.name}” template (${groupIds.length} parts)`} hint="Font, colours, style and size change on every part together. Turn off to style one part on its own." on={allParts} onChange={setAllParts} />}
     </Section>
+    {!c.caption && <Section title="Style">
+      <div class="lib-chips">{TEXT_PRESETS.map(t => <button key={t.id} class="fchip" data-tip={`Restyle as ${t.name} (keeps the words, position and size)`} onClick={() => restyleText(targets(), t)}>{t.name}</button>)}</div>
+    </Section>}
     <Section title="Font">
-      <div class="field"><input class="input" list="font-list" value={s.font} onInput={e => e.target.value.trim() && st('font', 'Font')(e.target.value)} aria-label="Font" style={{ fontFamily: s.font }} /><datalist id="font-list">{fontList.map(f => <option key={f} value={f} />)}</datalist></div>
+      <div class="field"><Combo label="Font" wheel value={s.font} options={fontList} onChange={v => v.trim() && st('font', 'Font')(v.trim())} inputStyle={{ fontFamily: s.font }} renderOption={f => <span style={{ fontFamily: `"${f}"` }}>{f}</span>} /></div>
       <Slider label="Size" min={0.015} max={0.35} step={0.001} value={s.size} def={c.caption ? 0.052 : 0.075} fmt={v => Math.round(v * 1000) / 10 + '%'} onChange={st('size', 'Text size')} />
       <div class="row"><Segmented value={s.align} options={[['left', '', AlignLeft, 'Align left'], ['center', '', AlignCenter, 'Center'], ['right', '', AlignRight, 'Align right']]} onChange={st('align', 'Align')} />
         <button class={`icon-btn ${s.bold ? 'on' : ''}`} data-tip="Bold" onClick={() => st('bold', 'Bold')(!s.bold)}><Bold size={15} /></button>
@@ -322,7 +351,7 @@ function ProjectPanel() {
         <p class="muted hint">Fills empty space around clips that don’t match the frame.</p>
       </Section>
       <Section title="Timeline">
-        <Toggle label="Magnetic main track" hint="Keeps clips on the main track together with no gaps" on={s.magnetic} onChange={v => setS('Magnetic track', x => { x.magnetic = v; })} />
+        <Toggle label="Gapless main track" hint="Keeps clips on the main track together with no gaps" on={s.magnetic} onChange={v => setS('Toggle gapless main track', x => { x.magnetic = v; })} />
         <Toggle label="Snapping" hint="Clips snap to the playhead and other clips (N)" on={s.snapping} onChange={v => setS('Snapping', x => { x.snapping = v; })} />
       </Section>
     </div>

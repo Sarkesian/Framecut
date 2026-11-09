@@ -1,6 +1,6 @@
 // Application state (Preact signals), editing history and autosave.
 import { signal, computed, batch, effect } from '@preact/signals';
-import { normalizeProject, packMain, projectDuration } from '../../shared/model.mjs';
+import { normalizeProject, packMain, projectDuration, syncLinked, cleanRefs } from '../../shared/model.mjs';
 import { reconcileWords } from '../../shared/captions.mjs';
 import { api } from './api.js';
 import { ui, setUi } from './uiprefs.js';
@@ -20,7 +20,17 @@ export const project = signal(null);
 export const selection = signal([]); // clip ids, primary first
 // The selected transition (id of the clip it leads into). Selecting clips clears it, and vice versa.
 export const transitionSel = signal(null);
+// { clipId, id }: a transition type being hovered, shown in the viewer in place of the clip's real one.
+export const transitionHover = signal(null);
+// Id of a project look being tried out: the viewer shows the project with it on, the project itself is untouched.
+export const lookPick = signal(null);
 effect(() => { if (selection.value.length && transitionSel.peek()) transitionSel.value = null; });
+// Whatever changed the project (an edit, undo, redo, a refused drop), the selection only ever names clips that exist.
+effect(() => {
+  const p = project.value; if (!p) return; const sel = selection.peek(); if (!sel.length) return;
+  const ids = new Set(p.clips.map(c => c.id)); if (sel.every(id => ids.has(id))) return;
+  selection.value = sel.filter(id => ids.has(id));
+});
 export const selectedTrack = signal(null);
 export const time = signal(0);
 export const playing = signal(false);
@@ -55,6 +65,8 @@ export function commit(label, fn, { key = null, select, window: win = 1200 } = {
   const draft = structuredClone(prev);
   const result = fn(draft); if (result === false) return;
   packMain(draft);
+  if (ui.value.linked) syncLinked(prev, draft);
+  cleanRefs(draft);
   for (const c of draft.clips) if (c.caption && c.words?.length) reconcileWords(c); // text edits anywhere keep word timing
   const now = Date.now(), g = gesture.active ? gesture.id : null;
   const merge = !!key && coalesce.key === key && (g !== null || coalesce.g !== null ? g === coalesce.g : now - coalesce.at < win);
@@ -119,5 +131,10 @@ export async function refreshMedia() {
   media.value = new Map(list.map(a => [a.id, a]));
   return list;
 }
+// Files being imported right now: the Media panel shows a progress bar instead of a pop-up.
+export const importing = signal(0);
+export async function trackImport(count, fn) { importing.value += count; try { return await fn(); } finally { importing.value = Math.max(0, importing.value - count); } }
+// Newly imported assets must be in the media map before the panels or the player can show them.
+export function rememberMedia(assets) { if (!assets?.length) return; const m = new Map(media.value); for (const a of assets) m.set(a.id, a); media.value = m; }
 export const asset = id => media.value.get(id);
 export async function savePrefs(patch) { prefs.value = await api('/api/preferences', { ...prefs.value, ...patch }, 'PUT'); }

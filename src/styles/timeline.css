@@ -5,14 +5,17 @@
 .zoom-range { width: 110px; }
 .tl-scroll { flex: 1; overflow: auto; position: relative; background: var(--bg-1); }
 .tl-inner { position: relative; min-height: 100%; }
-.ruler-row { position: sticky; top: 0; z-index: 6; display: flex; height: 26px; background: var(--bg-1); }
+/* Stacking: everything that moves with time (clips, transitions, guides, drop hints) stays under the sticky
+   track headers (9); the ruler row (10) covers the headers when scrolling down; the playhead (11) sits on top
+   but is hidden while it is scrolled off to the left, so nothing ever slides over the track titles. */
+.ruler-row { position: sticky; top: 0; z-index: 10; display: flex; height: 26px; background: var(--bg-1); }
 .corner { position: sticky; left: 0; z-index: 7; width: 168px; flex: none; background: var(--bg-1); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); display: flex; align-items: center; padding-left: 6px; }
 .ruler { position: relative; height: 26px; border-bottom: 1px solid var(--line); cursor: text; flex: none; }
 .tick { position: absolute; bottom: 0; width: 1px; height: 5px; background: var(--text-4); } .tick.major { height: 10px; background: var(--text-3); } .tick span { position: absolute; left: 4px; bottom: 9px; font: 10px var(--mono); color: var(--text-3); white-space: nowrap; }
 .marker { position: absolute; top: 2px; width: 9px; height: 9px; margin-left: -4px; background: #ffd36a; transform: rotate(45deg); border-radius: 2px; }
 .track-row { display: flex; position: relative; border-bottom: 1px solid var(--line); }
 .track-row.main { background: rgba(255,255,255,.015); } .track-row.is-hidden .track-lane { opacity: .35; } .track-row.is-locked .track-lane { background: repeating-linear-gradient(-45deg, transparent 0 6px, rgba(255,255,255,.025) 6px 12px); }
-.track-head { position: sticky; left: 0; z-index: 4; width: 168px; flex: none; display: flex; align-items: center; gap: 6px; padding: 0 4px 0 8px; background: var(--bg-1); border-right: 1px solid var(--line); }
+.track-head { position: sticky; left: 0; z-index: 9; width: 168px; flex: none; display: flex; align-items: center; gap: 6px; padding: 0 4px 0 8px; background: var(--bg-1); border-right: 1px solid var(--line); }
 .th-icon { width: 20px; height: 20px; border-radius: 5px; display: grid; place-items: center; color: #fff; flex: none; } .th-icon.k-video { background: var(--c-video); } .th-icon.k-audio { background: var(--c-audio); } .th-icon.k-text { background: var(--c-text); } .th-icon.k-effect { background: var(--c-effect); }
 .th-name { flex: 1; font-size: 12px; color: var(--text-2); font-weight: 600; }
 .th-btns { display: flex; opacity: .55; transition: opacity .12s; } .track-head:hover .th-btns { opacity: 1; } .th-btns .on { opacity: 1; color: var(--warn); background: transparent; }
@@ -43,7 +46,7 @@
 .tr-block:hover { border-color: #fff; background: color-mix(in srgb, var(--accent) 45%, rgba(14,15,20,.82)); }
 .tr-block.sel { border-color: #fff; background: var(--accent); color: var(--accent-ink); box-shadow: 0 0 0 2px rgba(0,0,0,.6), 0 0 0 4px var(--accent-line); }
 .tr-block svg { flex: none; } .clip { overflow: visible; } .clip > .strip, .clip > .wave { border-radius: 6px; }
-.playhead { position: absolute; top: 0; bottom: 0; left: 0; width: 0; z-index: 8; pointer-events: none; }
+.playhead { position: absolute; top: 0; bottom: 0; left: 0; width: 0; z-index: 11; pointer-events: none; }
 .playhead::before { content: ''; position: absolute; top: 0; bottom: 0; left: -1px; width: 2px; background: #fff; box-shadow: 0 0 6px rgba(0,0,0,.6); }
 .ph-head { position: sticky; top: 0; width: 14px; height: 16px; margin-left: -7px; background: #fff; clip-path: polygon(0 0, 100% 0, 100% 60%, 50% 100%, 0 60%); pointer-events: auto; cursor: ew-resize; }
 .tl-toggle { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border-radius: 13px; border: 1px solid var(--line-2); background: transparent; color: var(--text-2); font-size: 12px; font-weight: 550; cursor: pointer; white-space: nowrap; }
@@ -54,7 +57,7 @@
 .blade-line span { position: absolute; top: 2px; left: 4px; padding: 1px 5px; border-radius: 4px; background: #ff5f70; color: #fff; font-size: 10.5px; white-space: nowrap; }
 .snap-line { position: absolute; top: 26px; bottom: 0; width: 1px; background: var(--accent); z-index: 7; pointer-events: none; box-shadow: 0 0 4px var(--accent); }
 .drop-hint { position: absolute; border-radius: 6px; background: var(--accent-soft); border: 1.5px dashed var(--accent); pointer-events: none; z-index: 6; }
-.marquee { position: absolute; border: 1px solid var(--accent); background: rgba(182,243,106,.08); z-index: 9; pointer-events: none; }
+.marquee { position: absolute; border: 1px solid var(--accent); background: rgba(182,243,106,.08); z-index: 8; pointer-events: none; }
 .tl-tail { height: 60px; }
 .tl-empty { position: absolute; left: 50%; top: 55%; transform: translate(-30%, -50%); display: flex; gap: 12px; align-items: center; color: var(--text-3); pointer-events: none; } .tl-empty div { display: flex; flex-direction: column; } .tl-empty b { color: var(--text-2); }
 .clip-key { position: absolute; bottom: 3px; width: 9px; height: 9px; margin-left: -4.5px; background: #ffd64d; border: 1px solid #1a1a1a; transform: rotate(45deg); z-index: 3; cursor: pointer; }
@@ -70,10 +73,22 @@
 /* Snapping, readouts, gaps, keyframe selection */
 .snap-line.k-playhead { background: #fff; box-shadow: 0 0 4px rgba(255,255,255,.7); }
 .snap-line.k-marker { background: #ffd36a; box-shadow: 0 0 4px #ffd36a; }
-.tl-readout { position: absolute; z-index: 10; transform: translateX(-50%); padding: 2px 7px; border-radius: 5px; background: rgba(12,13,17,.92); border: 1px solid var(--line-2); color: var(--text); font-size: 11px; white-space: nowrap; pointer-events: none; box-shadow: 0 4px 12px rgba(0,0,0,.4); }
+.tl-readout { position: absolute; z-index: 12; transform: translateX(-50%); padding: 2px 7px; border-radius: 5px; background: rgba(12,13,17,.92); border: 1px solid var(--line-2); color: var(--text); font-size: 11px; white-space: nowrap; pointer-events: none; box-shadow: 0 4px 12px rgba(0,0,0,.4); }
 .gap { position: absolute; top: 6px; bottom: 6px; border-radius: 5px; background: repeating-linear-gradient(-45deg, rgba(255,255,255,.035) 0 5px, transparent 5px 10px); border: 1px dashed rgba(255,255,255,.1); }
 .gap:hover { border-color: var(--accent-line); background-color: var(--accent-soft); }
 .clip-key.sel { background: var(--accent); box-shadow: 0 0 0 1.5px #fff; }
 .clip.copying { box-shadow: inset 0 0 0 2px var(--accent), 0 0 0 1px var(--accent), 0 8px 20px rgba(0,0,0,.5); }
 .clip.locked { cursor: default; } .clip.locked .clip-label { opacity: .85; }
 .edge:hover::after, .edge:active::after { content: ''; position: absolute; top: 50%; width: 3px; height: 16px; margin-top: -8px; border-radius: 2px; background: var(--accent); }
+/* New track / track reorder insert line, draggable track headers */
+.track-insert { position: absolute; left: 0; height: 3px; margin-top: -1.5px; border-radius: 2px; background: var(--accent); box-shadow: 0 0 8px var(--accent); z-index: 10; pointer-events: none; }
+.track-head { cursor: grab; } .track-head .th-btns, .track-head button { cursor: pointer; }
+.track-row.reordering { opacity: .55; } .track-row.reordering .track-head { background: var(--bg-3); }
+/* Snap indicator: solid line + tag when an edge is caught, a faint dashed guide when one is close. */
+.snap-line { width: 2px; margin-left: -1px; }
+.snap-line.near { width: 0; margin-left: 0; background: none; box-shadow: none; border-left: 1px dashed rgba(255,255,255,.35); }
+.snap-tag { position: absolute; z-index: 12; transform: translateX(-50%); padding: 1px 6px; border-radius: 4px; background: var(--accent); color: var(--accent-ink); font-size: 10px; font-weight: 700; letter-spacing: .02em; white-space: nowrap; pointer-events: none; box-shadow: 0 2px 6px rgba(0,0,0,.4); }
+.snap-tag.k-playhead { background: #fff; color: #111; } .snap-tag.k-marker { background: #ffd36a; color: #111; }
+.clip.snap-l::before, .clip.snap-r::after { content: ''; position: absolute; top: -3px; bottom: -3px; width: 3px; border-radius: 2px; background: var(--accent); box-shadow: 0 0 8px var(--accent); z-index: 4; pointer-events: none; }
+.clip.snap-l::before { left: -1.5px; } .clip.snap-r::after { right: -1.5px; }
+.track-head.fixed { cursor: default; }

@@ -3,14 +3,21 @@ import { useEffect, useState } from 'preact/hooks';
 import { Wand2, Copy, ClipboardPaste, Unlink, Volume2, VolumeX, Play, Pause, Check, Save, RotateCcw, Ear, Trash2 } from 'lucide-preact';
 import { project, selection, asset, toast, prefs, savePrefs, player, commit, media } from '../lib/state.js';
 import { updateClip, updateClips, detachAudio } from '../lib/edit.js';
-import { Slider, Toggle, Segmented, Select, Section, prompt } from './kit.jsx';
+import { Slider, Toggle, Segmented, Select, Section, prompt, Switch } from './kit.jsx';
 import { AUDIO_PROFILES, AUDIO_DEFAULTS, audioFx, profileFx } from '../../shared/audio.mjs';
 import { shortTime } from '../lib/format.js';
 import { preview, togglePreview, stopPreview } from '../lib/creative.js';
 
 let fxClipboard = null;
 const customProfiles = () => prefs.value.audioProfiles || [];
-const sel = c => selection.value.filter(id => { const x = project.value.clips.find(k => k.id === id); return x && (x.kind === 'audio' || x.kind === 'video'); });
+// Selected clips that make their own sound — the same rule as Ctrl+M: never a silent video, and never a video
+// whose sound was separated (unmuting that would play the sound twice).
+const ownSound = x => x && (x.kind === 'audio' || (x.kind === 'video' && !!asset(x.mediaId)?.audio && !x.detachedAudio));
+const sel = c => selection.value.filter(id => ownSound(project.value.clips.find(k => k.id === id)));
+
+const VOL_MIN_DB = -60, VOL_MAX_DB = 24;
+const toDb = v => (v <= 0.001 ? VOL_MIN_DB : Math.max(VOL_MIN_DB, Math.min(VOL_MAX_DB, Math.round(20 * Math.log10(v) * 2) / 2)));
+const fromDb = d => (d <= VOL_MIN_DB ? 0 : 10 ** (d / 20));
 
 export function AudioPanel({ c }) {
   const fx = audioFx(c); const a = asset(c.mediaId);
@@ -20,23 +27,24 @@ export function AudioPanel({ c }) {
   const applyProfile = id => { const pf = profileFx(id, customProfiles()); updateClips(ids, x => { x.audioFx = structuredClone(pf); }, { label: 'Audio profile' }); toast(`${[...AUDIO_PROFILES, ...customProfiles()].find(p => p.id === id)?.name} applied${ids.length > 1 ? ` to ${ids.length} clips` : ''}. Press “Compare” to hear the original.`); };
   const compare = () => { const pl = player.current; if (!pl) return; pl.bypass ||= new Set(); const on = pl.bypass.has(c.id); on ? pl.bypass.delete(c.id) : pl.bypass.add(c.id); pl.invalidate(); setBypass(!on); if (!pl.playing) { pl.seek(Math.max(c.start, Math.min(pl.t, c.start + c.duration - 0.5))); pl.play(); } };
   const [bypass, setBypass] = useState(false);
-  useEffect(() => () => { player.current?.bypass?.delete(c.id); player.current?.invalidate(); }, [c.id]);
+  useEffect(() => { setBypass(false); return () => { player.current?.bypass?.delete(c.id); player.current?.invalidate(); }; }, [c.id]);
   if (!a?.audio) return <p class="muted hint" style={{ padding: 14 }}>This clip has no sound.</p>;
+  if (c.kind === 'video' && c.detachedAudio) return <p class="muted hint" style={{ padding: 14 }}>This video’s sound was separated into its own audio clip. Select that clip to change its volume.</p>;
   const saveProfile = async () => { const name = await prompt({ title: 'Save audio profile', label: 'Profile name', value: 'My voice' }); if (!name?.trim()) return; const { profile, bypass: _, ...rest } = fx; const id = 'user-' + Date.now().toString(36); await savePrefs({ audioProfiles: [...customProfiles(), { id, name: name.trim(), hint: 'Your profile', fx: rest }] }); toast('Profile saved. It’s available for every project.'); };
   const all = [...AUDIO_PROFILES, ...customProfiles()];
   return <div class="audio-panel">
-    <Section title="Volume">
-      <Slider label="Volume" min={0} max={4} step={0.01} value={c.volume ?? 1} def={1} fmt={v => v <= 0 ? '−∞ dB' : (20 * Math.log10(v)).toFixed(1) + ' dB'} onChange={v => updateClips(ids, x => { x.volume = v; }, { label: 'Volume', key: 'vol' + c.id })} />
+    <Section title="Volume" right={<label class="mute-toggle" data-tip={c.muted ? 'Muted — click to hear this clip' : 'Mute this clip'}><span>Mute</span><Switch on={!!c.muted} label="Mute clip" onChange={v => updateClips(ids, x => { x.muted = v; }, { label: v ? 'Mute' : 'Unmute' })} /></label>}>
+      {/* In decibels so quiet and loud settings both get room: −60 dB is silence, 0 dB as recorded, up to +24 dB. */}
+      <Slider label="Volume" min={VOL_MIN_DB} max={VOL_MAX_DB} step={0.5} value={toDb(c.volume ?? 1)} def={0} disabled={c.muted} fmt={d => d <= VOL_MIN_DB ? '−∞ dB' : (d > 0 ? '+' : '') + d.toFixed(1) + ' dB'} editScale={1} onChange={d => updateClips(ids, x => { x.volume = fromDb(d); }, { label: 'Volume', key: 'vol' + c.id })} />
       <div class="field-row"><Slider label="Fade in" min={0} max={Math.min(10, c.duration / 2)} step={0.05} value={c.fadeIn || 0} def={0} unit="s" onChange={v => updateClips(ids, x => { x.fadeIn = v; }, { label: 'Fade in', key: 'fi' + c.id })} /><Slider label="Fade out" min={0} max={Math.min(10, c.duration / 2)} step={0.05} value={c.fadeOut || 0} def={0} unit="s" onChange={v => updateClips(ids, x => { x.fadeOut = v; }, { label: 'Fade out', key: 'fo' + c.id })} /></div>
       <div class="row wrap">
-        <button class="btn sm" onClick={() => updateClips(ids, x => { x.muted = !c.muted; }, { label: 'Mute' })}>{c.muted ? <Volume2 size={13} /> : <VolumeX size={13} />}{c.muted ? 'Unmute' : 'Mute'}</button>
         {c.kind === 'video' && !c.detachedAudio && <button class="btn sm" onClick={() => detachAudio(c.id)}><Unlink size={13} />Separate audio</button>}
         {(c.volumeKeys?.length > 0) && <button class="btn sm" onClick={() => updateClip(c.id, x => { x.volumeKeys = null; }, { label: 'Clear volume keyframes' })}><Trash2 size={13} />Clear keyframes</button>}
         {(c.duckKeys?.length > 0) && <span class="chip accent" data-tip="Lowered automatically while someone speaks">Ducking active</span>}
       </div>
     </Section>
 
-    <Section title="Voice profile" right={<button class={`btn sm ${bypass ? 'primary' : ''}`} onClick={compare} data-tip="Play the original sound to compare"><Ear size={13} />{bypass ? 'Hearing original' : 'Compare'}</button>}>
+    <Section title="Voice profile" right={<button class={`btn sm ${bypass ? 'primary' : ''}`} aria-pressed={bypass} onClick={compare} data-tip="Play the original sound to compare"><Ear size={13} />{bypass ? 'Hearing original' : 'Compare'}</button>}>
       <div class="profile-grid">{all.map(pf => <button key={pf.id} class={`profile ${fx.profile === pf.id ? 'on' : ''}`} onClick={() => applyProfile(pf.id)}><b>{pf.name}</b><small>{pf.hint}</small>{fx.profile === pf.id && <Check size={13} class="tick" />}</button>)}</div>
       <div class="row wrap" style={{ marginTop: 8 }}>
         <button class="btn sm" data-tip="Copy audio settings" onClick={() => { fxClipboard = structuredClone(fx); toast('Audio settings copied.'); }}><Copy size={13} />Copy</button>
@@ -88,7 +96,7 @@ export function AudioPanel({ c }) {
   </div>;
 }
 function Tool({ title, on, onToggle, hint, children }) {
-  return <section class={`tool ${on ? 'on' : ''}`}><header><span class="grow" data-tip={hint}>{title}</span><Toggle label="" on={on} onChange={onToggle} /></header>{on && children && <div class="tool-body">{children}</div>}</section>;
+  return <section class={`tool ${on ? 'on' : ''}`}><header><span class="grow" data-tip={hint}>{title}</span><Switch on={on} onChange={onToggle} label={title} /></header>{on && children && <div class="tool-body">{children}</div>}</section>;
 }
 function Takes({ c }) {
   // Takes play through the shared preview player: click again to pause, again to resume.

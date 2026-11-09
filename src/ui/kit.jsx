@@ -138,6 +138,37 @@ export function Segmented({ value, options, onChange, label }) {
 export function Select({ value, options, onChange, label }) {
   return <select class="select" aria-label={label} value={value} onChange={e => onChange(e.target.value)}>{options.map(o => { const [v, t] = Array.isArray(o) ? o : [o, o]; return <option key={v} value={v}>{t}</option>; })}</select>;
 }
+// Pick from a list or type your own. Unlike <input list>, opening it always shows every option (a datalist
+// only offers entries matching what is already in the box, so after one choice it showed just that one).
+// Typing filters; Enter or a click picks. commitOnType: every keystroke is a value too (free-text fields).
+// wheel: hovering the closed box and scrolling steps through the options (e.g. try fonts quickly).
+export function Combo({ value, options, onChange, label, placeholder, renderOption, inputStyle, commitOnType = false, wheel = false }) {
+  const [open, setOpen] = useState(false), [q, setQ] = useState(null); const ref = useRef();
+  const close = () => { setOpen(false); setQ(null); };
+  useEffect(() => {
+    if (!open) return; ref.current?.querySelector('.combo-list .on')?.scrollIntoView({ block: 'nearest' });
+    const out = e => { if (!ref.current?.contains(e.target)) close(); };
+    document.addEventListener('pointerdown', out, true); return () => document.removeEventListener('pointerdown', out, true);
+  }, [open]);
+  const list = value && !options.includes(value) ? [value, ...options] : options;
+  const shown = q ? list.filter(o => o.toLowerCase().includes(q.trim().toLowerCase())) : list;
+  const pick = v => { close(); if (v !== value) onChange(v); };
+  const step = e => {
+    if (!wheel || open || !list.length || !e.deltaY) return; e.preventDefault();
+    const i = list.indexOf(value), n = Math.max(0, Math.min(list.length - 1, (i < 0 ? 0 : i) + Math.sign(e.deltaY)));
+    if (list[n] !== value) onChange(list[n]);
+  };
+  return <div class={`combo ${wheel ? 'wheel' : ''}`} ref={ref} onWheel={step} data-tip={wheel && !open ? `Scroll to try other ${label.toLowerCase()}s` : undefined}>
+    <input class="input" value={q ?? value ?? ''} placeholder={placeholder} aria-label={label} style={inputStyle} role="combobox" aria-expanded={open}
+      onFocus={e => { setOpen(true); e.target.select(); }} onInput={e => { setQ(e.target.value); setOpen(true); if (commitOnType) onChange(e.target.value); }}
+      onKeyDown={e => {
+        if (e.key === 'Enter') { e.preventDefault(); const v = (q ?? '').trim(); if (v) pick(shown.find(o => o.toLowerCase() === v.toLowerCase()) || shown[0] || v); else close(); e.target.blur(); }
+        if (e.key === 'Escape') { e.stopPropagation(); close(); e.target.blur(); }
+      }} />
+    <button type="button" class="combo-btn" tabIndex={-1} aria-label={`Show all: ${label}`} onPointerDown={e => e.preventDefault()} onClick={() => (open ? close() : setOpen(true))}><ChevronDown size={14} /></button>
+    {open && <div class="combo-list" role="listbox">{shown.length ? shown.slice(0, 500).map(o => <button type="button" key={o} role="option" aria-selected={o === value} class={o === value ? 'on' : ''} onPointerDown={e => e.preventDefault()} onClick={() => pick(o)}>{renderOption ? renderOption(o) : o}</button>) : <div class="combo-empty">No matches{commitOnType ? '' : ' — press Enter to use it anyway'}</div>}</div>}
+  </div>;
+}
 const SWATCHES = ['#ffffff', '#000000', '#ffe14d', '#ff4d6d', '#ff8a3d', '#4cd99a', '#5aa9ff', '#a67cff', '#f5e6c4', '#b6f36a'];
 export function Color({ value, onChange, label, swatches = true }) {
   return <div class="field"><label>{label}</label><div class="color"><input type="color" value={value} aria-label={label} onInput={e => onChange(e.target.value, true)} onChange={e => onChange(e.target.value)} />

@@ -5,7 +5,7 @@ import { HardDrive, Cpu, Captions, Bot, FolderOpen, Trash2, Check, TriangleAlert
 import { loadStatus, libStatus } from '../lib/creative.js';
 import { prefs, savePrefs, health, toast, saveNow } from '../lib/state.js';
 import { api, native } from '../lib/api.js';
-import { showDialog, Modal, Select, Toggle, Segmented, confirm } from './kit.jsx';
+import { showDialog, Modal, Select, Toggle, Segmented, confirm, Combo } from './kit.jsx';
 import { bytes } from '../lib/format.js';
 import { whisperStatus } from '../lib/whisper.js';
 
@@ -114,7 +114,7 @@ function Assistant() {
     <div class="field"><label>Provider</label><Select value={form.preset || 'ollama'} options={[['ollama', 'Ollama (on this computer)'], ['lmstudio', 'LM Studio (on this computer)'], ['openai', 'OpenAI'], ['custom', 'Other OpenAI-compatible']]} onChange={v => setForm(f => ({ ...f, preset: v, baseUrl: URLS[v] || f.baseUrl }))} /></div>
     <div class="field"><label>Address</label><input class="input mono" value={form.baseUrl} onInput={e => setForm({ ...form, baseUrl: e.target.value })} /></div>
     <div class="field"><label>API key <span class="muted">(kept in memory only, not saved)</span></label><input class="input" type="password" autocomplete="off" value={form.key} onInput={e => setForm({ ...form, key: e.target.value })} placeholder="Not needed for local models" /></div>
-    <div class="field"><label>Model</label><input class="input" list="ai-models" value={form.model} onInput={e => setForm({ ...form, model: e.target.value })} placeholder="Test the connection to list models" /><datalist id="ai-models">{models.map(m => <option key={m} value={m} />)}</datalist></div>
+    <div class="field"><label>Model</label><Combo label="Model" value={form.model} options={models} commitOnType onChange={v => setForm(f => ({ ...f, model: v }))} placeholder="Test the connection to list models" /></div>
     <div class="row"><button class="btn" onClick={test}>Test connection</button><button class="btn primary" onClick={save}>Use this connection</button><span class="muted">{state}</span></div>
   </>;
 }

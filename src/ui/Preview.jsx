@@ -2,7 +2,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { Play, Pause, SkipBack, SkipForward, Maximize, ChevronDown, Grid2x2, Magnet, Lock, AlignStartVertical, AlignCenterVertical, AlignEndVertical, AlignStartHorizontal, AlignCenterHorizontal, AlignEndHorizontal, AlignHorizontalDistributeCenter, AlignVerticalDistributeCenter, RotateCcw, LockOpen, Crosshair } from 'lucide-preact';
-import { project, media, time, playing, player, selection, primary, commit, toast, duration, asset } from '../lib/state.js';
+import { project, media, time, playing, player, selection, primary, commit, toast, duration, asset, transitionHover, lookPick } from '../lib/state.js';
+import { SocialOverlay, SocialButton } from './SocialOverlay.jsx';
 import { Player, rasterReady } from '../engine/player.js';
 import { dimensions, RATIOS } from '../../shared/model.mjs';
 import { propValue, writeProp } from '../../shared/keys.mjs';
@@ -10,12 +11,12 @@ import { TEXT_STYLE, CAPTION_STYLE } from '../../shared/catalog.mjs';
 import { viewportTargets, snapBox } from '../../shared/snap.mjs';
 import { openMenu } from './kit.jsx';
 import { timecode } from '../lib/format.js';
-import { addAssets, addText, addSticker, applyEffect, applyFilter, setClipText } from '../lib/edit.js';
+import { addAssets, addText, addSticker, applyEffect, applyFilter, setClipText, appendToText } from '../lib/edit.js';
 import { beginDrag } from '../lib/drag.js';
 import { ui, setUi } from '../lib/uiprefs.js';
 import { layerBox, visibleLayers, selectedLayers, canMove, align, resetProps, toggleLock } from '../lib/viewport.js';
 import { fontString, textMetrics } from '../engine/raster.js';
-import { addTextTemplate } from './AssetPanel.jsx';
+import { addTextTemplate, withLookPreview, previewedLook } from './AssetPanel.jsx';
 import { TEXT_TEMPLATES } from '../../shared/templates.mjs';
 import { DeviceBar } from './Studio.jsx';
 
@@ -24,17 +25,27 @@ const SNAP_PX = 6; // screen pixels, converted to canvas pixels with the preview
 const guides = signal(null); // { x, y } snap hits while moving an object
 const editing = signal(null); // clip id being edited in the viewer
 
+// The project as the viewer shows it: a hovered transition type stands in for the clip's real one.
+let hoverMemo = { p: null, o: null, r: null };
+function withHoveredTransition(p) {
+  const o = transitionHover.value; if (!o || !p) return p;
+  if (hoverMemo.p !== p || hoverMemo.o !== o) hoverMemo = { p, o, r: { ...p, clips: p.clips.map(c => (c.id === o.clipId && c.transition ? { ...c, transition: { ...c.transition, id: o.id } } : c)) } };
+  return hoverMemo.r;
+}
+
 export function Preview() {
   const p = project.value;
   const wrap = useRef(), canvas = useRef(), [box, setBox] = useState({ w: 0, h: 0 }), [zoom, setZoom] = useState('fit'), [over, setOver] = useState(false);
   const safe = ui.value.safeArea;
-  const [W, H] = dimensions(p.settings.ratio, p.settings.resolution);
+  // A look being tried out is shown (frame shape included) without being on the project; the stage is view-only meanwhile.
+  const shown = withLookPreview(p), trying = previewedLook(p);
+  const [W, H] = dimensions(shown.settings.ratio, shown.settings.resolution);
   useEffect(() => {
-    const pl = new Player({ canvas: canvas.current, getProject: () => project.value, getMedia: id => media.value.get(id), onTime: t => (time.value = t), onPlaying: v => (playing.value = v), onError: m => toast(m, 'warn') });
+    const pl = new Player({ canvas: canvas.current, getProject: () => withLookPreview(withHoveredTransition(project.value)), getMedia: id => media.value.get(id), onTime: t => (time.value = t), onPlaying: v => (playing.value = v), onError: m => toast(m, 'warn') });
     player.current = pl; pl.seek(time.value);
     return () => { pl.destroy(); player.current = null; };
   }, []);
-  useEffect(() => { player.current?.invalidate(); }, [media.value]);
+  useEffect(() => { player.current?.invalidate(); }, [media.value, transitionHover.value, lookPick.value]);
   // Fit the canvas into the available area at the project's aspect ratio.
   useEffect(() => {
     const ro = new ResizeObserver(() => { const r = wrap.current.getBoundingClientRect(); setBox({ w: r.width, h: r.height }); });
@@ -56,13 +67,16 @@ export function Preview() {
     const pos = r && r.width ? { x: Math.max(-0.5, Math.min(0.5, (e.clientX - r.left) / r.width - 0.5)), y: Math.max(-0.5, Math.min(0.5, (e.clientY - r.top) / r.height - 0.5)) } : undefined;
     if (d.type === 'media') { const a = asset(d.id); if (a) addAssets([a], { overlay: project.value.clips.some(c => c.start <= time.value && c.start + c.duration > time.value && c.kind !== 'audio') && a.kind !== 'audio' }); }
     if (d.type === 'text') addText({ style: d.style });
-    if (d.type === 'sticker') addSticker(d.sticker, { pos });
+    // An emoji dropped on a text joins that text (same font size, style and animation); elsewhere it's a sticker.
+    const onText = d.type === 'sticker' && d.sticker?.type === 'emoji' && r?.width ? textAt((e.clientX - r.left) / r.width * W, (e.clientY - r.top) / r.height * H) : null;
+    if (onText) appendToText(onText.id, d.sticker.value);
+    else if (d.type === 'sticker') addSticker(d.sticker, { pos });
     if (d.type === 'library') d.drop({ pos });
     if (d.type === 'effect') applyEffect(d.id);
     if (d.type === 'filter') applyFilter(d.id, d.name);
-    if (d.type === 'textTemplate') addTextTemplate(TEXT_TEMPLATES.find(t => t.id === d.id));
+    if (d.type === 'textTemplate') addTextTemplate(d.tpl || TEXT_TEMPLATES.find(t => t.id === d.id));
   };
-  const empty = !p.clips.length;
+  const empty = !shown.clips.length;
   return <div class="preview">
     <div class="preview-head">
       <span class="label">Player</span><div class="grow" />
@@ -70,14 +84,17 @@ export function Preview() {
       <button class="btn ghost sm" onClick={e => openMenu(e, [['fit', 'Fit'], ['0.25', '25%'], ['0.5', '50%'], ['1', '100%']].map(([v, l]) => ({ text: l, checked: zoom === v, onClick: () => setZoom(v) })), { align: 'below' })} data-tip="Preview zoom">{zoom === 'fit' ? 'Fit' : Math.round(+zoom * 100) + '%'}<ChevronDown size={13} /></button>
       <button class={`icon-btn sm ${ui.value.viewSnap ? 'on' : ''}`} aria-pressed={ui.value.viewSnap} data-tip={`Snap objects to the frame, safe areas and each other (${ui.value.viewSnap ? 'on' : 'off'}) · hold Alt to bypass`} data-kbd="Shift+N" onClick={() => setUi({ viewSnap: !ui.value.viewSnap })}><Magnet size={15} /></button>
       <button class={`icon-btn sm ${safe ? 'on' : ''}`} aria-pressed={safe} data-tip="Safe-area guides (objects also snap to them)" data-kbd="'" onClick={() => setUi({ safeArea: !safe })}><Grid2x2 size={15} /></button>
+      <SocialButton />
     </div>
     <div class={`stage-wrap ${over ? 'drop-over' : ''}`} ref={wrap} onDragOver={e => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)} onDrop={onDrop} onPointerDown={e => { if (e.target === e.currentTarget) { selection.value = []; editing.value = null; } }}>
       <div class="stage" style={{ width: cw, height: ch }}>
         <canvas ref={canvas} class="stage-canvas" style={{ width: cw, height: ch }} aria-label="Video preview" onPointerDown={e => pickAt(e, cw, ch, W, H)} onContextMenu={e => { pickAt(e, cw, ch, W, H, true); if (selection.value.length) objectMenu(e); }} onDblClick={() => player.current?.toggle()} />
         {safe && <div class="guides"><div class="safe action" /><div class="safe title" /><div class="cross" /></div>}
+        <SocialOverlay cw={cw} ch={ch} />
         <Others cw={cw} W={W} />
         <SnapGuides cw={cw} ch={ch} W={W} />
         <Gizmo cw={cw} ch={ch} W={W} H={H} />
+        {trying && <div class="look-veil" onPointerDown={e => e.stopPropagation()}><span><b>Preview</b> {trying.name} · not applied</span></div>}
         {empty && <div class="stage-empty"><b>Your video appears here</b><span>Import media on the left, then drag it to the timeline.</span></div>}
       </div>
     </div>
@@ -86,6 +103,16 @@ export function Preview() {
 }
 
 // Click on the canvas selects the topmost visual under the cursor; Shift/Ctrl+click adds or removes it.
+// The topmost (non-caption, unlocked) text clip under frame point (x, y), if any.
+function textAt(x, y) {
+  const plan = player.current?.getPlan(); if (!plan) return null; const t = time.value, p = project.value;
+  for (const L of visibleLayers(plan, t).reverse()) {
+    const c = L.clip; if (c.kind !== 'text' || c.caption || p.tracks.find(t2 => t2.id === c.trackId)?.locked) continue;
+    const b = layerBox(L, t), st = b.st, a = -st.r * Math.PI / 180, dx = x - b.cx, dy = y - b.cy;
+    if (Math.abs(dx * Math.cos(a) - dy * Math.sin(a)) <= L.baseW * st.s / 2 && Math.abs(dx * Math.sin(a) + dy * Math.cos(a)) <= L.baseH * st.s / 2) return c;
+  }
+  return null;
+}
 function pickAt(e, cw, ch, W, H, keep = false) {
   if (e.button !== 0 && !keep) return;
   const pl = player.current; const plan = pl?.getPlan(); if (!plan) return;
@@ -128,7 +155,7 @@ function objectMenu(e) {
     { text: 'Reset scale', onClick: () => resetProps(['scale']) },
     { text: 'Reset rotation', onClick: () => resetProps(['rotation']) },
     { divider: true },
-    { text: locked ? 'Unlock' : 'Lock position', icon: locked ? LockOpen : Lock, sc: 'Ctrl+L', onClick: () => toggleLock(layers.map(L => L.id)) },
+    { text: locked ? 'Unlock clip' : 'Lock clip', icon: locked ? LockOpen : Lock, sc: 'Ctrl+L', onClick: () => toggleLock(layers.map(L => L.id)) },
   ]);
 }
 
@@ -162,7 +189,7 @@ function Gizmo({ cw, ch, W, H }) {
   const begin = (e, mode) => {
     if (e.button !== 0) return;
     e.preventDefault(); e.stopPropagation();
-    if (locked) { toast('This object is locked. Right-click → Unlock (Ctrl+L) to move it.', 'warn'); return; }
+    if (locked) { toast(c.locked ? 'This clip is locked. Right-click → Unlock clip (Ctrl+L) to move it.' : 'This clip is on a locked track. Unlock the track (lock icon on the track name) to move it.', 'warn'); return; }
     if (isEditing) return;
     const u = Math.min(Math.max(0, t - c.start), c.duration), start = { x: propValue(c, 'x', u), y: propValue(c, 'y', u), scale: propValue(c, 'scale', u), rotation: propValue(c, 'rotation', u) }, sx = e.clientX, sy = e.clientY;
     const rect = e.currentTarget.closest('.stage').getBoundingClientRect(); const ox = rect.left + cx, oy = rect.top + cy;
