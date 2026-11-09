@@ -48,6 +48,9 @@ const near = (a, b, tol, msg) => assert.ok(Math.abs(a - b) <= tol, `${msg}: ${a}
     const saved = await page.evaluate(() => window.__fc.state.prefs.value.recording.syncOffsets);
     assert.equal(Object.values(saved)[0], 120, 'offset saved per microphone: ' + JSON.stringify(saved));
     step('fast slider drags move the take by exactly the final offset');
+    // A new gesture: edits of the same kind within 1.2 s coalesce into one undo step (state.commit), and a
+    // visible window runs the typed value and this drag closer together than that.
+    await page.waitForTimeout(1400);
     await page.evaluate(() => { const r = document.querySelector('input[aria-label="Sync offset (this microphone)"]'); for (const x of [130, 145, 160, 175, 190, 200]) { r.value = String(x); r.dispatchEvent(new Event('input', { bubbles: true })); } });
     near((await P()).clips.find(c => c.name === 'Voiceover').in, in0 + 0.2, 0.002, 'no drift from rapid changes');
     await page.evaluate(() => { const s = window.__fc.state; s.undo(); });
