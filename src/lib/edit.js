@@ -3,7 +3,7 @@ import { shiftKeys } from '../../shared/keys.mjs';
 import { spanTo } from '../../shared/snap.mjs';
 import { newClip, uid, clipEnd, srcOut, trackClips, mainTrack, transitionPartner, maxTransition, hasMedia, trackKindFor } from '../../shared/model.mjs';
 import { CAPTION_STYLE, TEXT_STYLE, effectDef } from '../../shared/catalog.mjs';
-import { commit, project, selection, time, asset, toast, player } from './state.js';
+import { commit, project, selection, time, asset, toast, player, transitionSel } from './state.js';
 
 const EPS = 1e-4;
 const KIND_NAMES = { video: 'Video', audio: 'Audio', text: 'Text', effect: 'Effects' };
@@ -102,7 +102,26 @@ export function applyTransition(id, clipId) {
     else { const main = trackClips(p0, mainTrack(p0).id); target = main.slice(1).sort((a, b) => Math.abs(a.start - time.value) - Math.abs(b.start - time.value))[0]; }
   }
   if (!target || !transitionPartner(p0, target)) return toast('Transitions go between two touching clips. Put two clips next to each other first.', 'warn');
-  commit('Add transition', p => { const c = p.clips.find(x => x.id === target.id); c.transition = { id, duration: Math.min(0.6, maxTransition(p, c)) }; }, { select: [target.id] });
+  // Changing the type keeps any timing / look settings already made; the new transition opens in the panel.
+  commit('Add transition', p => { const c = p.clips.find(x => x.id === target.id); c.transition = { ...(c.transition || {}), id, duration: c.transition?.duration || Math.min(0.6, maxTransition(p, c)) }; }, { select: [] });
+  selectTransition(target.id);
+}
+export function selectTransition(clipId) { selection.value = []; transitionSel.value = clipId; }
+export function removeTransition(clipId) {
+  updateClip(clipId, x => { if (!x.transition) return false; x.transition = null; }, { label: 'Remove transition' });
+  if (transitionSel.value === clipId) transitionSel.value = null;
+}
+// Copies a transition (type, length and every setting) to every other cut on the same track.
+// Returns how many cuts received it. Lengths are clamped to what each pair of clips allows.
+export function transitionToAllCuts(clipId) {
+  const src = project.value.clips.find(c => c.id === clipId)?.transition; if (!src) return 0;
+  let n = 0;
+  commit('Apply transition to all cuts', p => {
+    const me = p.clips.find(c => c.id === clipId);
+    for (const c of p.clips) if (c !== me && c.trackId === me.trackId && c.kind !== 'audio' && c.kind !== 'adjust' && transitionPartner(p, c)) { c.transition = { ...structuredClone(src), duration: Math.min(src.duration || 0.6, maxTransition(p, c)) }; n++; }
+    if (!n) return false;
+  });
+  return n;
 }
 
 export const selectedClips = () => { const p = project.value; return p ? p.clips.filter(c => selection.value.includes(c.id)) : []; };

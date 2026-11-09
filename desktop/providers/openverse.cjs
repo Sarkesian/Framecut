@@ -96,7 +96,7 @@ class Openverse {
     const rights = assessRights({ provider: 'openverse', license: rec.license, licenseVersion: rec.licenseVersion, kind: k, usage: 'personal', verification: rec.licenseCheck });
     rec.tier = rights.tier; rec.localStorageAllowed = rights.storage; rec.exportAllowed = rights.blocked ? false : 'license';
     Object.defineProperty(rec, 'downloadUrl', { value: downloadUrl, enumerable: false });
-    const thumb = image && safeUrl(r.thumbnail); if (thumb) Object.defineProperty(rec, 'thumbUrl', { value: thumb, enumerable: false });
+    const thumb = image && previewFor(downloadUrl); if (thumb) Object.defineProperty(rec, 'thumbUrl', { value: thumb, enumerable: false });
     return rec;
   }
   download(rec) {
@@ -106,6 +106,15 @@ class Openverse {
   // Sticker previews use Openverse's small thumbnail, falling back to the original file.
   preview(rec) { const d = this.download(rec); return rec.kind === 'sticker' && rec.thumbUrl ? { ...d, url: rec.thumbUrl, fallback: rec.downloadUrl, accept: /^image\//i, maxBytes: 8 * 1024 ** 2 } : d; }
   status() { return { anonymous: !this.token, blockedFor: Math.max(0, Math.ceil((this.blockedUntil - Date.now()) / 1000)), limits: this.lastLimits }; }
+}
+// Sticker previews. Openverse's own /thumb/ service rate-limits anonymous use hard (a grid of tiles
+// trips it) and often fails upstream, so Wikimedia images use Wikimedia's cached standard-width
+// thumbnail and other hosts (e.g. SVG Silh's small PNGs) the original file.
+function previewFor(url) {
+  const m = /^https:\/\/upload\.wikimedia\.org\/wikipedia\/commons\/([0-9a-f])\/([0-9a-f]{2})\/([^/?#]+)$/i.exec(url || '');
+  if (!m) return null;
+  const name = m[3]; const ext = /\.svg$/i.test(name) ? '.png' : /\.(tiff?|xcf|pdf)$/i.test(name) ? '.png' : '';
+  return `https://upload.wikimedia.org/wikipedia/commons/thumb/${m[1]}/${m[2]}/${name}/250px-${name}${ext}`;
 }
 function safeUrl(u) { try { const x = new URL(u); return ['https:', 'http:'].includes(x.protocol) ? x.href : null; } catch { return null; } }
 module.exports = { Openverse, SOURCES };

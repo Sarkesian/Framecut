@@ -4,7 +4,7 @@ import { signal, effect } from '@preact/signals';
 import { api, waitJob, native } from './api.js';
 import { project, commit, time, toast, media, asset, player, refreshMedia, prefs, playing } from './state.js';
 import { newClip, clipEnd, projectDuration } from '../../shared/model.mjs';
-import { assessRights } from '../../shared/rights.mjs';
+import { assessRights, recordAttribution } from '../../shared/rights.mjs';
 import { freeTrack, addTrack, trackOf, overlaps } from './edit.js';
 import { activeOutput } from '../audio/devices.js';
 import { shortTime } from './format.js';
@@ -16,16 +16,26 @@ export const busyKeys = signal(new Map()); // key -> progress 0..1 (or null = in
 export const selectedRecord = signal(null); // detail drawer
 
 const blank = () => ({ q: '', length: '', source: '', category: '', results: [], page: 0, pages: 0, total: 0, status: 'idle', error: null, scroll: 0 });
-export const searches = { music: signal(blank()), sfx: signal(blank()), fluent: signal(blank()) };
-const PROVIDER = { music: 'openverse', sfx: 'openverse', fluent: 'fluent' };
+export const searches = { music: signal(blank()), sfx: signal(blank()), fluent: signal(blank()), stickers: signal(blank()) };
+// Music, sound effects and the sticker search ask every free source at once ('all'); the server merges
+// them. The Animated tab browses Fluent Emoji only. Picking a source in the filter narrows to it.
+const PROVIDER = { music: 'all', sfx: 'all', fluent: 'fluent', stickers: 'all' };
+const KIND = { music: 'music', sfx: 'sfx', fluent: 'sticker', stickers: 'sticker' };
+const OWN_SOURCES = ['ccmixter', 'sfxkit', 'pixabay', 'openverse']; // source filter values that are whole providers
+// Category browsing (no search words) is answered by the source that owns the categories.
+const CATEGORY_PROVIDER = { sfx: 'sfxkit', fluent: 'fluent' };
 
 export const usageMode = () => (project.value?.usageMode === 'personal' ? 'personal' : 'commercial');
 export function setUsageMode(mode) {
   commit('Usage: ' + (mode === 'personal' ? 'personal' : 'commercial'), p => { p.usageMode = mode; });
   for (const k of ['music', 'sfx']) if (searches[k].value.results.length || searches[k].value.q) search(k, {}, { now: true });
 }
-export const rightsOf = rec => assessRights({ provider: rec.provider, license: rec.license, licenseVersion: rec.licenseVersion, kind: rec.kind, usage: usageMode() });
+export const rightsOf = rec => assessRights({ provider: rec.provider, license: rec.license, licenseVersion: rec.licenseVersion, kind: rec.kind, usage: usageMode(), verification: rec.licenseRecord || rec.licenseCheck || null });
 
+// Category lists of sources that have them (SFX Kit, Fluent), loaded once.
+export const categories = signal({});
+export async function loadCategories(provider) { if (categories.value[provider]) return; try { categories.value = { ...categories.value, [provider]: await api('/api/creative/categories?provider=' + provider) }; } catch {} }
+export const warmSources = kind => api('/api/creative/warm?kind=' + kind).catch(() => {});
 export async function loadStatus() { try { libStatus.value = await api('/api/creative/status'); } catch {} return libStatus.value; }
 
 // ----- search -----
@@ -36,23 +46,28 @@ export function search(panel, patch = {}, { now = false, more = false } = {}) {
   const go = () => runSearch(panel, more);
   if (now || more) go(); else timers[panel] = setTimeout(go, 420);
 }
-async function runSearch(panel, more) {
+async function runSearch(panel, more, retried = false) {
   const s = searches[panel], cur = s.value;
   const q = cur.q.trim();
-  if (panel !== 'fluent' && !q) { s.value = { ...cur, results: [], status: 'idle', error: null, total: 0, page: 0, pages: 0 }; return; }
-  if (panel !== 'fluent' && q.length < 2) return;
+  const browsing = !q && cur.category && CATEGORY_PROVIDER[panel];
+  if (panel !== 'fluent' && !q && !browsing) { s.value = { ...cur, results: [], status: 'idle', error: null, total: 0, page: 0, pages: 0, partial: [] }; return; }
+  if (panel !== 'fluent' && q && q.length < 2) return;
   controllers[panel]?.abort(); const ctl = new AbortController(); controllers[panel] = ctl;
   const page = more ? cur.page + 1 : 1;
   s.value = { ...cur, status: more ? 'more' : 'loading', error: null };
-  const params = new URLSearchParams({ provider: PROVIDER[panel], kind: panel === 'fluent' ? 'sticker' : panel, q, page: String(page), usage: usageMode(), length: cur.length, source: cur.source, category: cur.category });
+  const own = OWN_SOURCES.includes(cur.source);
+  const provider = cur.category && CATEGORY_PROVIDER[panel] ? CATEGORY_PROVIDER[panel] : own ? cur.source : cur.source ? 'openverse' : PROVIDER[panel];
+  const params = new URLSearchParams({ provider, kind: KIND[panel], q, page: String(page), usage: usageMode(), length: cur.length, source: own ? '' : cur.source, category: cur.category });
   try {
     const r = await fetch('/api/creative/search?' + params, { signal: ctl.signal }); const d = await r.json();
     if (!r.ok) throw Object.assign(Error(d.error), { code: d.code, retryAfter: d.retryAfter });
     if (ctl.signal.aborted) return;
     const seen = new Set(more ? s.value.results.map(x => x.key) : []);
     const items = (more ? s.value.results : []).concat(d.items.filter(x => !seen.has(x.key)));
-    s.value = { ...s.value, results: items, page: d.page, pages: d.pages, total: d.total, status: items.length ? 'ok' : 'empty', error: null };
-    if (panel !== 'fluent') rememberSearch(panel, q);
+    s.value = { ...s.value, results: items, page: d.page, pages: d.pages, total: d.total, status: items.length ? 'ok' : 'empty', error: null, sources: d.sources || [{ provider: d.provider || provider, total: d.total }], partial: d.partial || [] };
+    if (panel !== 'fluent' && q) rememberSearch(panel, q);
+    // A slow source keeps working in the background and caches its answer: ask once more so it fills in.
+    if (!more && !retried && d.partial?.some(p => p.code === 'slow')) setTimeout(() => { const now = s.value; if (now.q.trim() === q && now.source === cur.source && now.length === cur.length && now.category === cur.category && now.page <= 1) runSearch(panel, false, true); }, 7000);
   } catch (e) {
     if (e.name === 'AbortError') return;
     s.value = { ...s.value, status: 'error', error: { message: e.message, code: e.code || (navigator.onLine === false ? 'offline' : null), retryAfter: e.retryAfter } };
@@ -171,6 +186,7 @@ export function insertAudio(a, kind, { at = time.value, trackId } = {}) {
     t ||= p.tracks.find(x => x.kind === 'audio' && !x.locked && !x.voice && x.name.startsWith(label) && !overlaps(p, x.id, at, at + duration));
     if (!t) { const used = p.tracks.filter(x => x.kind === 'audio' && x.name.startsWith(label)).length; t = p.tracks.find(x => x.kind === 'audio' && !x.locked && !x.voice && !p.clips.some(o => o.trackId === x.id)); if (!t) t = addTrack(p, 'audio'); t.name = used ? `${label} ${used + 1}` : label; }
     trackName = t.name; c.trackId = t.id; p.clips.push(c); if (!p.mediaIds.includes(a.id)) p.mediaIds.push(a.id);
+    recordAttribution(p, a.id, a.source); // license record travels with the project
   }, { select: [c.id] });
   toast(`Added “${name}” to ${trackName} at ${shortTime(at)} · ${shortTime(duration)}${duration < a.duration - 0.05 ? ` (trimmed to fit, fades out)` : ''}. Ctrl+Z to undo.`);
   return c.id;
@@ -184,6 +200,7 @@ export function insertSticker(a, { at = time.value, pos } = {}) {
   commit('Add sticker', p => {
     const t = p.tracks.find(t => t.kind === 'text' && !t.captions && !t.locked && !overlaps(p, t.id, at, at + duration)) || addTrack(p, 'text');
     c.trackId = t.id; trackName = t.name; p.clips.push(c); if (!p.mediaIds.includes(a.id)) p.mediaIds.push(a.id);
+    recordAttribution(p, a.id, a.source);
   }, { select: [c.id] });
   toast(`Added “${name}” sticker at ${shortTime(at)} for ${shortTime(duration)}${a.animated ? ', looping' : ''}. Drag its corners in the player to resize. Ctrl+Z to undo.`);
   return c.id;

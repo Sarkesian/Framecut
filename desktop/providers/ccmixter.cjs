@@ -20,6 +20,9 @@ class CcMixter {
     if (this.window.length >= 30) throw Object.assign(Error('ccMixter search limit reached for this minute.'), { code: 'quota', retryAfter: Math.ceil((60e3 - (now - this.window[0])) / 1000) });
     this.window.push(now);
   }
+  // ccMixter's TLS handshake can take 3–25 s; opening the (kept-alive) connection ahead of the first
+  // search hides most of that. Cheap: a count query.
+  warm() { if (Date.now() - (this.warmedAt || 0) < 30e3) return; this.warmedAt = Date.now(); this.http.json(this.base + '?f=count&lic=zero', { timeout: 60000 }).catch(() => {}); }
   async query(params) { this.throttle(); const d = await this.http.json(this.base + '?' + new URLSearchParams({ f: 'json', ...params }), { timeout: 60000 }); return Array.isArray(d) ? d : []; }
   async search({ q = '', page = 1, include = 'free', length, pageSize = 20 }) {
     const lic = LIC[includeMode(include)]; page = Math.max(1, Math.min(50, page | 0 || 1));

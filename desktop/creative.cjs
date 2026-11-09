@@ -38,8 +38,19 @@ class Creative {
     await fsp.rm(this.dirs.bake, { recursive: true, force: true }); await fsp.mkdir(this.dirs.bake, { recursive: true });
     const { value } = readJsonSync(this.statePath, null);
     if (value && typeof value === 'object' && !Array.isArray(value)) this.state = { ...this.state, ...fromStored(value, this.dataDir) };
+    // Saved favorites / recents carry their file and thumbnail addresses, so showing them after a restart
+    // doesn't cost a provider lookup per tile (Openverse allows ~20 a minute).
+    for (const x of [...this.state.favorites, ...this.state.recents]) if (x?.record?.provider && x.record.downloadUrl) {
+      const r = { ...x.record }; const { downloadUrl, thumbUrl } = r; delete r.downloadUrl; delete r.thumbUrl;
+      Object.defineProperty(r, 'downloadUrl', { value: downloadUrl, enumerable: false }); if (thumbUrl) Object.defineProperty(r, 'thumbUrl', { value: thumbUrl, enumerable: false });
+      this.remember(r);
+    }
     this.prunePreviews().catch(() => {});
   }
+  // Open slow sources' connections ahead of a search (the Music tab calls this when it opens).
+  warm(kind) { for (const id of this.searchable(kind, 'free')) this.providers[id].warm?.(); return { ok: true }; }
+  // Browsable categories of a source that has them (SFX Kit, Fluent Emoji).
+  categories(id) { const p = this.provider(id); return typeof p.categories === 'function' ? p.categories() : []; }
   persist() { clearTimeout(this.saveTimer); this.saveTimer = setTimeout(() => this.flush().catch(e => console.error('Saving creative.json failed:', e.message)), 300); }
   flush() { clearTimeout(this.saveTimer); return writeJson(this.statePath, toStored(this.state, this.dataDir)); }
   provider(id) { const p = this.providers[id]; if (!p) throw Object.assign(Error(PROVIDERS[id]?.reason || 'Unknown media source.'), { code: 'unavailable' }); return p; }
@@ -64,7 +75,9 @@ class Creative {
   }
   // Providers that can answer a search for this kind in this discovery mode (configured, enabled, right tier).
   searchable(kind, include) {
-    return Object.keys(this.providers).filter(id => {
+    // Bundled-index sources (instant, work offline) lead the interleaved results.
+    const order = ['fluent', 'sfxkit', 'openverse', 'ccmixter', 'pixabay'];
+    return Object.keys(this.providers).sort((x, y) => order.indexOf(x) - order.indexOf(y)).filter(id => {
       const pv = PROVIDERS[id], p = this.providers[id];
       if (!pv?.enabled || !pv.kinds.includes(kind)) return false;
       if (pv.needsKey && !p.configured?.()) return false;
@@ -132,9 +145,10 @@ class Creative {
     const file = path.join(this.dirs.previews, createHash('sha1').update(providerId + ':' + id).digest('hex').slice(0, 20));
     if (fs.existsSync(file)) { const now = new Date(); fsp.utimes(file, now, now).catch(() => {}); const t = await fsp.readFile(file + '.type', 'utf8').catch(() => null); return res.sendFile(file, { headers: { 'Content-Type': t || (rec.kind === 'sticker' ? 'image/png' : 'audio/mpeg'), 'Cache-Control': 'no-cache' } }); }
     const src = this.provider(providerId).preview(rec);
-    let r;
-    try { r = await this.http.open(src.url, { accept: src.accept, timeout: src.timeout || 20000 }); }
-    catch (e) { if (!src.fallback) throw e; r = await this.http.open(src.fallback, { accept: src.accept, timeout: 20000 }); }
+    let r, release = () => {};
+    const get = async u => { const slot = await this.hostSlot(u); try { const x = await this.http.open(u, { accept: src.accept, timeout: src.timeout || 20000 }); release = slot.release; return x; } catch (e) { slot.release(); if (e.code === 'quota' || e.status === 429) slot.pause(e.retryAfter); throw e; } };
+    try { r = await get(src.url); }
+    catch (e) { if (!src.fallback || e.code === 'quota') throw e; r = await get(src.fallback); }
     const type = (r.headers.get('content-type') || '').split(';')[0] || 'application/octet-stream';
     res.setHeader('Content-Type', type === 'application/octet-stream' && rec.kind === 'sticker' ? 'image/png' : type);
     if (r.headers.get('content-length')) res.setHeader('Content-Length', r.headers.get('content-length'));
@@ -142,9 +156,21 @@ class Creative {
     req.on('close', () => { if (!res.writableFinished) { ok = false; r.controller.abort(); } });
     try {
       for await (const chunk of Readable.fromWeb(r.body)) { bytes += chunk.length; if (bytes > src.maxBytes) { ok = false; break; } out.write(chunk); if (!res.write(chunk)) await new Promise(x => res.once('drain', x)); }
-    } catch { ok = false; } finally { r.cleanup(); }
+    } catch { ok = false; } finally { r.cleanup(); release(); }
     res.end(); await new Promise(x => out.end(x));
     if (ok && bytes) { await fsp.rename(part, file).catch(() => {}); await fsp.writeFile(file + '.type', String(res.getHeader('Content-Type') || '')).catch(() => {}); this.prunePreviews().catch(() => {}); } else await fsp.unlink(part).catch(() => {});
+  }
+  // Media hosts are asked politely: at most two preview downloads at a time per host, and when a host
+  // says "slow down" (HTTP 429) FrameCut stops asking it until the time it gave, instead of retrying
+  // every tile in a grid.
+  async hostSlot(url) {
+    const host = new URL(url).hostname; this.hosts ||= new Map();
+    let g = this.hosts.get(host); if (!g) { g = { active: 0, queue: [], until: 0 }; this.hosts.set(host, g); }
+    if (Date.now() < g.until) throw Object.assign(Error('This source asked FrameCut to pause previews for a moment.'), { code: 'quota', retryAfter: Math.ceil((g.until - Date.now()) / 1000) });
+    if (g.active >= 2) await new Promise(r => g.queue.push(r));
+    if (Date.now() < g.until) { g.queue.shift()?.(); throw Object.assign(Error('This source asked FrameCut to pause previews for a moment.'), { code: 'quota', retryAfter: Math.ceil((g.until - Date.now()) / 1000) }); }
+    g.active++; let done = false;
+    return { release: () => { if (done) return; done = true; g.active--; g.queue.shift()?.(); }, pause: sec => { g.until = Date.now() + Math.max(5, Math.min(900, +sec || 60)) * 1000; } };
   }
   async prunePreviews() {
     const list = [];
@@ -333,7 +359,7 @@ class Creative {
   bakeCancel(id) { const s = this.sessions.get(id); if (s) { this.sessions.delete(id); fsp.rm(s.dir, { recursive: true, force: true }).catch(() => {}); } }
 }
 const kindGroup = k => (k === 'sticker' ? 'sticker' : 'audio');
-const plain = rec => JSON.parse(JSON.stringify({ ...rec, key: undefined, favorite: undefined, imported: undefined, downloadable: undefined, downloadUrl: rec.downloadUrl }));
+const plain = rec => JSON.parse(JSON.stringify({ ...rec, key: undefined, favorite: undefined, imported: undefined, downloadable: undefined, downloadUrl: rec.downloadUrl, thumbUrl: rec.thumbUrl }));
 
 // Lottie JSON validation: structure, size and no external resources (embedded images only).
 async function validateLottie(p) {

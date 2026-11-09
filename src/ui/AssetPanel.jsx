@@ -6,7 +6,7 @@ import { api, native, importFiles, pickFile, waitJob } from '../lib/api.js';
 import { addAssets, addText, addSticker, applyEffect, applyFilter, applyTransition, insertCaptions, trackOf } from '../lib/edit.js';
 import { openMenu, Empty, Segmented, Select, Progress, confirm, useDraft } from './kit.jsx';
 import { importMedia } from './commands.jsx';
-import { TEXT_PRESETS, CAPTION_PRESETS, EMOJI, SHAPE_STICKERS, EFFECTS, TRANSITIONS, FILTERS, CAPTION_STYLE, TEXT_STYLE } from '../../shared/catalog.mjs';
+import { TEXT_PRESETS, CAPTION_PRESETS, EMOJI, SHAPE_STICKERS, EFFECTS, TRANSITIONS, TRANSITION_FAMILIES, FILTERS, CAPTION_STYLE, TEXT_STYLE } from '../../shared/catalog.mjs';
 import { TEXT_TEMPLATES, textTemplateClips, PROJECT_TEMPLATES, projectFromTemplate } from '../../shared/templates.mjs';
 import { clipEnd, newClip, mainTrack } from '../../shared/model.mjs';
 import { renderText, svgUrl } from '../engine/raster.js';
@@ -145,11 +145,11 @@ function FiltersTab() {
   </div>;
 }
 function TransitionsTab() {
-  const groups = [...new Set(TRANSITIONS.map(t => t.group))];
+  const groups = [...new Set(TRANSITION_FAMILIES.map(t => t.group))];
   return <div class="tab-body">
     <Head title="Transitions" />
     <p class="muted hint">Drag onto the cut between two clips, or click to add at the cut nearest the playhead. Hover to preview.</p>
-    {groups.map(g => <div key={g}><h4 class="group-title">{g}</h4><div class="tile-grid">{TRANSITIONS.filter(t => t.group === g).map(t => <button key={t.id} class="tile tr-tile" draggable onDragStart={e => dragPayload(e, { type: 'transition', id: t.id })} onClick={() => applyTransition(t.id)}><div class={`tr-demo tr-${t.id}`}><i class="a" /><i class="b" /><i class="dip" /></div><span>{t.name}</span></button>)}</div></div>)}
+    {groups.map(g => <div key={g}><h4 class="group-title">{g}</h4><div class="tile-grid">{TRANSITION_FAMILIES.filter(t => t.group === g).map(t => <button key={t.id} class="tile tr-tile" draggable data-tip={t.dirs.length ? 'Pick the direction after adding it' : null} onDragStart={e => dragPayload(e, { type: 'transition', id: t.first })} onClick={() => applyTransition(t.first)}><div class={`tr-demo tr-${t.first}`}><i class="a" /><i class="b" /><i class="dip" /></div><span>{t.name}</span></button>)}</div></div>)}
   </div>;
 }
 

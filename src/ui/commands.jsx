@@ -1,11 +1,11 @@
 // Central command registry: menu bar, keyboard shortcuts and the shortcut reference.
 import { Scissors, Copy, ClipboardPaste, Trash2, Undo2, Redo2, Type, Upload, Mic, Captions, ZoomIn, ZoomOut, Maximize, Settings, Keyboard, Download, FolderOpen, Plus, Save, ArrowLeft, Magnet, Sparkles, Film, Blend } from 'lucide-preact';
-import { project, selection, player, time, undo, redo, toast, saveNow, saveState, commit, zoom, libraryTab, duration, primary, history, menu } from '../lib/state.js';
+import { project, selection, player, time, undo, redo, toast, saveNow, saveState, commit, zoom, libraryTab, duration, primary, history, menu, transitionSel } from '../lib/state.js';
 import { leaveProject, canSwitchProject } from './exitGuard.jsx';
 import { effect } from '@preact/signals';
 import { isDragging, stopDrag } from '../lib/drag.js';
 import { api, native, pickMedia } from '../lib/api.js';
-import { splitAt, deleteClips, duplicateClips, copyClips, cutClips, pasteClips, selectAll, addText, addAssets, trimClip, applyTransition, updateClips, closeAllGaps } from '../lib/edit.js';
+import { splitAt, deleteClips, duplicateClips, copyClips, cutClips, pasteClips, selectAll, addText, addAssets, trimClip, applyTransition, updateClips, closeAllGaps, removeTransition } from '../lib/edit.js';
 import { clipEnd, mainTrack, trackClips, RATIOS, RESOLUTIONS, FRAME_RATES } from '../../shared/model.mjs';
 import { showDialog, closeDialog, Modal, Select, Segmented, Color, Slider, Kbd } from './kit.jsx';
 import { openExport } from './ExportDialog.jsx';
@@ -40,7 +40,7 @@ export function fitTimeline() { const el = document.querySelector('.tl-scroll');
 export const focusZone = { value: 'timeline' };
 if (typeof window !== 'undefined') window.addEventListener('pointerdown', e => { const t = e.target; if (!t?.closest) return; if (t.closest('.stage-wrap')) focusZone.value = 'viewer'; else if (t.closest('.timeline, .panel.left, .panel.right')) focusZone.value = 'timeline'; }, true);
 const viewerNudge = (dx, dy) => focusZone.value === 'viewer' && nudge(dx, dy);
-const delSel = () => { if (deleteKeys()) return; deleteClips(undefined, { ripple: ui.value.ripple }); };
+const delSel = () => { if (transitionSel.value) return removeTransition(transitionSel.value); if (deleteKeys()) return; deleteClips(undefined, { ripple: ui.value.ripple }); };
 const copySel = () => { if (keySel.value.length) { if (copyKeys()) toast(`Copied ${keySel.value.length} keyframe${keySel.value.length > 1 ? 's' : ''}.`); return; } if (copyClips()) { lastCopy.kind = 'clips'; toast('Copied.'); } };
 const pasteSel = () => { if (lastCopy.kind === 'keys' && pasteKeys()) return; pasteClips(); };
 function trimTo(edge) { const c = primary.value; if (!c) return toast('Select a clip first.', 'warn'); const t = time.value; if (t <= c.start || t >= clipEnd(c)) return toast('Put the playhead inside the selected clip.', 'warn'); trimClip(c.id, edge, t); if (edge === 'start' && mainTrack(project.value).id === c.trackId) seek(c.start); }
@@ -76,7 +76,7 @@ export const ACTIONS = [
   { id: 'paste', label: 'Paste at playhead', keys: ['Ctrl+V'], icon: ClipboardPaste, run: pasteSel, group: 'Edit' },
   { id: 'paste-in-place', label: 'Paste in place (original time)', keys: ['Ctrl+Shift+V'], run: () => pasteClips(undefined, { inPlace: true }), group: 'Edit' },
   { id: 'select-all', label: 'Select all', keys: ['Ctrl+A'], run: () => selectAll(), group: 'Edit' },
-  { id: 'deselect', label: 'Clear selection', keys: ['Escape'], run: () => { if (ui.value.blade) { setUi({ blade: false }); return; } selection.value = []; clearKeys(); }, group: 'Edit' },
+  { id: 'deselect', label: 'Clear selection', keys: ['Escape'], run: () => { if (ui.value.blade) { setUi({ blade: false }); return; } selection.value = []; transitionSel.value = null; clearKeys(); }, group: 'Edit' },
   { id: 'lock', label: 'Lock / unlock selected', keys: ['Ctrl+L'], run: () => toggleLock(), group: 'Edit' },
   { id: 'mute', label: 'Mute / unmute clip', keys: ['Ctrl+M'], run: toggleMute, group: 'Edit' },
   { id: 'undo', label: 'Undo', keys: ['Ctrl+Z'], icon: Undo2, run: () => { const l = undo(); toast(l ? 'Undid ' + l.toLowerCase() : 'Nothing left to undo.'); }, group: 'Edit' },

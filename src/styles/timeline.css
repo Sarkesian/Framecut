@@ -36,7 +36,13 @@
 .clip.sel .edge::after { content: ''; position: absolute; top: 50%; width: 3px; height: 16px; margin-top: -8px; border-radius: 2px; background: #fff; } .edge.l::after { left: 2px; } .edge.r::after { right: 2px; }
 .tr-mark { position: absolute; top: 50%; width: 18px; height: 18px; margin-top: -9px; border-radius: 50%; border: 1px solid rgba(255,255,255,.4); background: var(--bg-2); color: var(--text-2); display: grid; place-items: center; z-index: 4; cursor: pointer; padding: 0; opacity: 0; transition: opacity .12s; }
 .track-lane:hover .tr-mark, .tr-mark.on { opacity: 1; } .tr-mark.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
-.clip .tr-mark { left: -9px; } .clip { overflow: visible; } .clip > .strip, .clip > .wave { border-radius: 6px; }
+.clip .tr-mark { left: -9px; }
+/* Transition block over a cut: as long as the transition, selectable like a clip. */
+.clip:has(.tr-block) { z-index: 1; } .clip.sel:has(.tr-block) { z-index: 2; }
+.tr-block { position: absolute; top: 50%; height: 24px; margin-top: -12px; z-index: 4; display: flex; align-items: center; justify-content: center; gap: 4px; padding: 0 6px; border-radius: 7px; border: 1px solid rgba(255,255,255,.55); background: color-mix(in srgb, var(--accent) 30%, rgba(14,15,20,.82)); color: #fff; font-size: 10.5px; font-weight: 600; cursor: pointer; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,.45); backdrop-filter: blur(2px); }
+.tr-block:hover { border-color: #fff; background: color-mix(in srgb, var(--accent) 45%, rgba(14,15,20,.82)); }
+.tr-block.sel { border-color: #fff; background: var(--accent); color: var(--accent-ink); box-shadow: 0 0 0 2px rgba(0,0,0,.6), 0 0 0 4px var(--accent-line); }
+.tr-block svg { flex: none; } .clip { overflow: visible; } .clip > .strip, .clip > .wave { border-radius: 6px; }
 .playhead { position: absolute; top: 0; bottom: 0; left: 0; width: 0; z-index: 8; pointer-events: none; }
 .playhead::before { content: ''; position: absolute; top: 0; bottom: 0; left: -1px; width: 2px; background: #fff; box-shadow: 0 0 6px rgba(0,0,0,.6); }
 .ph-head { position: sticky; top: 0; width: 14px; height: 16px; margin-left: -7px; background: #fff; clip-path: polygon(0 0, 100% 0, 100% 60%, 50% 100%, 0 60%); pointer-events: auto; cursor: ew-resize; }

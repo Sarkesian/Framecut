@@ -2,7 +2,10 @@
 import { useEffect, useState, useRef } from 'preact/hooks';
 import { useDraft } from './kit.jsx';
 import { Lock, FlipHorizontal2, FlipVertical2, RotateCcw, Trash2, Rewind, Snowflake, Gauge, Scissors, AudioLines, Unlink, Wand2, X, Plus, AlignLeft, AlignCenter, AlignRight, Bold, Italic, CaseUpper, Film, Type, Music, Sparkles, LoaderCircle, Scan, Layers } from 'lucide-preact';
-import { project, primary, selection, time, toast, asset, media, player, commit, fonts, prefs } from '../lib/state.js';
+import { project, primary, selection, time, toast, asset, media, player, commit, fonts, prefs, transitionSel } from '../lib/state.js';
+import { TransitionInspector } from './TransitionPanel.jsx';
+import { selectTransition, applyTransition } from '../lib/edit.js';
+import { transitionDef } from '../../shared/catalog.mjs';
 import { api, waitJob } from '../lib/api.js';
 import { updateClip, updateClips, setSpeed, detachAudio, cutClip, trackOf, freeTrack, setClipText } from '../lib/edit.js';
 import { toggleLock } from '../lib/viewport.js';
@@ -28,6 +31,9 @@ const TABS = { video: ['Basic', 'Color', 'Effects', 'Animation', 'Speed', 'Audio
 export function Inspector() {
   const c = primary.value; const n = selection.value.length;
   const [tab, setTab] = useState({});
+  // A selected transition takes over the panel, like a selected clip does.
+  const ts = transitionSel.value, tc = ts && project.value?.clips.find(x => x.id === ts && x.transition);
+  if (tc) return <TransitionInspector c={tc} />;
   if (!c) return <ProjectPanel />;
   const isCaption = c.kind === 'text' && (c.caption || project.value.tracks.find(t => t.id === c.trackId)?.captions);
   const tabs = isCaption ? ['Caption', 'Basic'] : TABS[c.kind] || ['Basic']; const active = tabs.includes(tab[c.kind]) ? tab[c.kind] : tabs[0];
@@ -156,13 +162,14 @@ function CutoutSection({ c }) {
         <p class="muted hint">Works best on people. Runs on this computer (GPU when available) and creates a separate cutout file.</p></>}
   </Section>;
 }
+// Compact entry point: the full transition controls open in their own panel.
 function TransitionSection({ c }) {
   const p = project.value; const partner = transitionPartner(p, c);
   if (!partner) return null;
-  const max = maxTransition(p, c);
+  const def = c.transition && transitionDef(c.transition.id);
   return <Section title="Transition in">
-    <div class="field"><Select value={c.transition?.id || ''} options={[['', 'None (straight cut)'], ...TRANSITIONS.map(t => [t.id, t.name])]} onChange={v => updateClip(c.id, x => { x.transition = v ? { id: v, duration: x.transition?.duration || Math.min(0.6, max) } : null; }, { label: 'Transition' })} /></div>
-    {c.transition && <Slider label="Duration" min={0.1} max={max} step={0.05} value={c.transition.duration} def={0.6} unit="s" onChange={v => updateClip(c.id, x => { x.transition.duration = v; }, { label: 'Transition duration', key: 'trd' + c.id })} />}
+    {c.transition ? <div class="row"><span class="grow ellipsis">{def?.name || 'Transition'} · {shortTime(Math.min(c.transition.duration || 0.6, maxTransition(p, c)))}</span><button class="btn sm" onClick={() => selectTransition(c.id)}>Edit transition</button></div>
+      : <div class="field"><Select label="Add a transition" value="" options={[['', 'None (straight cut)'], ...TRANSITIONS.map(t => [t.id, t.name])]} onChange={v => v && applyTransition(v, c.id)} /></div>}
   </Section>;
 }
 function ColorPanel({ c }) {

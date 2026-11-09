@@ -163,7 +163,10 @@ function renderPlan(raw, { assets, rasters = {}, luts = {}, processedAudio = {},
       // Animated blur (caption blur reveal): sigma stepped per frame with sendcmd, same values as the preview.
       if (L.blurExpr) {
         const name = 'gblur@b' + Math.random().toString(36).slice(2, 7), cmds = [];
-        for (let t = vs; t < ve; t += 1 / fps) { const v = evaluate(L.blurExpr, { t }) * H / 1080; cmds.push(`${f(t)} ${name} sigma ${f(Math.max(0, v))}`); if (v <= 0.01) break; }
+        // Caption reveals blur from the start and settle (stop once it reaches 0); transition motion blur
+        // only lives inside its windows, so those are walked one by one and reset to 0 afterwards.
+        if (!L.blurWins) for (let t = vs; t < ve; t += 1 / fps) { const v = evaluate(L.blurExpr, { t }) * H / 1080; cmds.push(`${f(t)} ${name} sigma ${f(Math.max(0, v))}`); if (v <= 0.01) break; }
+        else for (const [a, b] of L.blurWins) { const t0 = Math.max(vs, a), t1 = Math.min(ve, b); for (let t = t0; t < t1; t += 1 / fps) cmds.push(`${f(t)} ${name} sigma ${f(Math.max(0, evaluate(L.blurExpr, { t }) * H / 1080))}`); if (t1 > t0) cmds.push(`${f(t1)} ${name} sigma 0`); }
         post.push(`sendcmd=c='${cmds.join(';')}'`, `${name}=sigma=0`);
       }
       const out = `[v${n}_${Math.random().toString(36).slice(2, 7)}]`;

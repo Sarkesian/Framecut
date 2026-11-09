@@ -73,5 +73,10 @@ export const EASE = {
   out: '1-pow(1-p,3)',
   in: 'p*p*p',
   back: '1+2.70158*pow(p-1,3)+1.70158*pow(p-1,2)',
+  linear: 'p',
+  // quintic ease-in-out: fast through the middle, gentle at both ends
+  snappy: 'if(lt(p,0.5),16*pow(p,5),1-pow(-2*p+2,5)/2)',
 };
+// Transition easing presets: every easing helper a transition uses is replaced by the chosen curve.
+export const EASE_PRESET = { smooth: EASE.inout, linear: EASE.linear, in: EASE.in, out: EASE.out, snappy: EASE.snappy, bounce: EASE.back };
 export const fmtNum = n => (Math.abs(n) < 1e-9 ? '0' : String(+n.toFixed(6)));

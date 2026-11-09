@@ -97,3 +97,10 @@
 .rights-item .grow { min-width: 0; } .rights-item small { display: block; color: var(--text-3); line-height: 1.4; }
 .credits-text { width: 100%; min-height: 80px; max-height: 160px; resize: vertical; font: 11.5px/1.45 var(--mono); background: var(--bg-1); color: var(--text-2); border: 1px solid var(--line-2); border-radius: 8px; padding: 8px; user-select: text; }
 @media (prefers-reduced-motion: reduce) { .skel, .lib-drawer { animation: none; } .st-card { transition: none; } }
+
+/* Illustration stickers (Openverse / Pixabay): subtle checkerboard shows transparency, source label on hover. */
+.st-card.img-card { background-image: conic-gradient(var(--bg-3) 25%, transparent 0 50%, var(--bg-3) 0 75%, transparent 0); background-size: 12px 12px; }
+.st-card .st-skel { display: grid; place-items: center; }
+.st-card .st-src { position: absolute; left: 4px; bottom: 4px; max-width: calc(100% - 8px); padding: 1px 5px; border-radius: 6px; font-size: 9.5px; background: color-mix(in srgb, var(--bg-1) 82%, transparent); color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0; transition: opacity .12s; pointer-events: none; }
+.st-card:hover .st-src, .st-card:focus-visible .st-src { opacity: 1; }
+.lib-count .lib-retry { padding: 0 6px; height: 20px; margin-left: 2px; }

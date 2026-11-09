@@ -4,17 +4,17 @@ import { useEffect, useRef, useState, useMemo } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { Slice, FoldHorizontal, GalleryHorizontalEnd, ChevronDown } from 'lucide-preact';
 import { Scissors, Trash2, Copy, Undo2, Redo2, Magnet, ZoomIn, ZoomOut, Maximize, Eye, EyeOff, Lock, LockOpen, Volume2, VolumeX, Plus, Film, Music, Type, Layers, Snowflake, Unlink, Link2, Pencil, ArrowLeftRight, ArrowLeftToLine, ArrowRightToLine, Diamond, Gauge, Blend, Captions, Sparkles, Mic, MoreHorizontal } from 'lucide-preact';
-import { project, selection, time, zoom, media, asset, player, history, undo, redo, commit, toast, drag, playing, duration, libraryTab } from '../lib/state.js';
+import { project, selection, time, zoom, media, asset, player, history, undo, redo, commit, toast, drag, playing, duration, libraryTab , transitionSel } from '../lib/state.js';
 import { closeAllGaps, bladeCut } from '../lib/edit.js';
-import { splitAt, deleteClips, duplicateClips, copyClips, cutClips, pasteClips, placeClips, trimClips, trimLimits, setTrack, removeTrack, addTrack, closeGaps, closeGap, trackGaps, detachAudio, addAssets, addText, addSticker, applyEffect, applyFilter, applyTransition, trackOf, overlaps, freeTrack, updateClip, partnerOf, unlinkClip } from '../lib/edit.js';
+import { splitAt, deleteClips, duplicateClips, copyClips, cutClips, pasteClips, placeClips, trimClips, trimLimits, setTrack, removeTrack, addTrack, closeGaps, closeGap, trackGaps, detachAudio, addAssets, addText, addSticker, applyEffect, applyFilter, applyTransition, selectTransition, removeTransition, trackOf, overlaps, freeTrack, updateClip, partnerOf, unlinkClip } from '../lib/edit.js';
 import { beginDrag } from '../lib/drag.js';
 import { timelineTargets, snapEdges, toFrame } from '../../shared/snap.mjs';
 import { keySel, keyDrag, keyTimes, isKeySelected, toggleKey, clearKeys, moveKeys, deleteKeys, setKeyEasing, copyKeys, pasteKeys } from '../lib/keyedit.js';
 import { EASINGS } from '../../shared/keys.mjs';
 import { ui, setUi } from '../lib/uiprefs.js';
 import { timecode } from '../lib/format.js';
-import { clipEnd, trackKindFor, mainTrack, transitionPartner, newClip, uid } from '../../shared/model.mjs';
-import { transitionDef, effectDef, filterDef } from '../../shared/catalog.mjs';
+import { clipEnd, trackKindFor, mainTrack, transitionPartner, maxTransition, newClip, uid } from '../../shared/model.mjs';
+import { transitionDef, effectDef, filterDef, transitionWindow } from '../../shared/catalog.mjs';
 import { openMenu, prompt } from './kit.jsx';
 import { importFiles } from '../lib/api.js';
 import { fitTimeline, zoomAround } from './commands.jsx';
@@ -90,7 +90,7 @@ export function Timeline() {
       move: ev => { const x1 = ev.clientX - r.left + el.scrollLeft - HEADER_W, y1 = ev.clientY - r.top + el.scrollTop; marquee.value = { x: Math.min(x0, x1), y: Math.min(y0, y1), w: Math.abs(x1 - x0), h: Math.abs(y1 - y0) }; },
       cancel: () => { marquee.value = null; },
       end: (ev, { moved }) => {
-        if (!moved) { if (!(ev.ctrlKey || ev.shiftKey)) { selection.value = []; clearKeys(); } player.current?.seek(Math.min(duration.value, toFrame(timeAt(ev.clientX), p.settings.fps))); return; }
+        if (!moved) { if (!(ev.ctrlKey || ev.shiftKey)) { selection.value = []; transitionSel.value = null; clearKeys(); } player.current?.seek(Math.min(duration.value, toFrame(timeAt(ev.clientX), p.settings.fps))); return; }
         const m = marquee.value; marquee.value = null; if (!m) return;
         const t0 = m.x / z, t1 = (m.x + m.w) / z; let y = RULER_H; const hit = [], keys = [];
         for (const t of project.value.tracks) {
@@ -246,9 +246,23 @@ function Clip({ c, t, z }) {
     </div>
     {c.keyframes && keyTimes(c).map(k => { const on = isKeySelected(c.id, k), kd = keyDrag.value; const kt = on && kd ? Math.min(c.duration, Math.max(0, k + kd.dt)) : k; return <span key={'k' + k} class={`clip-key ${on ? 'sel' : ''}`} style={{ left: kt * z }} data-tip="Keyframe · click to jump, Shift+click to multi-select, drag to move" onPointerDown={e => keyDown(e, c, k, z)} onContextMenu={e => { e.stopPropagation(); keyMenu(e, c, k); }} />; })}
     {c.markers?.map((m, i) => <span key={i} class="clip-marker" style={{ left: ((m.t - (c.in || 0)) / (c.speed || 1)) * z }} data-tip={m.label || 'Mistake marker'} />)}
-    {partner && <button class={`tr-mark ${c.transition ? 'on' : ''}`} style={{ left: -9 }} data-tip={c.transition ? transitionDef(c.transition.id)?.name + ' · click to edit' : 'Add a transition'} onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); selection.value = [c.id]; if (!c.transition) applyTransition('dissolve', c.id); else libraryTab.value = 'transitions'; }}><Blend size={10} /></button>}
+    {partner && !c.transition && <button class="tr-mark" style={{ left: -9 }} data-tip="Add a transition" onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); applyTransition('dissolve', c.id); }}><Blend size={10} /></button>}
+    {partner && c.transition && <TransitionBlock c={c} start={start} z={z} p={p} />}
     {!trackOf(p, c.trackId)?.locked && !c.locked && <><span class="edge l" onPointerDown={e => edgeDown(e, c, 'start', z)} /><span class="edge r" onPointerDown={e => edgeDown(e, c, 'end', z)} /></>}
   </div>;
+}
+
+// A transition on the timeline: a block over the cut, as long as the transition, placed where it plays
+// (before, on or after the cut). Click to select it and edit it in the details panel; Delete removes it.
+function TransitionBlock({ c, start, z, p }) {
+  const def = transitionDef(c.transition.id); const d = Math.min(c.transition.duration || 0.6, maxTransition(p, c));
+  const [T0, T1] = transitionWindow(c, d); const w = Math.max(16, (T1 - T0) * z); const on = transitionSel.value === c.id;
+  return <button class={`tr-block ${on ? 'sel' : ''}`} style={{ left: (T0 - c.start) * z - (w - (T1 - T0) * z) / 2, width: w }} aria-pressed={on}
+    data-tip={`${def?.name || 'Transition'} · ${d.toFixed(2).replace(/0$/, '')} s · click to edit`} onPointerDown={e => e.stopPropagation()}
+    onClick={e => { e.stopPropagation(); selectTransition(c.id); }}
+    onContextMenu={e => { e.preventDefault(); e.stopPropagation(); selectTransition(c.id); openMenu(e, [{ text: 'Edit transition', icon: Blend, onClick: () => selectTransition(c.id) }, { text: 'Remove transition', icon: Trash2, danger: true, onClick: () => removeTransition(c.id) }]); }}>
+    <Blend size={11} />{w > 74 && <span class="ellipsis">{def?.name}</span>}
+  </button>;
 }
 
 // Filmstrip: only the tiles inside the visible window are drawn.

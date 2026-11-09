@@ -5,21 +5,40 @@
 // Offsets x / y are fractions of the canvas width / height, s multiplies scale, r is degrees.
 // alpha: 'ramp' (linear fade over the window) | 'step' (switch at the midpoint)
 
+// Transitions. B is the incoming clip, A the outgoing one. Directional types share a `family` and differ
+// by `dir`, so the editor shows one tile plus a direction control. `blur` is a default motion-blur peak
+// (0..1) for fast moves. Old ids stay valid in saved projects.
+const DIRS = { left: ['1-e', 0, '-e', 0], right: ['-(1-e)', 0, 'e', 0], up: [0, '1-e', 0, '-e'], down: [0, '-(1-e)', 0, 'e'] };
+const dirMove = (family, dir, { push = false, blur = 0, name, group = 'Slide', ease } = {}) => {
+  const [bx, by, ax, ay] = DIRS[dir];
+  const B = {}, A = {}; if (bx) B.x = bx; if (by) B.y = by; if (push) { if (ax) A.x = ax; if (ay) A.y = ay; }
+  return { id: `${family}-${dir}`, family, dir, name: `${name} ${dir}`, group, B, ...(push ? { A } : {}), ...(blur ? { blur } : {}), ...(ease ? { ease } : {}) };
+};
 export const TRANSITIONS = [
-  { id: 'dissolve', name: 'Dissolve', group: 'Basic', B: { alpha: 'ramp' } },
-  { id: 'dip-black', name: 'Fade to black', group: 'Basic', B: { alpha: 'step' }, dip: '#000000' },
-  { id: 'dip-white', name: 'Flash white', group: 'Basic', B: { alpha: 'step' }, dip: '#ffffff' },
-  { id: 'slide-left', name: 'Slide left', group: 'Slide', B: { x: '1-e' } },
-  { id: 'slide-right', name: 'Slide right', group: 'Slide', B: { x: '-(1-e)' } },
-  { id: 'slide-up', name: 'Slide up', group: 'Slide', B: { y: '1-e' } },
-  { id: 'slide-down', name: 'Slide down', group: 'Slide', B: { y: '-(1-e)' } },
-  { id: 'push-left', name: 'Push left', group: 'Slide', B: { x: '1-e' }, A: { x: '-e' } },
-  { id: 'push-right', name: 'Push right', group: 'Slide', B: { x: '-(1-e)' }, A: { x: 'e' } },
-  { id: 'push-up', name: 'Push up', group: 'Slide', B: { y: '1-e' }, A: { y: '-e' } },
-  { id: 'zoom-in', name: 'Zoom in', group: 'Zoom', B: { s: '1.45-0.45*e', alpha: 'ramp' } },
-  { id: 'zoom-out', name: 'Zoom out', group: 'Zoom', B: { s: '0.55+0.45*e', alpha: 'ramp' } },
-  { id: 'spin', name: 'Spin', group: 'Zoom', B: { r: '-90*(1-e)', s: 'max(0.02,0.4+0.6*e)', alpha: 'ramp' } },
+  { id: 'dissolve', family: 'dissolve', name: 'Dissolve', group: 'Basic', B: { alpha: 'ramp' } },
+  { id: 'dip-black', family: 'dip', name: 'Fade to black', group: 'Basic', B: { alpha: 'step' }, dip: '#000000' },
+  { id: 'dip-white', family: 'flash', name: 'Flash white', group: 'Basic', B: { alpha: 'step' }, dip: '#ffffff' },
+  ...['left', 'right', 'up', 'down'].map(d => dirMove('slide', d, { name: 'Slide' })),
+  ...['left', 'right', 'up', 'down'].map(d => dirMove('push', d, { name: 'Push', push: true })),
+  ...['left', 'right', 'up', 'down'].map(d => dirMove('whip', d, { name: 'Whip', push: true, blur: 0.7, group: 'Motion', ease: 'snappy' })),
+  { id: 'zoom-in', family: 'zoom-in', name: 'Zoom in', group: 'Zoom', B: { s: '1.45-0.45*e', alpha: 'ramp' } },
+  { id: 'zoom-out', family: 'zoom-out', name: 'Zoom out', group: 'Zoom', B: { s: '0.55+0.45*e', alpha: 'ramp' } },
+  { id: 'zoom-through', family: 'zoom-through', name: 'Zoom through', group: 'Zoom', A: { s: '1+0.8*e' }, B: { s: '0.7+0.3*e', alpha: 'ramp' }, blur: 0.35 },
+  { id: 'spin', family: 'spin', name: 'Spin', group: 'Zoom', B: { r: '-90*(1-e)', s: 'max(0.02,0.4+0.6*e)', alpha: 'ramp' } },
+  { id: 'spin-zoom', family: 'spin-zoom', name: 'Spin zoom', group: 'Motion', A: { r: '120*e', s: '1+0.6*e' }, B: { r: '-120*(1-e)', s: 'max(0.02,1.6-0.6*e)', alpha: 'ramp' }, blur: 0.5 },
+  { id: 'drop', family: 'drop', name: 'Drop in', group: 'Motion', B: { y: '-(1-b)' } },
+  { id: 'rise', family: 'rise', name: 'Rise up', group: 'Motion', B: { y: '1-b', alpha: 'ramp' } },
 ];
+// One entry per family, in display order, with the directions it offers.
+export const TRANSITION_FAMILIES = [...new Map(TRANSITIONS.map(t => [t.family, { id: t.family, name: t.dir ? t.name.replace(/ (left|right|up|down)$/, '') : t.name, group: t.group, dirs: TRANSITIONS.filter(x => x.family === t.family && x.dir).map(x => x.dir), first: t.id }])).values()];
+export const transitionIn = (family, dir) => TRANSITIONS.find(t => t.family === family && (!dir || t.dir === dir)) || TRANSITIONS.find(t => t.family === family);
+// Easing presets for transitions. 'auto' keeps each transition's own curve.
+export const TRANSITION_EASES = [['auto', 'Natural'], ['smooth', 'Smooth'], ['linear', 'Linear'], ['in', 'Speed up'], ['out', 'Slow down'], ['snappy', 'Snappy'], ['bounce', 'Bouncy']];
+// Where the transition sits relative to the cut.
+export const TRANSITION_ALIGN = [['end', 'Before cut'], ['center', 'On the cut'], ['start', 'After cut']];
+export const transitionWindow = (c, d) => { const a = c.transition?.align; return a === 'end' ? [c.start - d, c.start] : a === 'start' ? [c.start, c.start + d] : [c.start - d / 2, c.start + d / 2]; };
+// What a transition type can be tuned with.
+export const transitionCaps = def => ({ motion: !!(def && ['x', 'y', 's', 'r'].some(k => def.A?.[k] || def.B?.[k])), dip: !!def?.dip, dirs: def?.family ? TRANSITIONS.filter(x => x.family === def.family && x.dir).map(x => x.dir) : [] });
 
 export const ANIMATIONS = {
   in: [

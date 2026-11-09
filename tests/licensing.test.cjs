@@ -245,3 +245,31 @@ test('Free music & SFX sources: SFX Kit (pinned, fingerprint-checked) and ccMixt
     assert.doesNotMatch(clean, /DOCTYPE|ENTITY|&ns_flows;/); assert.match(clean, /xmlns:x="http:\/\/ns\.adobe\.com\/Flows\/1\.0\/"/);
   } finally { await s?.close(); srv?.close(); await fs.rm(dir, { recursive: true, force: true }).catch(() => {}); }
 });
+
+test('Previews: at most two downloads per host at once, and a 429 pauses that host instead of hammering it', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'fc-pace-')); let s, srv;
+  try {
+    let base = '', live = 0, peak = 0, hits = 0, limit = false;
+    const uuid = n => `0000000${n}-1111-2222-3333-444444444444`.slice(-36);
+    const item = n => ({ id: uuid(n), title: `Shape ${n}`, url: `${base}/img/${n}.png`, creator: 'X', foreign_landing_url: `https://example.org/${n}`, license: 'cc0', license_version: '1.0', license_url: 'https://creativecommons.org/publicdomain/zero/1.0/', source: 'svgsilh', filetype: 'png' });
+    srv = http.createServer((req, res) => {
+      const u = new URL(req.url, base);
+      if (u.pathname === '/v1/images/') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ result_count: 8, page_count: 1, page: 1, results: [1, 2, 3, 4, 5, 6, 7, 8].map(item) })); }
+      if (u.pathname.startsWith('/img/')) {
+        hits++; if (limit) { res.writeHead(429, { 'Retry-After': '120' }); return res.end(); }
+        live++; peak = Math.max(peak, live); setTimeout(() => { live--; res.writeHead(200, { 'Content-Type': 'image/png' }); res.end(Buffer.from('89504e470d0a1a0a', 'hex')); }, 120); return;
+      }
+      res.writeHead(404); res.end();
+    });
+    await new Promise(r => srv.listen(0, '127.0.0.1', r)); base = `http://127.0.0.1:${srv.address().port}`;
+    s = await startServer({ dataDir: path.join(dir, 'data'), creative: { http: new SafeHttp({ allowLocal: true }), openverseBase: base + '/v1' } });
+    const r = await api(s.url)('/api/creative/search?provider=openverse&kind=sticker&q=shape');
+    const ids = r.items.map(x => x.sourceId);
+    await Promise.all(ids.slice(0, 6).map(id => fetch(`${s.url}/api/creative/preview/openverse/${id}`).then(x => x.arrayBuffer())));
+    assert.ok(peak <= 2, `at most two at once per host (saw ${peak})`); assert.equal(hits, 6);
+    limit = true; const before = hits;
+    const res7 = await fetch(`${s.url}/api/creative/preview/openverse/${ids[6]}`); assert.notEqual(res7.status, 200);
+    const res8 = await fetch(`${s.url}/api/creative/preview/openverse/${ids[7]}`); assert.notEqual(res8.status, 200);
+    assert.equal(hits, before + 1, 'after a 429 the host is left alone until its Retry-After');
+  } finally { await s?.close(); srv?.close(); await fs.rm(dir, { recursive: true, force: true }).catch(() => {}); }
+});

@@ -18,6 +18,9 @@ export const menu = signal(null);
 
 export const project = signal(null);
 export const selection = signal([]); // clip ids, primary first
+// The selected transition (id of the clip it leads into). Selecting clips clears it, and vice versa.
+export const transitionSel = signal(null);
+effect(() => { if (selection.value.length && transitionSel.peek()) transitionSel.value = null; });
 export const selectedTrack = signal(null);
 export const time = signal(0);
 export const playing = signal(false);

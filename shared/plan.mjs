@@ -1,7 +1,7 @@
 // Turns a project into a list of time-windowed layers. The WebGL preview and the FFmpeg export
 // both consume this plan, so positioning, timing, transitions and animations are computed once.
-import { substitute, EASE, evaluate, fmtNum } from './expr.mjs';
-import { transitionDef, animDef, effectDef, fx } from './catalog.mjs';
+import { substitute, EASE, EASE_PRESET, evaluate, fmtNum } from './expr.mjs';
+import { transitionDef, animDef, effectDef, fx, transitionWindow, transitionCaps } from './catalog.mjs';
 import { clipEnd, srcOut, isVisual, transitionPartner, stickerMedia } from './model.mjs';
 import { resolveCaption, captionMotion, wordOverlays } from './captions.mjs';
 
@@ -11,9 +11,11 @@ import { needsProcessing, fxKey, keyGain, mergeKeys } from './audio.mjs';
 import { keyExpr as transformKeyExpr, baseValue } from './keys.mjs';
 
 const f = fmtNum;
-function bake(expr, { T0, D, start }) {
+function bake(expr, { T0, D, start, ease }) {
   // easing helpers are defined in terms of p; expand them, then bind p and u to the clip timing.
-  let s = substitute(expr, { e: EASE.inout, eo: EASE.out, ei: EASE.in, b: EASE.back });
+  // A transition's easing preset replaces all of them with one curve.
+  const E = EASE_PRESET[ease];
+  let s = substitute(expr, E ? { e: E, eo: E, ei: E, b: E } : { e: EASE.inout, eo: EASE.out, ei: EASE.in, b: EASE.back });
   const map = {}; if (D !== undefined) map.p = `clip((t-${f(T0)})/${f(D)},0,1)`; if (start !== undefined) map.u = `(t-${f(start)})`;
   return substitute(s, map);
 }
@@ -31,7 +33,7 @@ export function buildPlan(project, { W, H, media = () => null, sizes = () => nul
   const byTrack = id => project.clips.filter(c => c.trackId === id).sort((a, b) => a.start - b.start);
   const bg = project.settings.background || {};
   const motion = new Map(); // clipId -> {x:[], y:[], s:[], r:[], fades:[], steps:[]}
-  const M = id => { if (!motion.has(id)) motion.set(id, { x: [], y: [], s: [], r: [], fades: [], steps: [], vs: null, ve: null, alpha: null }); return motion.get(id); };
+  const M = id => { if (!motion.has(id)) motion.set(id, { x: [], y: [], s: [], r: [], fades: [], steps: [], vs: null, ve: null, alpha: null, blur: [] }); return motion.get(id); };
 
   // Pass 1: timing windows, transitions and animations.
   for (const c of project.clips) {
@@ -61,18 +63,31 @@ export function buildPlan(project, { W, H, media = () => null, sizes = () => nul
     }
     for (const e of c.effects || []) if (e.id === 'shake') { m.x.push(bake(fx.shakeX(e.amount ?? 0.5), { start: c.start })); m.y.push(bake(fx.shakeY(e.amount ?? 0.5), { start: c.start })); }
   }
-  const dips = [];
+  // Transitions: window (alignment to the cut), easing, strength, motion blur and dip colour come from
+  // the clip's transition settings; the outgoing clip is held on its last frame where it must overlap.
+  const dips = [], audioFades = new Map();
   for (const c of project.clips) {
     if (!isVisual(c) || c.kind === 'adjust' || !c.transition?.id) continue;
-    const def = transitionDef(c.transition.id), a = transitionPartner(project, c); if (!def || !a) continue;
-    const d = Math.max(0.05, Math.min(c.transition.duration || 0.6, c.duration * 0.9, a.duration * 0.9));
-    const T0 = c.start - d / 2, timing = { T0, D: d, start: c.start };
+    const tr = c.transition, def = transitionDef(tr.id), a = transitionPartner(project, c); if (!def || !a) continue;
+    const d = Math.max(0.05, Math.min(tr.duration || 0.6, c.duration * 0.9, a.duration * 0.9));
+    const [T0, T1] = transitionWindow(c, d);
+    const timing = { T0, D: d, start: c.start, ease: tr.ease && tr.ease !== 'auto' ? tr.ease : def.ease };
+    const k = Math.max(0, Math.min(2, tr.strength ?? 1));
+    const scaled = (key, ex) => (k === 1 ? ex : key === 's' ? `1+${f(k)}*((${ex})-1)` : `${f(k)}*(${ex})`);
     const mb = M(c.id), ma = M(a.id);
-    mb.vs = Math.min(mb.vs, T0); ma.ve = Math.max(ma.ve, c.start + d / 2);
-    for (const k of ['x', 'y', 's', 'r']) { if (def.B?.[k]) mb[k].push(bake(def.B[k], timing)); if (def.A?.[k]) ma[k].push(bake(def.A[k], timing)); }
+    mb.vs = Math.min(mb.vs, T0); ma.ve = Math.max(ma.ve, T1);
+    for (const key of ['x', 'y', 's', 'r']) { if (def.B?.[key]) mb[key].push(bake(scaled(key, def.B[key]), timing)); if (def.A?.[key]) ma[key].push(bake(scaled(key, def.A[key]), timing)); }
     if (def.B?.alpha === 'ramp') mb.fades.push({ dir: 'in', st: T0, d });
-    if (def.B?.alpha === 'step') mb.steps.push({ at: c.start });
-    if (def.dip) dips.push({ after: c.id, trackId: c.trackId, color: def.dip, st: T0, d });
+    if (def.B?.alpha === 'step') mb.steps.push({ at: T0 + d / 2 });
+    if (def.dip) dips.push({ after: c.id, trackId: c.trackId, color: /^#[0-9a-f]{6}$/i.test(tr.color || '') ? tr.color : def.dip, st: T0, d });
+    // Motion blur peaks mid-move (sigma in px at 1080p, like every other blur value).
+    const blur = Math.max(0, Math.min(1, tr.blur ?? def.blur ?? 0));
+    if (blur > 0.01 && transitionCaps(def).motion) {
+      const ex = `if(between(t,${f(T0)},${f(T1)}),${f(blur * 28)}*sin(PI*clip((t-${f(T0)})/${f(d)},0,1)),0)`;
+      for (const m of [mb, ma]) m.blur.push({ ex, win: [T0, T1] });
+    }
+    // Smooth audio: the outgoing sound fades out into the cut and the incoming one fades in from it.
+    if (tr.audio === 'smooth') { const h = d / 2; audioFades.set(c.id, { ...audioFades.get(c.id), in: h }); audioFades.set(a.id, { ...audioFades.get(a.id), out: h }); }
   }
 
   // Pass 2: geometry and stacking. Text, stickers and vector images are drawn from rasters.
@@ -132,6 +147,7 @@ export function buildPlan(project, { W, H, media = () => null, sizes = () => nul
     const m = M(c.id), a = media(c.mediaId) || {};
     const L = { id: c.id, type: isRaster(c) ? 'raster' : c.kind === 'adjust' ? 'adjust' : 'media', clip: c, trackId: track.id, vs: m.vs, ve: m.ve, ...geometry(c), motion: exprOf(m), fades: m.fades, steps: m.steps };
     if (m.alpha) { L.alphaExpr = m.alpha; L.opacity = 1; }
+    if (m.blur.length) { L.blurExpr = m.blur.map(b => b.ex).join('+'); L.blurWins = m.blur.map(b => b.win).sort((x, y) => x[0] - y[0]); }
     if (L.type === 'media') { L.mediaId = c.mediaId; L.image = c.kind === 'image' || a.kind === 'image'; L.srcDuration = a.duration || 0; if (stickerMedia(c) && !L.image) L.loop = c.loop !== false; }
     if (c.kind === 'text' && c.style?.highlight && c.words?.length) L.variants = c.words.map((w, i) => ({ key: 'w' + i, from: c.start + w.start, to: i + 1 < c.words.length ? c.start + c.words[i + 1].start : clipEnd(c) }));
     return L;
@@ -155,7 +171,8 @@ export function buildPlan(project, { W, H, media = () => null, sizes = () => nul
     const track = tracks.find(t => t.id === c.trackId); if (!track || track.muted || c.muted) continue;
     if (!(c.kind === 'video' || c.kind === 'audio') || !(c.volume > 0)) continue;
     const a = media(c.mediaId); if (a && !a.audio) continue;
-    audio.push({ id: c.id, clip: c, mediaId: c.mediaId, processed: hasAudioFx(c) ? audioFxKey(c) : null, keys: mergeKeys(c.volumeKeys, c.duckKeys), srcIn: c.in, srcOut: srcOut(c), start: c.start, duration: c.duration, speed: c.speed || 1, volume: c.volume, fadeIn: Math.min(c.fadeIn || 0, c.duration / 2), fadeOut: Math.min(c.fadeOut || 0, c.duration / 2) });
+    const af = audioFades.get(c.id) || {};
+    audio.push({ id: c.id, clip: c, mediaId: c.mediaId, processed: hasAudioFx(c) ? audioFxKey(c) : null, keys: mergeKeys(c.volumeKeys, c.duckKeys), srcIn: c.in, srcOut: srcOut(c), start: c.start, duration: c.duration, speed: c.speed || 1, volume: c.volume, fadeIn: Math.min(Math.max(c.fadeIn || 0, af.in || 0), c.duration / 2), fadeOut: Math.min(Math.max(c.fadeOut || 0, af.out || 0), c.duration / 2) });
   }
   const duration = Math.max(0, ...project.clips.map(clipEnd));
   return { W, H, fps, duration, layers, audio };

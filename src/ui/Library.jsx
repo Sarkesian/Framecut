@@ -16,12 +16,18 @@ import { svgUrl } from '../engine/raster.js';
 import { shortTime } from '../lib/format.js';
 import {
   audioTab, stickerTab, searches, search, recentSearches, lists, loadLists, loadStatus, libStatus, toggleFavorite, togglePreview, stopPreview, preview, previewTime, seekPreview, setPreviewVolume,
-  useRecord, dragRecord, dragAsset, insertAudio, insertSticker, busyKeys, selectedRecord, usageMode, setUsageMode, rightsOf, importStickerFiles, pickStickerFiles,
+  useRecord, dragRecord, dragAsset, insertAudio, insertSticker, busyKeys, selectedRecord, usageMode, setUsageMode, rightsOf, importStickerFiles, pickStickerFiles, categories, loadCategories, warmSources,
 } from '../lib/creative.js';
 
-const MUSIC_IDEAS = ['Cinematic', 'Lo-fi', 'Upbeat', 'Acoustic', 'Ambient', 'Electronic', 'Piano', 'Hip hop', 'Rock', 'Happy', 'Chill', 'Epic'];
+const MUSIC_IDEAS = ['Cinematic', 'Lo-fi', 'Upbeat', 'Acoustic', 'Ambient', 'Electronic', 'Piano', 'Guitar', 'Hip hop', 'Techno', 'Rock', 'Happy', 'Chill', 'Epic', 'Jazz', 'Orchestral'];
 const SFX_IDEAS = ['Whoosh', 'Click', 'Pop', 'Swoosh', 'Applause', 'Footsteps', 'Notification', 'Camera shutter', 'Typing', 'Laugh', 'Door', 'Ding'];
-const SOURCES = [['', 'All sources'], ['jamendo', 'Jamendo'], ['ccmixter', 'ccMixter'], ['freesound', 'Freesound'], ['wikimedia_audio', 'Wikimedia Commons']];
+const STICKER_IDEAS = ['Star', 'Heart', 'Arrow', 'Speech bubble', 'Crown', 'Trophy', 'Rocket', 'Lightning', 'Fire', 'Music note', 'Sun', 'Flower', 'Cat', 'Dog', 'Bird', 'Tree', 'Check mark', 'Question mark'];
+// Source filter per panel. Whole providers (ccMixter, SFX Kit) or Openverse's own sources.
+const SOURCES = {
+  music: [['', 'All sources'], ['ccmixter', 'ccMixter'], ['freesound', 'Freesound'], ['wikimedia_audio', 'Wikimedia Commons']],
+  sfx: [['', 'All sources'], ['sfxkit', 'SFX Kit'], ['freesound', 'Freesound'], ['wikimedia_audio', 'Wikimedia Commons']],
+};
+const SOURCE_NAMES = { openverse: 'Openverse', ccmixter: 'ccMixter', sfxkit: 'SFX Kit', fluent: 'Fluent Emoji', pixabay: 'Pixabay' };
 const reduced = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 const scrollMemory = new Map();
 
@@ -76,12 +82,32 @@ function StateCard({ s, panel, onRetry }) {
     return <div class={`lib-state ${quota ? 'warn' : ''}`} role="status">
       {offline ? <WifiOff size={22} /> : quota ? <Hourglass size={22} /> : <TriangleAlert size={22} />}
       <b>{offline ? 'You’re offline' : quota ? 'Taking a short break' : 'Search didn’t work'}</b>
-      <span>{offline ? 'Online search needs internet. Everything already in your project keeps working — see My audio.' : quota ? `Openverse limits free searches (about 20 a minute). Try again in ${e.retryAfter || 60} s, or add free Openverse API credentials in Preferences › Library for more.` : e.message}</span>
+      <span>{offline ? 'Online search needs internet. Everything already in your project keeps working — see My audio and Mine.' : quota ? `${e.message} Try again in ${e.retryAfter || 60} s.${/openverse/i.test(e.message) ? ' Free Openverse API credentials in Preferences › Library raise the limit.' : ''}` : e.message}</span>
       <button class="btn sm" onClick={onRetry}>Try again</button>
     </div>;
   }
-  if (s.status === 'empty') return <div class="lib-state" role="status"><Search size={22} /><b>No results for “{s.q}”</b><span>Try fewer or broader words{s.length || s.source ? ', or clear the filters' : ''}.{usageMode() === 'commercial' ? ' Only licenses that allow monetized videos are shown.' : ''}</span>{(s.length || s.source) && <button class="btn sm" onClick={() => search(panel, { length: '', source: '' }, { now: true })}>Clear filters</button>}</div>;
+  if (s.status === 'empty') return <div class="lib-state" role="status"><Search size={22} /><b>{s.q ? <>No results for “{s.q}”</> : 'Nothing here yet'}</b><span>Try fewer or broader words{s.length || s.source || s.category ? ', or clear the filters' : ''}. Only items that need no credit are shown.</span>{(s.length || s.source || s.category) && <button class="btn sm" onClick={() => search(panel, { length: '', source: '', category: '' }, { now: true })}>Clear filters</button>}</div>;
   return null;
+}
+// "120 results from Openverse, SFX Kit" plus any source that was slow or failed, with a retry.
+function ResultCount({ s, panel, noun = 'result' }) {
+  const n = s.total > s.results.length ? s.total : s.results.length;
+  const names = (s.sources || []).filter(x => x.total > 0).map(x => SOURCE_NAMES[x.provider] || x.provider);
+  return <div class="lib-count muted" aria-live="polite">
+    {n > s.results.length ? `${n.toLocaleString()}+ ${noun}s` : `${s.results.length} ${noun}${s.results.length === 1 ? '' : 's'}`}{names.length ? ' from ' + names.join(', ') : ''}
+    {s.partial?.length > 0 && <> · <span class="warnc">{s.partial.map(p => `${SOURCE_NAMES[p.provider] || p.name || p.provider} ${p.code === 'slow' ? 'is slow to answer' : 'didn’t answer'}`).join(', ')}</span> <button class="btn sm ghost lib-retry" onClick={() => search(panel, {}, { now: true })}>Try again</button></>}
+  </div>;
+}
+// Category chips of a source that has categories (SFX Kit sounds). Picking one browses that category.
+function CategoryChips({ panel, provider, title }) {
+  useEffect(() => { loadCategories(provider); }, [provider]);
+  const cats = categories.value[provider] || []; if (!cats.length) return null;
+  return <><h4 class="group-title">{title}</h4><div class="lib-chips" aria-label={title}>{cats.map(c => <button key={c.id} class="fchip" onClick={() => search(panel, { category: c.id, q: '' }, { now: true })}>{c.name}{c.count ? <small class="muted"> {c.count}</small> : null}</button>)}</div></>;
+}
+function ActiveCategory({ s, panel, provider }) {
+  if (!s.category) return null;
+  const name = (categories.value[provider] || []).find(c => c.id === s.category)?.name || s.category;
+  return <div class="lib-chips"><button class="fchip on" aria-label={'Remove category ' + name} onClick={() => search(panel, { category: '' }, { now: true })}>{name} <X size={11} /></button>{s.q ? <small class="muted">Searching inside this category</small> : null}</div>;
 }
 function Skeleton({ rows = 6, grid }) { return <div class={grid ? 'sticker-grid' : 'audio-list'} aria-hidden="true">{Array.from({ length: rows }, (_, i) => <div key={i} class={grid ? 'skel tile-skel' : 'skel row-skel'} />)}</div>; }
 
@@ -105,29 +131,32 @@ function OnlineAudio({ panel }) {
   const L = lists.value.audio; const fav = L.favorites.filter(x => x.kind === panel), rec = L.recents.filter(x => x.kind === panel);
   const focusFirst = () => listRef.current?.querySelector('.lib-row')?.focus();
   const more = useRef();
+  useEffect(() => { warmSources(panel); }, [panel]);
   useEffect(() => { const el = more.current; if (!el) return; const io = new IntersectionObserver(es => { if (es[0].isIntersecting && searches[panel].value.status === 'ok' && searches[panel].value.page < searches[panel].value.pages) search(panel, {}, { more: true }); }, { rootMargin: '200px' }); io.observe(el); return () => io.disconnect(); }, [panel, s.status, s.page]);
   return <>
     <SearchField panel={panel} placeholder={panel === 'music' ? 'Search free music — mood, genre, instrument' : 'Search sound effects — whoosh, click, rain…'} onArrowDown={focusFirst} />
     <div class="lib-filters">
       <Select label="Length" value={s.length} options={panel === 'music' ? [['', 'Any length'], ['clip', 'Under 1 min'], ['song', 'Over 1 min']] : [['', 'Any length'], ['short', 'Under 10 s'], ['medium', '10–60 s'], ['long', 'Over 1 min']]} onChange={v => search(panel, { length: v }, { now: true })} />
-      <Select label="Source" value={s.source} options={panel === 'music' ? SOURCES.filter(x => ['', 'jamendo', 'ccmixter', 'wikimedia_audio'].includes(x[0])) : SOURCES.filter(x => ['', 'freesound', 'wikimedia_audio'].includes(x[0]))} onChange={v => search(panel, { source: v }, { now: true })} />
+      <Select label="Source" value={s.source} options={SOURCES[panel]} onChange={v => search(panel, { source: v, ...(v && v !== 'sfxkit' ? { category: '' } : {}) }, { now: true })} />
       <UsageSwitch />
     </div>
     {panel === 'music' && <div class="lib-mix" role="group" aria-label="When adding music">
       <button class={`fchip ${p.libraryBalance ? 'on' : ''}`} aria-pressed={!!p.libraryBalance} onClick={() => savePrefs({ libraryBalance: !p.libraryBalance })} data-tip="Sets new music's volume to sit under speech. Your recordings are never changed."><Volume2 size={12} />Auto balance</button>
       <button class={`fchip ${p.libraryDuck ? 'on' : ''}`} aria-pressed={!!p.libraryDuck} onClick={() => savePrefs({ libraryDuck: !p.libraryDuck })} data-tip="Music dips automatically while someone speaks on a voice track (Audio Studio ducking)."><Mic size={12} />Duck under voice</button>
     </div>}
-    {!s.q.trim() ? <div class="lib-idle">
+    <ActiveCategory s={s} panel={panel} provider="sfxkit" />
+    {!s.q.trim() && !s.category ? <div class="lib-idle">
       <Chips label="Ideas" items={ideas} onPick={q => search(panel, { q }, { now: true })} />
       <Chips label="Recent searches" icon={Clock} items={recentSearches(panel)} onPick={q => search(panel, { q }, { now: true })} />
+      {panel === 'sfx' && <CategoryChips panel="sfx" provider="sfxkit" title="Sound effect categories" />}
       {fav.length > 0 && <><h4 class="group-title">Favorites</h4><AudioList items={fav} panel={panel} /></>}
       {rec.length > 0 && <><h4 class="group-title">Recently used</h4><AudioList items={rec} panel={panel} /></>}
-      {!fav.length && !rec.length && <p class="muted hint lib-intro">{panel === 'music' ? 'Millions of openly licensed tracks from Jamendo, ccMixter and Wikimedia Commons, found through Openverse.' : 'Hundreds of thousands of openly licensed sounds from Freesound and Wikimedia Commons, found through Openverse.'} Every result shows its license; FrameCut keeps the credit for you.</p>}
+      {!fav.length && !rec.length && <p class="muted hint lib-intro">{panel === 'music' ? 'Free music you can use without credit: CC0 tracks from ccMixter, plus public-domain and CC0 recordings from Freesound and Wikimedia Commons (via Openverse).' : 'Free sound effects you can use without credit: the 320-sound SFX Kit made for video editing, plus CC0 sounds from Freesound and Wikimedia Commons (via Openverse).'} Every result is license-checked before it’s added.</p>}
     </div>
       : s.status === 'loading' ? <Skeleton />
         : s.status === 'error' || s.status === 'empty' ? <StateCard s={s} panel={panel} onRetry={() => search(panel, {}, { now: true })} />
           : <>
-            <div class="lib-count muted" aria-live="polite">{s.total > s.results.length ? `${s.total.toLocaleString()} results` : `${s.results.length} result${s.results.length === 1 ? '' : 's'}`} · via Openverse</div>
+            <ResultCount s={s} panel={panel} />
             <div ref={listRef}><AudioList items={s.results} panel={panel} /></div>
             <div ref={more} class="lib-more">{s.status === 'more' ? <LoaderCircle size={16} class="spin" /> : s.page < s.pages ? <button class="btn sm ghost" onClick={() => search(panel, {}, { more: true })}>Load more</button> : s.results.length > 8 ? <span class="muted">That’s everything.</span> : null}</div>
           </>}
@@ -219,14 +248,16 @@ function Drawer() {
     <div class="row"><b class="grow ellipsis" title={rec.title}>{rec.title}</b><button class="icon-btn sm" aria-label="Close" onClick={close}><X size={14} /></button></div>
     <div class="muted small">{rec.creator ? <>by {rec.creatorUrl ? <a href={rec.creatorUrl} target="_blank" rel="noreferrer">{rec.creator}</a> : rec.creator}</> : 'Creator not listed'}{rec.sourceName ? <> · {rec.sourceName}</> : null}{rec.durationMs ? <> · {shortTime(rec.durationMs / 1000)}</> : null}</div>
     <div class={`rights rights-${r.level}`}><div class="row"><LicenseBadge rec={rec} />{rec.licenseUrl && <a href={rec.licenseUrl} target="_blank" rel="noreferrer">{r.name || 'License'} <ExternalLink size={11} /></a>}</div><p>{r.summary}</p>{r.details.length > 0 && <ul>{r.details.map(d => <li key={d}>{d}</li>)}</ul>}</div>
+    {rec.description ? <p class="small">{rec.description}{rec.useFor?.length ? <span class="muted"> Good for: {rec.useFor.join(', ').toLowerCase()}.</span> : null}</p> : null}
     {(rec.genres?.length || rec.tags?.length) ? <div class="lib-tags">{[...(rec.genres || []), ...(rec.tags || [])].slice(0, 8).map(t => <span key={t} class="chip">{t}</span>)}</div> : null}
     {r.attribution && <div class="credit-box"><small class="muted">Credit</small><p>{creditLine(rec)}</p><button class="btn sm ghost" onClick={() => copy(creditLine(rec))}><Copy size={12} />Copy</button></div>}
+    {r.restrictions?.length > 0 && <ul class="muted tiny">{r.restrictions.map(x => <li key={x}>{x}</li>)}</ul>}
     <p class="muted tiny">Found through {PROVIDERS[rec.provider]?.name}. {PROVIDERS[rec.provider]?.note} {rec.sourcePageUrl && <a href={rec.sourcePageUrl} target="_blank" rel="noreferrer">Open the original page</a>}</p>
     <div class="row">
       <button class="btn sm" onClick={() => toggleFavorite(rec)}><Heart size={13} fill={rec.favorite ? 'currentColor' : 'none'} />{rec.favorite ? 'Saved' : 'Save'}</button>
       {rec.kind !== 'sticker' && <button class="btn sm" onClick={() => togglePreview(rec)}>{preview.value.key === rec.key && preview.value.state !== 'paused' ? <><Pause size={13} />Pause</> : <><Play size={13} />Preview</>}</button>}
       <div class="grow" />
-      {r.blocked ? (r.badge === 'Non-commercial' ? <button class="btn sm" onClick={() => setUsageMode('personal')}>This is a personal video</button> : <span class="muted small">Can’t be used in video</span>)
+      {r.blocked ? (r.reason === 'non-commercial' ? <button class="btn sm" onClick={() => setUsageMode('personal')}>This is a personal video</button> : <span class="muted small">Can’t be used in video</span>)
         : <button class="btn sm primary" disabled={busy} onClick={() => useRecord(rec).then(id => { if (id && rec.kind === 'music') afterMusic(id); if (id) close(); })}>{busy ? <LoaderCircle size={13} class="spin" /> : <Plus size={13} />}Use in project</button>}
     </div>
   </div>;
@@ -274,28 +305,26 @@ export function StickerLibrary() {
     <Drawer />
   </div>;
 }
-function useFluent(category) {
-  const s = searches.fluent.value;
-  useEffect(() => { if (s.category !== category || (!s.results.length && s.status === 'idle')) search('fluent', { category }, { now: true }); }, [category]);
-  return s;
-}
+// Discover searches every free sticker source at once: Fluent animated emoji, CC0 illustrations and
+// silhouettes from Openverse, and Pixabay when the creator has added a key.
 function Discover() {
-  const s = useFluent(''); const groups = GROUPS; const L = lists.value.sticker;
-  const gridRef = useRef();
+  const s = searches.stickers.value; const groups = GROUPS; const L = lists.value.sticker;
+  const gridRef = useRef(); const pixabay = libStatus.value?.pixabay?.configured;
   return <>
-    <SearchField panel="fluent" placeholder="Search animated stickers — party, heart, fire…" onArrowDown={() => gridRef.current?.querySelector('.st-card')?.focus()} />
+    <SearchField panel="stickers" placeholder="Search stickers — party, star, arrow, cat…" onArrowDown={() => gridRef.current?.querySelector('.st-card')?.focus()} />
     {!s.q.trim() && <>
       {L.recents.length > 0 && <><h4 class="group-title">Recently used</h4><StickerGrid items={L.recents.slice(0, 12)} /></>}
       {L.favorites.length > 0 && <><h4 class="group-title">Favorites</h4><StickerGrid items={L.favorites.slice(0, 24)} /></>}
-      <h4 class="group-title">Browse</h4>
+      <h4 class="group-title">Animated emoji</h4>
       <div class="cat-grid">{groups.map(g => <button key={g.id} class="cat-tile" onClick={() => { stickerTab.value = 'animated'; search('fluent', { category: g.id, q: '' }, { now: true }); }}><span class="emo">{g.glyph}</span><span>{g.name}</span></button>)}<button class="cat-tile" onClick={() => (stickerTab.value = 'static')}><Shapes size={22} /><span>Shapes & emoji</span></button></div>
+      <Chips label="Illustrations & silhouettes" items={STICKER_IDEAS} onPick={q => search('stickers', { q }, { now: true })} />
     </>}
-    {s.q.trim() && <div ref={gridRef}>{s.status === 'loading' ? <Skeleton grid rows={12} /> : s.status === 'empty' || s.status === 'error' ? <StateCard s={s} panel="fluent" onRetry={() => search('fluent', {}, { now: true })} /> : <><div class="lib-count muted">{s.total} animated sticker{s.total === 1 ? '' : 's'} · Microsoft Fluent Emoji (MIT)</div><StickerGrid items={s.results} /><MoreButton s={s} /></>}</div>}
-    <p class="muted hint lib-intro">Animated stickers by Microsoft (MIT license). Only the ones you add are downloaded, then they work offline. Import your own GIF, APNG, WebP, SVG or Lottie files too.</p>
+    {s.q.trim() && <div ref={gridRef}>{s.status === 'loading' ? <Skeleton grid rows={12} /> : s.status === 'empty' || s.status === 'error' ? <StateCard s={s} panel="stickers" onRetry={() => search('stickers', {}, { now: true })} /> : <><ResultCount s={s} panel="stickers" noun="sticker" /><StickerGrid items={s.results} /><MoreButton s={s} panel="stickers" /></>}</div>}
+    <p class="muted hint lib-intro">Animated emoji by Microsoft, plus free illustrations and silhouettes from Openverse{pixabay ? ' and Pixabay' : ''} — none need a credit. Only the ones you add are downloaded, then they work offline. Import your own GIF, APNG, WebP, SVG or Lottie files too.</p>
   </>;
 }
 const GROUPS = [['Smileys & Emotion', '😀'], ['People & Body', '👋'], ['Animals & Nature', '🦊'], ['Food & Drink', '🍕'], ['Activities', '🎉'], ['Travel & Places', '🚀'], ['Objects', '💡'], ['Flags', '🏁']].map(([id, glyph]) => ({ id, name: id.replace(' & ', ' & '), glyph }));
-function MoreButton({ s }) { return s.page < s.pages ? <div class="lib-more"><button class="btn sm ghost" disabled={s.status === 'more'} onClick={() => search('fluent', {}, { more: true })}>{s.status === 'more' ? <LoaderCircle size={14} class="spin" /> : null}Show more</button></div> : null; }
+function MoreButton({ s, panel = 'fluent' }) { return s.page < s.pages ? <div class="lib-more"><button class="btn sm ghost" disabled={s.status === 'more'} onClick={() => search(panel, {}, { more: true })}>{s.status === 'more' ? <LoaderCircle size={14} class="spin" /> : null}Show more</button></div> : null; }
 function Animated() {
   const s = searches.fluent.value;
   useEffect(() => { if (!s.category && !s.q) search('fluent', { category: GROUPS[0].id }, { now: true }); }, []);
@@ -306,7 +335,34 @@ function Animated() {
   </>;
 }
 function StickerGrid({ items }) {
-  return <div class="sticker-grid" role="listbox" aria-label="Stickers" onKeyDown={e => navKeys(e, '.st-card')}>{items.map(r => <FluentCard key={r.key} rec={r} />)}</div>;
+  return <div class="sticker-grid" role="listbox" aria-label="Stickers" onKeyDown={e => navKeys(e, '.st-card')}>{items.map(r => (r.provider === 'fluent' ? <FluentCard key={r.key} rec={r} /> : <ImageCard key={r.key} rec={r} />))}</div>;
+}
+// Illustration / silhouette sticker from Openverse or Pixabay: thumbnail preview, source in the tooltip.
+function ImageCard({ rec }) {
+  const [loaded, setLoaded] = useState(false), [broken, setBroken] = useState(false);
+  const busy = busyKeys.value.has(rec.key), prog = busyKeys.value.get(rec.key);
+  const add = () => useRecord(rec);
+  const local = rec.imported && asset(rec.imported);
+  const src = local && !local.missing ? local.url : `/api/creative/preview/${rec.provider}/${encodeURIComponent(rec.sourceId)}`;
+  const from = rec.sourceName || PROVIDERS[rec.provider]?.name || rec.provider;
+  const menu = e => openMenu(e, [
+    { text: 'Add at playhead', icon: Plus, onClick: add },
+    { text: rec.favorite ? 'Remove from favorites' : 'Save to favorites', icon: Heart, onClick: () => toggleFavorite(rec) },
+    { divider: true },
+    { text: 'View license & source', icon: Info, onClick: () => (selectedRecord.value = rec) },
+    rec.sourcePageUrl && { text: 'Open source page', icon: ExternalLink, onClick: () => window.open(rec.sourcePageUrl, '_blank') },
+  ]);
+  return <div class={`st-card img-card ${busy ? 'busy' : ''}`} role="option" tabIndex={0} aria-label={`${rec.title}, ${rec.animated ? 'animated ' : ''}sticker from ${from}${rec.imported ? ', ready offline' : ''}`} data-tip={`${rec.title} · ${from}${rec.creator && rec.creator !== from ? ' · ' + rec.creator : ''} · ${rightsOf(rec).badge}`} draggable
+    onDragStart={e => dragRecord(e, rec)} onClick={add} onContextMenu={menu}
+    onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ' || e.key === '+') { e.preventDefault(); add(); } if (e.key.toLowerCase() === 'f') toggleFavorite(rec); if (e.key === 'i') selectedRecord.value = rec; }}>
+    {!loaded && <span class="st-skel" aria-hidden="true">{broken ? <TriangleAlert size={16} class="muted" /> : <Shapes size={18} class="muted" />}</span>}
+    {!broken && <img src={src} alt="" loading="lazy" draggable={false} class={loaded ? 'on' : ''} onLoad={() => setLoaded(true)} onError={() => setBroken(true)} />}
+    <span class="st-src">{from}</span>
+    {rec.animated && <span class="st-anim" data-tip="Animated"><Sparkles size={10} /></span>}
+    {rec.imported && <span class="st-ready" data-tip="Downloaded — works offline"><Check size={10} /></span>}
+    {rec.favorite && <Heart size={11} class="st-fav" fill="currentColor" />}
+    {busy && <span class="st-busy" style={{ '--p': ((prog ?? 0.1) * 100) + '%' }}><LoaderCircle size={16} class="spin" /></span>}
+  </div>;
 }
 function FluentCard({ rec }) {
   const [live, setLive] = useState(false), [loaded, setLoaded] = useState(false);
