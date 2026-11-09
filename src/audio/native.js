@@ -53,7 +53,7 @@ export class NativeCapture {
       if (ev.type === 'closed') es.close();
     };
   }
-  async setMonitor(on) { if (on && !this.monitorWarned) { this.monitorWarned = true; this.onNotice?.('Live monitoring isn’t available with pro recording. Use your interface’s or headset’s direct monitoring — it has zero delay.'); } }
+  async setMonitor(on) { if (on && !this.monitorWarned) { this.monitorWarned = true; this.onNotice?.('Live monitoring isn’t available with Direct recording. Use your interface’s or headset’s direct monitoring — it has zero delay.'); } }
   // Input latency of the device; playback start offset is added via markPlay().
   latency(outputCtx) { return (this.started?.latencyMs || 0) / 1000 + (outputCtx?.outputLatency || outputCtx?.baseLatency || 0); }
   markPlay() { return this.started ? Math.max(0, (Date.now() - this.started.t) / 1000) : 0; }

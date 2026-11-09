@@ -114,9 +114,28 @@ function Transcript() {
       <div class="row"><input class="input" placeholder="Replace with" value={repl} onInput={e => setRepl(e.target.value)} /><button class="btn sm" disabled={!find} onClick={() => { const n = searchReplace(find, repl); toast(n ? `Replaced ${n} word${n > 1 ? 's' : ''}. Timing kept.` : 'No whole-word matches.'); }}><Replace size={13} />Replace all</button></div></div>
     {flagged > 0 && <button class={`fchip ${onlyFlagged ? 'on' : ''}`} onClick={() => setOnlyFlagged(!onlyFlagged)}><TriangleAlert size={11} /> {flagged} to review</button>}
     {p.script?.text?.trim() && <ScriptCheck />}
+    <CaptionTiming />
     <p class="muted hint">Click a word to jump there, double-click to fix its spelling (its timing stays). Right-click for split, merge and timing.</p>
     <div class="cap-list">{list.map(c => <CaptionGroup key={c.id} c={c} open={open === c.id} toggle={() => setOpen(open === c.id ? null : c.id)} />)}</div>
   </>;
+}
+// Global caption sync: moves every caption (and its word timing) earlier or later together. The total
+// is remembered in the project so the slider shows it and can be reset; edits are undoable and, being
+// ordinary clip positions, appear identically in the preview, the timeline and the export.
+function CaptionTiming() {
+  const p = project.value, shift = +(p.settings.captionShift || 0);
+  const set = v => commit('Caption timing', d => {
+    const caps = captionClips(d).filter(c => !d.tracks.find(t => t.id === c.trackId)?.locked); if (!caps.length) return false;
+    const cur = +(d.settings.captionShift || 0);
+    // Never push a caption before 0 s: limit how far everything can move earlier.
+    const delta = Math.max(-Math.min(...caps.map(c => c.start)), (v - cur) / 1000); if (Math.abs(delta) < 1e-6) return false;
+    for (const c of caps) c.start = +(c.start + delta).toFixed(4);
+    d.settings.captionShift = Math.round(cur + delta * 1000);
+  }, { key: 'capshift' });
+  return <div class="field cap-timing">
+    <Slider label="Caption timing (all captions)" min={-1000} max={1000} step={10} def={0} value={shift} fmt={v => (v === 0 ? 'in sync' : `${Math.abs(Math.round(v))} ms ${v < 0 ? 'earlier' : 'later'}`)} onChange={set} />
+    <small class="muted">Captions showing up late? Drag left. Early? Drag right. Moves every caption together and keeps word timing.</small>
+  </div>;
 }
 function CaptionGroup({ c, open, toggle }) {
   const p = project.value, active = time.value >= c.start && time.value < clipEnd(c), cur = active ? nowWord(c) : -1, sel = selection.value.includes(c.id);

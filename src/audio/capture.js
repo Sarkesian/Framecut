@@ -39,6 +39,10 @@ export class Capture {
   async setMonitor(on, sinkId) { if (!this.ctx) return; if (this.ctx.setSinkId && sinkId !== undefined) await this.ctx.setSinkId(sinkId === 'default' ? '' : sinkId).catch(() => {}); this.monitorGain.gain.setTargetAtTime(on ? 1 : 0, this.ctx.currentTime, 0.02); }
   // Total input→speaker delay to compensate when recording over playback.
   latency(outputCtx) { return (this.ctx?.baseLatency || 0) + (this.settings?.latency || 0) + (outputCtx?.outputLatency || outputCtx?.baseLatency || 0); }
+  // Seconds between the first captured sample and the moment playback is started (called right after
+  // play()). The take's file starts this much before the video does, so it is added to the in-point —
+  // the same correction the direct (WASAPI) engine makes.
+  markPlay() { return this.startPerf ? Math.max(0, (performance.now() - this.startPerf) / 1000) : 0; }
   async start({ name }) {
     this.error = null; this.bytes = 0;
     const { id } = await api('/api/record/start', { sampleRate: this.settings.sampleRate, channels: this.settings.channels, name, device: this.settings.label });
@@ -74,6 +78,6 @@ export async function micCheck(capture, seconds = 3) {
     level: peak > -0.5 ? 'too-loud' : peak > -18 ? 'good' : peak > -30 ? 'quiet' : 'very-quiet',
     noisy: floor > -50,
     processing: { echoCancellation: capture.settings.echoCancellation, noiseSuppression: capture.settings.noiseSuppression, autoGainControl: capture.settings.autoGainControl },
-    format: capture.engine === 'native' ? `${{ exclusive: 'Exclusive (bit-perfect)', raw: 'Raw (no driver effects)', shared: 'Shared' }[capture.settings.mode] || 'Pro'} · ${capture.settings.sampleRate / 1000} kHz / ${capture.settings.sampleSize}-bit ${capture.settings.channels === 1 ? 'mono' : 'stereo'} · saved as WAV without conversion` : `Device delivers ${capture.settings.sampleRate / 1000} kHz${capture.settings.sampleSize ? ` / ${capture.settings.sampleSize}-bit` : ""} ${capture.settings.channels === 1 ? "mono" : "stereo"} · saved losslessly as 24-bit WAV`,
+    format: capture.engine === 'native' ? `${{ exclusive: 'Exclusive (bit-perfect)', raw: 'Raw (no driver effects)', shared: 'Shared' }[capture.settings.mode] || 'Direct'} · ${capture.settings.sampleRate / 1000} kHz / ${capture.settings.sampleSize}-bit ${capture.settings.channels === 1 ? 'mono' : 'stereo'} · saved as WAV without conversion` : `Device delivers ${capture.settings.sampleRate / 1000} kHz${capture.settings.sampleSize ? ` / ${capture.settings.sampleSize}-bit` : ""} ${capture.settings.channels === 1 ? "mono" : "stereo"} · saved losslessly as 24-bit WAV`,
   };
 }

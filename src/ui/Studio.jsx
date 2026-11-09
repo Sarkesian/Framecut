@@ -70,16 +70,45 @@ async function openCapture(deviceId) {
   catch (e) {
     if (eng !== 'native') throw e;
     // Pro capture unavailable for this device: fall back to the browser engine rather than failing.
-    toast('Pro recording could not open this microphone (' + e.message + '). Using standard recording.', 'warn');
+    toast('Direct recording could not open this microphone (' + e.message + '). Using Compatible recording instead.', 'warn');
     await capture.close?.();
     capture = wire(new Capture({ onMeter })); await capture.open(deviceId);
   }
   capInfo.value = { ...capture.settings, engine: capture.engine || 'browser' };
   return capture;
 }
-const MODE_NAMES = { exclusive: 'Exclusive · bit-perfect', raw: 'Raw · no driver effects', shared: 'Shared', browser: 'Standard' };
+const MODE_NAMES = { exclusive: 'Exclusive · bit-perfect', raw: 'Raw · no driver effects', shared: 'Shared', browser: 'Compatible' };
 const opts = () => ({ engine: 'pro', playVideo: true, countdown: true, preroll: 0, monitor: false, trimSilence: true, ...(prefs.value.recording || {}) });
 const setOpt = patch => savePrefs({ recording: { ...opts(), ...patch } });
+
+// ---- Sync offset: a manual correction per microphone for devices whose reported latency is wrong
+// (Bluetooth headsets, some USB interfaces). Stored in ms; positive moves the voice earlier.
+const micKey = () => String(capture?.settings?.label || prefs.value.audioInput || 'default').replace(/^(Default|Communications) - /, '').trim().toLowerCase() || 'default';
+// Slider drags fire faster than preferences save, so the latest value is held here until it is saved;
+// otherwise each move would compute its change from a stale value and move the take too far.
+const liveOffsets = signal({});
+export const syncOffsetMs = () => { const k = micKey(); return +(k in liveOffsets.value ? liveOffsets.value[k] : (opts().syncOffsets || {})[k] || 0); };
+// Changing the offset also re-places the most recent take, so you can adjust it by ear right after a take.
+function setSyncOffset(ms) {
+  const prev = syncOffsetMs(), delta = (ms - prev) / 1000; if (!delta) return;
+  const key = micKey(); liveOffsets.value = { ...liveOffsets.value, [key]: ms };
+  setOpt({ syncOffsets: { ...(opts().syncOffsets || {}), ...liveOffsets.value } }).catch(e => toast('The sync offset could not be saved: ' + e.message, 'error'));
+  const id = lastRecording.value; if (!id || !project.value?.clips.some(c => c.id === id)) return;
+  commit('Adjust take sync', d => {
+    const c = d.clips.find(x => x.id === id); const a = c && asset(c.mediaId); if (!c || !a) return false;
+    const nin = Math.max(0, Math.min((a.duration || 0) - 0.1, (c.in || 0) + delta)); if (Math.abs(nin - (c.in || 0)) < 1e-6) return false;
+    c.in = nin; c.duration = Math.max(0.1, Math.min(c.duration, ((a.duration || 0) - nin) / (c.speed || 1)));
+    const take = c.takes?.findLast?.(t => t.mediaId === c.mediaId); if (take) take.in = nin;
+  }, { key: 'syncoff:' + id });
+}
+function SyncOffset() {
+  const ms = syncOffsetMs();
+  const hint = ms === 0 ? 'Takes are placed using the measured delay of this microphone.' : `Takes from this microphone are placed ${Math.abs(ms)} ms ${ms > 0 ? 'earlier' : 'later'} than measured.`;
+  return <div class="field">
+    <Slider label="Sync offset (this microphone)" min={-300} max={300} step={5} def={0} value={ms} fmt={v => (v > 0 ? '+' : '') + Math.round(v) + ' ms'} onChange={setSyncOffset} />
+    <small class="muted">{hint} If your voice sounds late against the video, move the slider right; if early, move it left. The last take moves with it so you can check by ear.</small>
+  </div>;
+}
 
 export async function startRecording({ retake = false } = {}) {
   if (recState.value !== 'idle') return;
@@ -102,7 +131,8 @@ export async function startRecording({ retake = false } = {}) {
     if (o.playVideo && pl) { pl.pause(); pl.seek(at - pre); }
     const info = await capture.start({ name: `Voiceover ${new Date().toLocaleString().replace(/[/:]/g, '-')}` });
     recState.value = 'rec'; capInfo.value = { ...capture.settings, engine: capture.engine || 'browser' };
-    const lat = o.playVideo ? capture.latency(pl?.ctx) : 0;
+    // Measured device latency plus the user's per-microphone sync offset (positive = place takes earlier).
+    const lat = o.playVideo ? capture.latency(pl?.ctx) + syncOffsetMs() / 1000 : 0;
     session = { at, pre, started: performance.now(), latency: lat, retakeOf: prev?.id || null, playing: o.playVideo };
     if (o.playVideo && pl) { pl.play(); session.timelineAtStart = at - pre; }
     // Native capture starts in another process: add the measured gap between capture start and playback start.
@@ -279,7 +309,7 @@ function InputPanel() {
   };
   const t = lastTake.value;
   return <div class="input-panel">
-    <div class="input-fmt"><span class={`chip ${native ? 'accent' : ''}`}>{native ? MODE_NAMES[s.mode] || 'Pro' : 'Standard'}</span><span class="muted mono">{s.sampleRate ? s.sampleRate / 1000 + ' kHz' : ''}{s.sampleSize ? ` · ${s.sampleSize}-bit` : ''}{s.channels ? ` · ${s.channels === 1 ? 'mono' : 'stereo'}` : ''}</span></div>
+    <div class="input-fmt"><span class={`chip ${native ? 'accent' : ''}`}>{native ? MODE_NAMES[s.mode] || 'Direct' : 'Compatible'}</span><span class="muted mono">{s.sampleRate ? s.sampleRate / 1000 + ' kHz' : ''}{s.sampleSize ? ` · ${s.sampleSize}-bit` : ''}{s.channels ? ` · ${s.channels === 1 ? 'mono' : 'stereo'}` : ''}</span></div>
     {s.capability?.limited && <div class="check warn"><TriangleAlert size={13} /><span>{s.capability.note}</span></div>}
     {native && g && <>
       <Slider label={`Input gain${g.hardware ? ' (device)' : ' (driver)'}`} min={g.min} max={g.max} step={Math.max(0.1, g.step || 0.5)} value={g.db} unit=" dB" disabled={recState.value === 'rec'} onChange={setGain} />
@@ -369,12 +399,13 @@ export function StudioPanel() {
         <Toggle label="Play the video while recording" on={o.playVideo} onChange={v => setOpt({ playVideo: v })} />
         <Toggle label="3-second countdown" on={o.countdown} onChange={v => setOpt({ countdown: v })} />
         {o.playVideo && <Slider label="Pre-roll" min={0} max={5} step={0.5} value={o.preroll} def={0} unit=" s" onChange={v => setOpt({ preroll: v })} />}
+        {o.playVideo && <SyncOffset />}
         <Toggle label="Trim silence at start and end" on={o.trimSilence} onChange={v => setOpt({ trimSilence: v })} hint="Only the very beginning and end — pauses inside your take are kept" />
         <Toggle label="Hear yourself (monitoring)" on={o.monitor} onChange={v => { if (v && isSpeaker(deviceLabel(devices.value.outputs, activeOutput.value))) toast('Monitoring through speakers can cause feedback. Use headphones.', 'warn'); setOpt({ monitor: v }); capture?.setMonitor(v && recState.value === 'rec', activeOutput.value); }} />
         <div class="field"><label>Profile for new recordings</label><Select value={prefs.value.recordingProfile || 'original'} options={[...AUDIO_PROFILES, ...(prefs.value.audioProfiles || [])].map(x => [x.id, x.name])} onChange={v => savePrefs({ recordingProfile: v })} /></div>
         <MicCheck />
-        <div class="field"><label>Recording engine</label><Segmented value={o.engine || 'pro'} options={[['pro', 'Pro (WASAPI)'], ['browser', 'Standard']]} onChange={async v => { if (recState.value === 'rec') return; await setOpt({ engine: v }); nativeOk = null; try { await getCapture(prefs.value.audioInput); } catch (e) { toast(e.message, 'error'); } }} />
-          <small class="muted">Pro records straight from the device: bit-perfect in exclusive mode where the microphone allows it, otherwise raw (no driver effects). Standard uses Chromium’s capture.</small></div>
+        <div class="field"><label>Recording engine</label><Segmented value={o.engine || 'pro'} options={[['pro', 'Direct (best quality)'], ['browser', 'Compatible']]} onChange={async v => { if (recState.value === 'rec') return; await setOpt({ engine: v }); nativeOk = null; try { await getCapture(prefs.value.audioInput); } catch (e) { toast(e.message, 'error'); } }} />
+          <small class="muted">Direct records straight from the Windows audio driver: bit-perfect where the microphone allows it, otherwise with no driver effects. Use Compatible only if Direct can’t open your microphone. Both are free and save uncompressed WAV.</small></div>
         <p class="muted hint">Recordings are saved uncompressed as WAV with all Windows voice processing off.</p>
       </Section>
       <Section title="Mix" open>
