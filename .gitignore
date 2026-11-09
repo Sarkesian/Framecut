@@ -6,3 +6,5 @@ release/
 test-output/
 __pycache__/
 *.pyc
+build/python/
+build/.python-stage/

@@ -8,6 +8,7 @@ const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
 const { Readable } = require('node:stream');
 const { run, ffmpeg, ffprobe } = require('./tools.cjs');
+const { toStored, fromStored } = require('./paths.cjs');
 const { SafeHttp } = require('./providers/http.cjs');
 const { Openverse } = require('./providers/openverse.cjs');
 const { Fluent } = require('./providers/fluent.cjs');
@@ -24,7 +25,7 @@ const safeName = s => String(s || 'asset').replace(/[<>:"/\\|?*\x00-\x1f]+/g, ''
 class Creative {
   constructor({ dataDir, cacheDir, library, jobs, secrets = null, http = new SafeHttp(), openverseBase, pixabayBase, sfxkitBase, ccmixterBase }) {
     this.library = library; this.jobs = jobs; this.secrets = secrets; this.http = http;
-    this.statePath = path.join(dataDir, 'creative.json');
+    this.statePath = path.join(dataDir, 'creative.json'); this.dataDir = dataDir;
     this.dirs = { lib: path.join(dataDir, 'media', 'library'), previews: path.join(cacheDir, 'creative', 'previews'), bake: path.join(cacheDir, 'creative', 'bake') };
     this.memCreds = {};
     this.providers = { openverse: new Openverse({ http, base: openverseBase, credentials: () => this.credentials('openverse') }), fluent: new Fluent(), pixabay: new Pixabay({ http, base: pixabayBase, credentials: () => this.credentials('pixabay') }), sfxkit: new SfxKit({ base: sfxkitBase }), ccmixter: new CcMixter({ http, base: ccmixterBase }) };
@@ -34,11 +35,11 @@ class Creative {
   async init() {
     for (const d of Object.values(this.dirs)) await fsp.mkdir(d, { recursive: true });
     await fsp.rm(this.dirs.bake, { recursive: true, force: true }); await fsp.mkdir(this.dirs.bake, { recursive: true });
-    try { this.state = { ...this.state, ...JSON.parse(await fsp.readFile(this.statePath, 'utf8')) }; } catch {}
+    try { this.state = { ...this.state, ...fromStored(JSON.parse(await fsp.readFile(this.statePath, 'utf8')), this.dataDir) }; } catch {}
     this.prunePreviews().catch(() => {});
   }
   persist() { clearTimeout(this.saveTimer); this.saveTimer = setTimeout(() => this.flush().catch(() => {}), 300); }
-  async flush() { const tmp = this.statePath + '.tmp'; await fsp.writeFile(tmp, JSON.stringify(this.state)); await fsp.rename(tmp, this.statePath); }
+  async flush() { const tmp = this.statePath + '.tmp'; await fsp.writeFile(tmp, JSON.stringify(toStored(this.state, this.dataDir))); await fsp.rename(tmp, this.statePath); }
   provider(id) { const p = this.providers[id]; if (!p) throw Object.assign(Error(PROVIDERS[id]?.reason || 'Unknown media source.'), { code: 'unavailable' }); return p; }
 
   // ----- credentials (kept in the OS credential store via the desktop shell; never sent to the UI) -----

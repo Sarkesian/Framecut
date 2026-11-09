@@ -1,7 +1,7 @@
 // Audio studio in the real app with Chromium's fake microphone (a 440 Hz beep):
 // record over the video → verify 24-bit WAV on disk → retake keeps both takes → Clean Voice →
 // auto balance → ducking keys → waveform delete → export contains the mixed audio → reopen.
-const { _electron: electron } = require('playwright');
+const { launchApp } = require('./launch.cjs');
 const path = require('node:path'), fs = require('node:fs/promises'), os = require('node:os');
 const assert = require('node:assert/strict');
 const { run, ffmpeg, ffprobe } = require('../desktop/tools.cjs');
@@ -14,7 +14,7 @@ const step = n => console.log('· ' + n);
     const clip = path.join(temp, 'Clip.mp4'), music = path.join(temp, 'Music.wav');
     await run(ffmpeg, ['-y', '-f', 'lavfi', '-i', 'testsrc2=s=1280x720:r=30', '-t', '8', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', clip]);
     await run(ffmpeg, ['-y', '-f', 'lavfi', '-i', 'sine=frequency=220:sample_rate=48000', '-t', '8', '-af', 'volume=0.5', music]);
-    app = await electron.launch({ args: [path.resolve('.')], env: { ...process.env, FRAMECUT_TEST: '1', FRAMECUT_TEST_DIR: temp, FRAMECUT_FAKE_MEDIA: '1' } });
+    app = await launchApp({ ...process.env, FRAMECUT_TEST: '1', FRAMECUT_TEST_DIR: temp, FRAMECUT_FAKE_MEDIA: '1' });
     page = await app.firstWindow();
     page.on('pageerror', e => errors.push('pageerror: ' + e.message));
     page.on('requestfailed', r => r.failure()?.errorText !== 'net::ERR_ABORTED' && errors.push('requestfailed: ' + r.method() + ' ' + new URL(r.url()).pathname + ' ' + r.failure()?.errorText));

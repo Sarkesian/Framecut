@@ -1,5 +1,5 @@
 // Local speech engine manager. Spawns desktop/speech/worker.py in its own Python environment (created
-// on first use under <data>/engines/speech, or an existing one configured in preferences), keeps it
+// on first use from the Python bundled in resources\python, under <data>/engines/speech, or an existing one configured in preferences), keeps it
 // warm while you edit, unloads models after 10 idle minutes, and runs one transcription at a time.
 //
 // Why these models (tests/captions-bench, 18 cases, ~27 min of audio, see tests/captions-bench/README.md):
@@ -12,8 +12,9 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
-const { run, ffmpeg } = require('./tools.cjs');
+const { run, ffmpeg, killTree } = require('./tools.cjs');
 const { renderPlan } = require('./compose.cjs');
+const { toolEnv } = require('./paths.cjs');
 
 const PKGS = ['qwen-asr==0.0.6', 'onnx-asr[cpu,hub]==0.12.0', 'silero-vad', 'soundfile', 'scipy'];
 const IDLE_MS = 10 * 60e3;
@@ -27,14 +28,21 @@ class Speech {
   config() {
     const p = this.prefs().speechEngine || {};
     const python = p.python || path.join(this.envDir, 'Scripts', 'python.exe');
+    if (!p.python) relinkVenv(this.envDir);
     return { python, hfHome: p.hfHome || this.modelsDir };
   }
+  env(hfHome = this.config().hfHome) { return toolEnv(this.dataDir, { HF_HOME: hfHome, PYTHONIOENCODING: 'utf-8', HF_HUB_DISABLE_SYMLINKS_WARNING: '1', TRANSFORMERS_VERBOSITY: 'error' }); }
   // Is the accurate engine usable? Cached for a minute.
-  async status(force = false) {
-    if (!force && this.checked && Date.now() - this.checked.at < 60e3) return this.checked.value;
+  // Concurrent callers share one check; the check's Python process is stopped with the engine (stop()).
+  status(force = false) {
+    if (!force && this.checked && Date.now() - this.checked.at < 60e3) return Promise.resolve(this.checked.value);
+    if (!force && this.checking) return this.checking;
+    return (this.checking = this.checkStatus().finally(() => { this.checking = null; }));
+  }
+  async checkStatus() {
     const { python } = this.config(); let value;
     if (!fs.existsSync(python)) value = { ready: false, name: 'Built-in engine (basic)', setup: 'Install FrameCut’s accurate caption engine once. It runs entirely on this computer and avoids captions being made up from music.', download: await this.downloadSize() };
-    else value = await new Promise(resolve => execFile(python, ['-I', '-c', 'import torch, qwen_asr, onnx_asr, silero_vad; print(torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else "")'], { timeout: 120000, windowsHide: true }, (err, out) => {
+    else value = await new Promise(resolve => this.checkProc = execFile(python, ['-I', '-c', 'import torch, qwen_asr, onnx_asr, silero_vad; print(torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else "")'], { timeout: 120000, windowsHide: true, env: this.env() }, (err, out) => {
       if (err) return resolve({ ready: false, name: 'Built-in engine (basic)', setup: 'The caption engine needs repairing. Run setup again.', download: 'repair' });
       const [cuda, gpu] = String(out).trim().split(/\s+(.*)/);
       resolve({ ready: true, name: 'Qwen3-ASR + ForcedAligner (local)', detail: cuda === 'True' ? `GPU: ${gpu}` : 'CPU (slower)', gpu: cuda === 'True' });
@@ -46,11 +54,12 @@ class Speech {
   // ---------- setup: private Python environment + models ----------
   install() {
     return this.jobs.add({ type: 'speech-install', label: 'Setting up the caption engine', lane: 'heavy' }, async ({ signal, progress }) => {
-      const sys = await findPython(); if (!sys) throw Error('Python 3.10 or newer is needed for the accurate caption engine. Install it from python.org (tick “Add to PATH”), then try again.');
+      const sys = await findPython(); if (!sys) throw Error('FrameCut’s bundled Python is missing. Reinstall FrameCut Studio, then try again.');
+      const env = this.env(this.modelsDir);
       await fsp.mkdir(this.envDir, { recursive: true }); await fsp.mkdir(this.modelsDir, { recursive: true });
       const py = path.join(this.envDir, 'Scripts', 'python.exe');
-      if (!fs.existsSync(py)) { progress(0.02, 'Creating a private Python environment…'); await run(sys, ['-m', 'venv', this.envDir], { signal }); }
-      const pip = (args, msg, p0, p1) => { progress(p0, msg); return run(py, ['-m', 'pip', 'install', '--disable-pip-version-check', '--progress-bar', 'off', ...args], { signal, onStdout: d => { const l = String(d).trim().split('\n').at(-1); if (/^(Collecting|Downloading|Installing)/.test(l)) progress(p0 + (p1 - p0) * 0.5, l.slice(0, 90)); } }); };
+      if (!fs.existsSync(py)) { progress(0.02, 'Creating a private Python environment…'); await run(sys, ['-I', '-m', 'venv', this.envDir], { signal, env }); }
+      const pip = (args, msg, p0, p1) => { progress(p0, msg); return run(py, ['-m', 'pip', 'install', '--disable-pip-version-check', '--no-cache-dir', '--progress-bar', 'off', ...args], { signal, env, onStdout: d => { const l = String(d).trim().split('\n').at(-1); if (/^(Collecting|Downloading|Installing)/.test(l)) progress(p0 + (p1 - p0) * 0.5, l.slice(0, 90)); } }); };
       const gpu = await hasNvidia();
       await pip(['torch', 'torchaudio', ...(gpu ? ['--index-url', 'https://download.pytorch.org/whl/cu128'] : ['--index-url', 'https://download.pytorch.org/whl/cpu'])], 'Downloading PyTorch' + (gpu ? ' for your NVIDIA GPU…' : '…'), 0.05, 0.45);
       await pip(PKGS, 'Installing the speech models’ code…', 0.45, 0.6);
@@ -58,7 +67,7 @@ class Speech {
       await run(py, ['-I', '-c', [
         'from huggingface_hub import snapshot_download as s',
         "for r in ['Qwen/Qwen3-ASR-1.7B','Qwen/Qwen3-ASR-0.6B','Qwen/Qwen3-ForcedAligner-0.6B','MIT/ast-finetuned-audioset-10-10-0.4593','istupakov/parakeet-tdt-0.6b-v3-onnx']: s(r); print('got', r, flush=True)",
-      ].join('\n')], { signal, env: { ...process.env, HF_HOME: this.modelsDir }, onStdout: d => { const n = (String(d).match(/got/g) || []).length; if (n) progress(Math.min(0.98, 0.6 + 0.08 * (this._got = (this._got || 0) + n)), 'Downloading the speech models…'); } });
+      ].join('\n')], { signal, env, onStdout: d => { const n = (String(d).match(/got/g) || []).length; if (n) progress(Math.min(0.98, 0.6 + 0.08 * (this._got = (this._got || 0) + n)), 'Downloading the speech models…'); } });
       this.checked = null; this.stop();
       return this.status(true);
     });
@@ -86,8 +95,8 @@ class Speech {
     };
     const proc = { kill: () => {} }; this.proc = proc;
     server.once('listening', () => {
-      const child = spawn(python, ['-I', path.join(__dirname, 'speech', 'worker.py').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`), '--port', String(port())], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, HF_HOME: hfHome, PYTHONIOENCODING: 'utf-8', HF_HUB_DISABLE_SYMLINKS_WARNING: '1', TRANSFORMERS_VERBOSITY: 'error' } });
-      proc.kill = () => child.kill(); proc.child = child;
+      const child = spawn(python, ['-I', path.join(__dirname, 'speech', 'worker.py').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`), '--port', String(port())], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'], env: this.env(hfHome) });
+      proc.kill = () => killTree(child); proc.child = child;
       child.stderr.on('data', d => { this.err = (this.err + d).slice(-8000); });
       child.on('exit', code => onExit(code));
     });
@@ -103,7 +112,7 @@ class Speech {
       ready.then(s => s.write(JSON.stringify({ ...msg, id }) + '\n'));
     });
   }
-  stop() { if (this.proc) { try { this.proc.kill(); } catch {} this.proc = null; } }
+  stop() { killTree(this.checkProc); this.checkProc = null; if (this.proc) { try { this.proc.kill(); } catch {} this.proc = null; } }
 
   // ---------- audio for captions: a mix of exactly the chosen clips, in timeline time ----------
   async mixdown(project, clipIds, from, to, signal) {
@@ -164,7 +173,22 @@ class Speech {
 }
 let nvidia;
 async function hasNvidia() { if (nvidia !== undefined) return nvidia; nvidia = await new Promise(r => execFile('nvidia-smi', ['-L'], { windowsHide: true, timeout: 8000 }, err => r(!err))); return nvidia; }
+// The Python bundled with FrameCut (resources\python), or build\python when running from source.
+function bundledPython() {
+  return [process.resourcesPath && path.join(process.resourcesPath, 'python', 'python.exe'), path.join(__dirname, '..', 'build', 'python', 'python.exe')].find(p => p && fs.existsSync(p)) || null;
+}
+// A venv records its base Python's absolute path. If FrameCut's folder was moved (another drive, a new
+// name), point the environment back at the bundled Python so the installed engine keeps working.
+function relinkVenv(envDir) {
+  const cfg = path.join(envDir, 'pyvenv.cfg'), py = bundledPython(); if (!py || !fs.existsSync(cfg)) return;
+  try {
+    const text = fs.readFileSync(cfg, 'utf8'), home = /^home\s*=\s*(.+)$/m.exec(text)?.[1].trim();
+    if (!home || fs.existsSync(path.join(home, 'python.exe'))) return;
+    fs.writeFileSync(cfg, text.replace(/^home\s*=.*$/m, `home = ${path.dirname(py)}`).replace(/^executable\s*=.*$/m, `executable = ${py}`).replace(/^command\s*=.*$/m, `command = ${py} -m venv ${envDir}`));
+  } catch {}
+}
 async function findPython() {
+  const bundled = bundledPython(); if (bundled) return bundled;
   for (const [cmd, args] of [['py', ['-3.12']], ['py', ['-3.11']], ['py', ['-3.10']], ['python', []], ['python3', []]]) {
     const exe = await new Promise(r => execFile(cmd, [...args, '-c', 'import sys;print(sys.executable if sys.version_info>=(3,10) else "")'], { windowsHide: true, timeout: 15000 }, (e, out) => r(e ? '' : String(out).trim())));
     if (exe) return exe;

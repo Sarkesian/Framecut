@@ -20,7 +20,7 @@ const { num } = require('../shared/model.mjs');
 
 const DEFAULT_PREFS = { proxies: 'auto', hardware: 'auto', autosave: true, accent: 'aurora', captionEngine: 'whisper-web', captionModel: 'base', snapping: true, showTips: true, exportFolder: null, ai: { preset: 'ollama', baseUrl: 'http://127.0.0.1:11434/v1', model: '', speechModel: 'whisper-1' } };
 
-async function startServer({ dataDir = path.join(__dirname, '..', '.workspace'), cacheDir, port = 0, native = null, secrets = null, creative: creativeOptions = {} } = {}) {
+async function startServer({ dataDir = path.join(__dirname, '..', '.workspace'), cacheDir, projectsDir, port = 0, native = null, secrets = null, creative: creativeOptions = {} } = {}) {
   cacheDir ||= path.join(dataDir, 'cache');
   for (const d of [dataDir, cacheDir, path.join(dataDir, 'fonts'), path.join(dataDir, 'luts'), path.join(dataDir, 'media', 'recordings'), path.join(dataDir, 'templates')]) await fsp.mkdir(d, { recursive: true });
   const prefsPath = path.join(dataDir, 'preferences.json');
@@ -29,7 +29,7 @@ async function startServer({ dataDir = path.join(__dirname, '..', '.workspace'),
   const getPrefs = () => prefs;
   const jobs = new JobQueue({ lanes: { heavy: 1, light: Math.max(2, Math.min(4, os.cpus().length >> 2)), export: 1 } });
   const library = new Library({ dataDir, cacheDir, jobs, prefs: getPrefs }); await library.init();
-  const projects = new Projects({ dataDir }); await projects.init();
+  const projects = new Projects({ dataDir, projectsDir }); await projects.init();
   const studio = new Studio({ library, jobs, cacheDir, dataDir, prefs: getPrefs });
   const recorder = new Recorder({ dir: path.join(dataDir, 'media', 'recordings'), library }); await recorder.init();
   const nativeAudio = new NativeAudio({ dir: path.join(dataDir, 'media', 'recordings'), library }); await nativeAudio.init();
@@ -58,7 +58,7 @@ async function startServer({ dataDir = path.join(__dirname, '..', '.workspace'),
   }));
   app.get('/api/storage', wrap(async (_req, res) => {
     const size = async dir => { let total = 0; const walk = async d => { for (const e of await fsp.readdir(d, { withFileTypes: true }).catch(() => [])) { const p = path.join(d, e.name); if (e.isDirectory()) await walk(p); else total += (await fsp.stat(p).catch(() => ({ size: 0 }))).size; } }; await walk(dir); return total; };
-    res.json({ dataDir, cacheDir, cacheBytes: await size(cacheDir), dataBytes: await size(path.join(dataDir, 'projects')) + await size(path.join(dataDir, 'media')) });
+    res.json({ dataDir, cacheDir, projectsDir: projects.root, cacheBytes: await size(cacheDir), projectBytes: await size(projects.root), mediaBytes: await size(path.join(dataDir, 'media')), engineBytes: await size(path.join(dataDir, 'engines')), dataBytes: await size(dataDir) });
   }));
   app.post('/api/storage/clear-cache', wrap(async (_req, res) => {
     for (const sub of ['proxies', 'audio', 'luts']) await fsp.rm(path.join(cacheDir, sub), { recursive: true, force: true });

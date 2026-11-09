@@ -5,6 +5,7 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
 const { run, ffmpeg, probeMedia, detectEncoders } = require('./tools.cjs');
+const { toStored, fromStored } = require('./paths.cjs');
 
 const PLAYABLE_V = new Set(['h264', 'vp8', 'vp9', 'av1', 'hevc', 'mjpeg', 'png', 'gif', 'webp', 'bmp']);
 const PLAYABLE_A = new Set(['aac', 'mp3', 'opus', 'vorbis', 'flac', 'pcm_s16le', 'pcm_s24le', 'pcm_f32le', 'pcm_u8', 'pcm_s32le', 'alac']);
@@ -25,7 +26,7 @@ class Library {
   async init() {
     for (const d of Object.values(this.dirs)) await fsp.mkdir(d, { recursive: true });
     try {
-      for (const a of JSON.parse(await fsp.readFile(this.indexPath, 'utf8'))) {
+      for (const a of fromStored(JSON.parse(await fsp.readFile(this.indexPath, 'utf8')), this.dataDir)) {
         if (!a.kind) a.kind = a.video ? 'video' : 'audio'; // v1 assets
         a.missing = !fs.existsSync(a.path); this.assets.set(a.id, a);
       }
@@ -33,7 +34,7 @@ class Library {
     for (const a of this.assets.values()) if (!a.missing) this.ensureDerivatives(a);
   }
   persist() { clearTimeout(this.saveTimer); this.saveTimer = setTimeout(() => this.flush().catch(() => {}), 200); }
-  async flush() { const tmp = this.indexPath + '.tmp'; await fsp.writeFile(tmp, JSON.stringify([...this.assets.values()].map(a => ({ ...a, missing: undefined })), null, 1)); await fsp.rename(tmp, this.indexPath); }
+  async flush() { const tmp = this.indexPath + '.tmp'; await fsp.writeFile(tmp, JSON.stringify(toStored([...this.assets.values()].map(a => ({ ...a, missing: undefined })), this.dataDir), null, 1)); await fsp.rename(tmp, this.indexPath); }
   get(id) { return this.assets.get(id); }
   public(a) {
     if (!a) return null;

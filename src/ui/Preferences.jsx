@@ -60,16 +60,19 @@ function Storage() {
   const [info, setInfo] = useState(null), [cfg, setCfg] = useState(null);
   const load = () => { api('/api/storage').then(setInfo); native?.getStorage().then(setCfg); };
   useEffect(load, []);
-  const change = async key => {
-    const dir = await native.chooseFolder({ title: key === 'dataDir' ? 'Choose where FrameCut keeps projects' : 'Choose where FrameCut keeps cache files', defaultPath: cfg?.[key] }); if (!dir) return;
-    const ok = await confirm({ title: 'Restart FrameCut?', text: key === 'dataDir' ? `Projects, fonts, LUTs and settings will be copied to ${dir}. Your media stays where it is. FrameCut restarts to finish.` : `Thumbnails, waveforms and playback copies will be rebuilt in ${dir}. FrameCut restarts to finish.`, ok: 'Move and restart' });
-    if (!ok) return; await native.setStorage({ [key]: dir }); native.relaunch();
+  const moveProjects = async dir => {
+    const ok = await confirm({ title: 'Move projects and restart?', text: `Your projects will be moved to ${dir}. Media stays where it is. FrameCut restarts to finish.`, ok: 'Move and restart' });
+    if (!ok) return;
+    try { await native.setStorage({ projectsDir: dir }); native.relaunch(); } catch (e) { toast(String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')); }
   };
+  const change = async () => { const dir = await native.chooseFolder({ title: 'Choose where FrameCut keeps your projects', defaultPath: cfg?.projectsDir }); if (dir) moveProjects(dir); };
+  const inside = cfg && cfg.projectsDir === cfg.defaultProjectsDir;
   return <>
-    <h3>Storage locations</h3>
-    <p class="muted">Media you import is linked in place — FrameCut never copies your videos. You can move FrameCut’s own files off the system drive.</p>
-    <div class="storage-row"><div><b>Projects & settings</b><span class="mono ellipsis">{info?.dataDir}</span><small class="muted">{info ? bytes(info.dataBytes) : '…'}</small></div>{native && <button class="btn" onClick={() => change('dataDir')}><FolderOpen size={15} />Change…</button>}</div>
-    <div class="storage-row"><div><b>Cache</b><span class="mono ellipsis">{info?.cacheDir}</span><small class="muted">{info ? bytes(info.cacheBytes) : '…'} · thumbnails, waveforms, playback copies</small></div><div class="row">{native && <button class="btn" onClick={() => change('cacheDir')}><FolderOpen size={15} />Change…</button>}<button class="btn" onClick={async () => { await api('/api/storage/clear-cache', {}); toast('Cache cleared. Playback copies will be rebuilt when needed.'); load(); }}><Trash2 size={15} />Clear</button></div></div>
+    <h3>Storage</h3>
+    <p class="muted">FrameCut keeps its settings, AI models and caches in one folder next to the app. Media you import is linked in place — FrameCut never copies your videos.</p>
+    <div class="storage-row"><div><b>FrameCut folder</b><span class="mono ellipsis">{info?.dataDir}</span><small class="muted">{info ? `${bytes(info.dataBytes)} · AI engines ${bytes(info.engineBytes)} · library media ${bytes(info.mediaBytes)}` : '…'}</small></div>{native && <button class="btn" onClick={() => native.openDataFolder()}><FolderOpen size={15} />Open</button>}</div>
+    <div class="storage-row"><div><b>Projects</b><span class="mono ellipsis">{info?.projectsDir}</span><small class="muted">{info ? bytes(info.projectBytes) : '…'}{inside ? ' · kept when FrameCut is updated or uninstalled' : ''}</small></div><div class="row">{native && !inside && <button class="btn" onClick={() => moveProjects(cfg.defaultProjectsDir)}>Move back</button>}{native && <button class="btn" onClick={change}><FolderOpen size={15} />Change…</button>}</div></div>
+    <div class="storage-row"><div><b>Cache</b><span class="mono ellipsis">{info?.cacheDir}</span><small class="muted">{info ? bytes(info.cacheBytes) : '…'} · thumbnails, waveforms, playback copies</small></div><div class="row"><button class="btn" onClick={async () => { await api('/api/storage/clear-cache', {}); toast('Cache cleared. Playback copies will be rebuilt when needed.'); load(); }}><Trash2 size={15} />Clear</button></div></div>
   </>;
 }
 function CaptionsAi() {

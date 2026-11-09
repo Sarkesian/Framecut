@@ -2,7 +2,7 @@
 // Exclusive mode is exercised on a device that offers 24-bit exclusive formats (e.g. a USB interface,
 // or the Steam Streaming Microphone virtual device); raw mode and hardware gain on the default microphone.
 // Takes go to a temporary folder that is deleted afterwards; the original input gain is restored.
-const { _electron: electron } = require('playwright');
+const { launchApp } = require('./launch.cjs');
 const path = require('node:path'), fs = require('node:fs/promises'), os = require('node:os');
 const assert = require('node:assert/strict');
 const { run, ffmpeg, ffprobe } = require('../desktop/tools.cjs');
@@ -15,7 +15,7 @@ const step = n => console.log('· ' + n);
   try {
     const clip = path.join(temp, 'Clip.mp4');
     await run(ffmpeg, ['-y', '-f', 'lavfi', '-i', 'testsrc2=s=1280x720:r=30', '-f', 'lavfi', '-i', 'sine=frequency=330:sample_rate=48000', '-t', '6', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', clip]);
-    app = await electron.launch({ args: [path.resolve('.')], env: { ...process.env, FRAMECUT_TEST: '1', FRAMECUT_TEST_DIR: temp } });
+    app = await launchApp({ ...process.env, FRAMECUT_TEST: '1', FRAMECUT_TEST_DIR: temp });
     page = await app.firstWindow();
     page.on('pageerror', e => errors.push('pageerror: ' + e.message));
     page.on('console', m => { if (m.type() === 'error') errors.push('console: ' + m.text()); });

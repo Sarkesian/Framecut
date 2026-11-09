@@ -1,6 +1,6 @@
 // FFmpeg/FFprobe helpers shared by the server, background workers and tests.
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 
 const unpack = p => p.replace('app.asar' + path.sep, 'app.asar.unpacked' + path.sep);
 const ffmpeg = unpack(require('ffmpeg-static'));
@@ -14,7 +14,7 @@ function run(binary, args, options = {}) {
     const chunks = []; let size = 0, err = '';
     child.stdout.on('data', d => { onStdout?.(d); if (size < 400e6) { chunks.push(d); size += d.length; } });
     child.stderr.on('data', d => { onStderr?.(d); err = (err + d).slice(-20000); });
-    const abort = () => child.kill('SIGKILL');
+    const abort = () => killTree(child);
     signal?.addEventListener('abort', abort, { once: true });
     child.on('error', reject);
     child.on('close', code => {
@@ -24,6 +24,15 @@ function run(binary, args, options = {}) {
       code === 0 ? resolve({ out, err }) : reject(Error(friendlyError(err) || `The video tool stopped unexpectedly (code ${code}).`));
     });
   });
+}
+
+// End a process and everything it started. A venv's python.exe is only a launcher that runs the real
+// interpreter as a child, so killing the launcher alone would leave Python running (holding files in
+// data\ and writing to data\temp).
+function killTree(child) {
+  if (!child?.pid || child.exitCode !== null || child.signalCode) return;
+  if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+  else try { child.kill('SIGKILL'); } catch {}
 }
 
 function friendlyError(log) {
@@ -71,4 +80,4 @@ async function detectEncoders() {
   return encoderCache;
 }
 
-module.exports = { run, ffmpeg, ffprobe, probeMedia, detectEncoders, friendlyError };
+module.exports = { run, ffmpeg, ffprobe, probeMedia, detectEncoders, friendlyError, killTree };
