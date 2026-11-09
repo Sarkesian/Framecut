@@ -44,6 +44,7 @@ async function startServer({ dataDir = path.join(__dirname, '..', '.workspace'),
     const host = req.headers.host || '';
     if (!/^127\.0\.0\.1:\d+$/.test(host)) return res.status(403).json({ error: 'Local access only.' });
     if (req.headers.origin && req.headers.origin !== 'http://' + host) return res.status(403).json({ error: 'Origin rejected.' });
+    if (req.headers['sec-fetch-site'] === 'cross-site') return res.status(403).json({ error: 'Cross-site access rejected.' });
     res.setHeader('X-Content-Type-Options', 'nosniff'); next();
   });
   app.use(express.json({ limit: '400mb' }));
@@ -109,7 +110,7 @@ async function startServer({ dataDir = path.join(__dirname, '..', '.workspace'),
   // ---------- Creative Library (music, sound effects, stickers) ----------
   app.get('/api/creative/status', (_req, res) => res.json(creative.status()));
   app.get('/api/creative/warm', (req, res) => res.json(creative.warm(['music', 'sfx', 'sticker'].includes(req.query.kind) ? req.query.kind : 'music')));
-  app.get('/api/creative/categories', wrap(async (req, res) => res.json(creative.categories(String(req.query.provider || '')))));
+  app.get('/api/creative/categories', wrap(async (req, res) => res.json(await creative.categories(String(req.query.provider || '')))));
   app.get('/api/creative/search', wrap(async (req, res) => res.json(await creative.search(String(req.query.provider || ''), { ...req.query }))));
   app.get('/api/creative/lists', (req, res) => res.json(creative.lists(String(req.query.kind || ''))));
   app.post('/api/creative/favorite', wrap(async (req, res) => { const r = req.body.record || {}; if (!creative.providers[r.provider] || !r.sourceId) throw Error('Unknown item.'); res.json(creative.toggleFavorite(await creative.record(r.provider, String(r.sourceId)).catch(() => r), !!req.body.on)); }));

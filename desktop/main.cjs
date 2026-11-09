@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const { startServer } = require('./server.cjs');
 const P = require('./paths.cjs');
 const { readJsonSync, writeJsonSync } = require('./jsonstore.cjs');
+const { sameOrigin } = require('./security.cjs');
 
 let service, win;
 const testDir = process.env.FRAMECUT_TEST_DIR;
@@ -152,16 +153,16 @@ Protected folders such as Program Files and Windows can’t be used. Reinstall F
       .then(ok => { asking = false; if (ok !== false) { allowClose = true; win.close(); } })
       .catch(() => { asking = false; allowClose = true; win.close(); });
   });
-  win.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:\/\//.test(url) && !url.startsWith(service.url)) shell.openExternal(url); return { action: 'deny' }; });
-  win.webContents.on('will-navigate', (event, url) => { if (!url.startsWith(service.url + '/')) event.preventDefault(); });
+  win.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:\/\//.test(url) && !sameOrigin(url, service.url)) shell.openExternal(url); return { action: 'deny' }; });
+  win.webContents.on('will-navigate', (event, url) => { if (!sameOrigin(url, service.url)) event.preventDefault(); });
   const ses = win.webContents.session;
   ses.setPermissionRequestHandler((wc, permission, callback, details) => {
-    const local = details.requestingUrl?.startsWith(service.url);
+    const local = wc === win.webContents && sameOrigin(details.requestingUrl, service.url);
     if (local && permission === 'media' && (details.mediaTypes || []).every(t => t === 'audio')) return callback(true);
     if (local && ['clipboard-sanitized-write', 'fullscreen'].includes(permission)) return callback(true);
     callback(false);
   });
-  ses.setPermissionCheckHandler((wc, permission, origin) => origin?.startsWith(service.url) && ['media', 'clipboard-sanitized-write', 'fullscreen'].includes(permission));
+  ses.setPermissionCheckHandler((wc, permission, origin) => wc === win.webContents && sameOrigin(origin, service.url) && ['media', 'clipboard-sanitized-write', 'fullscreen'].includes(permission));
   // Reload after a renderer crash, but don't spin forever if the page crashes on every load.
   const crashes = [];
   win.webContents.on('render-process-gone', (_e, d) => {

@@ -161,4 +161,14 @@ export async function trackImport(count, fn) { importing.value += count; try { r
 // Newly imported assets must be in the media map before the panels or the player can show them.
 export function rememberMedia(assets) { if (!assets?.length) return; const m = new Map(media.value); for (const a of assets) m.set(a.id, a); media.value = m; }
 export const asset = id => media.value.get(id);
-export async function savePrefs(patch) { prefs.value = await api('/api/preferences', { ...prefs.value, ...patch }, 'PUT'); }
+// Send only the changed fields, in order. Concurrent full snapshots could undo a
+// different control's change, and late responses could restore stale UI values.
+let prefsSaving = Promise.resolve();
+export function savePrefs(patch) {
+  const changes = structuredClone(patch);
+  prefsSaving = prefsSaving.catch(() => {}).then(async () => {
+    prefs.value = await api('/api/preferences', changes, 'PUT');
+    return prefs.value;
+  });
+  return prefsSaving;
+}

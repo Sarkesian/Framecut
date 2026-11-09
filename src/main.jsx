@@ -24,8 +24,9 @@ import * as dragMod from './lib/drag.js';
 import * as keysMod from './lib/keyedit.js';
 import * as viewportMod from './lib/viewport.js';
 import * as uiMod from './lib/uiprefs.js';
+import * as creativeMod from './lib/creative.js';
 // Automation hooks used by the end-to-end tests.
-window.__fc = { state: stateMod, edit: editMod, studio: studioMod, api, drag: dragMod, keys: keysMod, viewport: viewportMod, ui: uiMod, whisper: whisperMod, captions: captionsMod, raster: rasterMod };
+window.__fc = { state: stateMod, edit: editMod, studio: studioMod, api, drag: dragMod, keys: keysMod, viewport: viewportMod, ui: uiMod, whisper: whisperMod, captions: captionsMod, raster: rasterMod, creative: creativeMod };
 
 function App() {
   useEffect(() => {

@@ -31,7 +31,7 @@ class Creative {
     this.statePath = path.join(dataDir, 'creative.json'); this.dataDir = dataDir;
     this.dirs = { lib: path.join(dataDir, 'media', 'library'), previews: path.join(cacheDir, 'creative', 'previews'), bake: path.join(cacheDir, 'creative', 'bake') };
     this.memCreds = {};
-    this.providers = { openverse: new Openverse({ http, base: openverseBase, credentials: () => this.credentials('openverse') }), fluent: new Fluent(), pixabay: new Pixabay({ http, base: pixabayBase, credentials: () => this.credentials('pixabay') }), sfxkit: new SfxKit({ base: sfxkitBase }), ccmixter: new CcMixter({ http, base: ccmixterBase }), ...(assetpolishBase === false ? {} : { assetpolish: new AssetPolish({ http, base: assetpolishBase }) }) }; // false: left out (tests that must stay offline)
+    this.providers = { openverse: new Openverse({ http, base: openverseBase, credentials: () => this.credentials('openverse') }), fluent: new Fluent(), pixabay: new Pixabay({ http, base: pixabayBase, credentials: () => this.credentials('pixabay') }), sfxkit: new SfxKit({ base: sfxkitBase }), ccmixter: new CcMixter({ http, base: ccmixterBase }), ...(assetpolishBase === false ? {} : { assetpolish: new AssetPolish({ http, base: assetpolishBase, catalogFile: path.join(cacheDir, 'creative', 'assetpolish-catalog.json') }) }) }; // false: left out (tests that must stay offline)
     this.cache = new Map(); this.known = new Map(); this.inflight = new Map(); this.sessions = new Map(); this.tokens = new Map();
     this.state = { favorites: [], recents: [], imports: {} };
   }
@@ -72,6 +72,7 @@ class Creative {
     return {
       openverse: { ...this.providers.openverse.status(), credentials: !!this.credentials('openverse'), secureStore: !!this.secrets?.available?.() },
       pixabay: this.providers.pixabay.status(), notices: APP_NOTICES,
+      assetpolish: this.providers.assetpolish?.status() || null,
       providers: Object.values(PROVIDERS).map(p => ({ id: p.id, name: p.name, enabled: p.enabled, optional: !!p.optional, configured: p.needsKey ? !!this.providers[p.id]?.configured?.() : null, kinds: p.kinds, reason: p.reason || null, note: p.note || null, home: p.home || null, terms: p.terms || null, tier: providerTier(p.id) })),
     };
   }
@@ -96,11 +97,11 @@ class Creative {
   async search(providerId, params = {}) {
     if (providerId === 'all') return this.searchAll(params);
     const p = this.provider(providerId);
-    const q = { q: String(params.q || '').trim().slice(0, 200), kind: params.kind, page: +params.page || 1, usage: params.usage === 'personal' ? 'personal' : 'commercial', length: params.length || '', source: params.source || '', category: params.category || '', include: includeMode(params.include) };
+    const q = { q: String(params.q || '').trim().slice(0, 200), kind: params.kind, page: +params.page || 1, usage: params.usage === 'personal' ? 'personal' : 'commercial', length: params.length || '', source: params.source || '', category: params.category || '', ...(providerId === 'assetpolish' ? { collection: params.collection || '' } : {}), include: includeMode(params.include) };
     const key = providerId + JSON.stringify(q);
     const hit = this.cache.get(key);
     let data;
-    if (hit && Date.now() - hit.at < (p.cacheTtl || 6 * 3600e3)) data = hit.data;
+    if (hit && Date.now() - hit.at < (p.cacheTtl ?? 6 * 3600e3)) data = hit.data;
     else if (this.inflight.has(key)) data = await this.inflight.get(key);
     else {
       const prom = p.search(q); this.inflight.set(key, prom);
@@ -120,7 +121,10 @@ class Creative {
     const ids = this.searchable(kind, include).filter(id => !['fluent', 'sfxkit'].includes(id) || params.q || params.category);
     // Each source gets a deadline; a slow one is reported (its answer still lands in the cache for next time).
     const deadline = +params.deadline || this.searchDeadline || 9000;
-    const settled = await Promise.allSettled(ids.map(id => Promise.race([this.search(id, { ...params, kind, include }), new Promise((_, no) => setTimeout(() => no(Object.assign(Error(`${PROVIDERS[id]?.name || id} is slow to answer right now.`), { code: 'slow' })), deadline))])));
+    const settled = await Promise.allSettled(ids.map(id => {
+      let timer;
+      return Promise.race([this.search(id, { ...params, kind, include }), new Promise((_, no) => { timer = setTimeout(() => no(Object.assign(Error(`${PROVIDERS[id]?.name || id} is slow to answer right now.`), { code: 'slow' })), deadline); })]).finally(() => clearTimeout(timer));
+    }));
     const ok = [], failed = [];
     settled.forEach((r, i) => { if (r.status === 'fulfilled') ok.push([ids[i], r.value]); else failed.push({ provider: ids[i], name: PROVIDERS[ids[i]]?.name, message: r.reason?.message, code: r.reason?.code || null, retryAfter: r.reason?.retryAfter || null, error: r.reason }); });
     if (!ok.length && failed.length) throw failed[0].error;

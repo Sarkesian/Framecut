@@ -86,7 +86,7 @@ function StateCard({ s, panel, onRetry }) {
       <button class="btn sm" onClick={onRetry}>Try again</button>
     </div>;
   }
-  if (s.status === 'empty') return <div class="lib-state" role="status"><Search size={22} /><b>{s.q ? <>No results for “{s.q}”</> : 'Nothing here yet'}</b><span>Try fewer or broader words{s.length || s.source || s.category ? ', or clear the filters' : ''}. Only items that need no credit are shown.</span>{(s.length || s.source || s.category) && <button class="btn sm" onClick={() => search(panel, { length: '', source: '', category: '' }, { now: true })}>Clear filters</button>}</div>;
+  if (s.status === 'empty') return <div class="lib-state" role="status"><Search size={22} /><b>{s.q ? <>No results for “{s.q}”</> : 'Nothing here yet'}</b><span>Try fewer or broader words{s.length || s.source || s.category || s.collection ? ', or clear the filters' : ''}. Only items that need no credit are shown.</span>{(s.length || s.source || s.category || s.collection) && <button class="btn sm" onClick={() => search(panel, { length: '', source: '', category: '', collection: '' }, { now: true })}>Clear filters</button>}</div>;
   return null;
 }
 // "120 results from Openverse, SFX Kit" plus any source that was slow or failed, with a retry.
@@ -94,7 +94,7 @@ function ResultCount({ s, panel, noun = 'result' }) {
   const n = s.total > s.results.length ? s.total : s.results.length;
   const names = (s.sources || []).filter(x => x.total > 0).map(x => SOURCE_NAMES[x.provider] || x.provider);
   return <div class="lib-count muted" aria-live="polite">
-    {n > s.results.length ? `${n.toLocaleString()}+ ${noun}s` : `${s.results.length} ${noun}${s.results.length === 1 ? '' : 's'}`}{names.length ? ' from ' + names.join(', ') : ''}
+    {n > s.results.length ? `${n.toLocaleString()} ${noun}s` : `${s.results.length} ${noun}${s.results.length === 1 ? '' : 's'}`}{names.length ? ' from ' + names.join(', ') : ''}
     {s.partial?.length > 0 && <> · <span class="warnc">{s.partial.map(p => `${SOURCE_NAMES[p.provider] || p.name || p.provider} ${p.code === 'slow' ? 'is slow to answer' : 'didn’t answer'}`).join(', ')}</span> <button class="btn sm ghost lib-retry" onClick={() => search(panel, {}, { now: true })}>Try again</button></>}
   </div>;
 }
@@ -183,9 +183,10 @@ function AudioRow({ rec, panel }) {
   ]);
   return <div class={`audio-row lib-row ${playing ? 'playing' : ''} ${sel ? 'sel' : ''} ${r.blocked ? 'blocked' : ''}`} role="option" aria-selected={sel} tabIndex={0} draggable={!r.blocked}
     aria-label={`${rec.title}${rec.creator ? ' by ' + rec.creator : ''}, ${rec.durationMs ? shortTime(rec.durationMs / 1000) : ''}, ${r.badge}`}
-    onDragStart={e => dragRecord(e, rec)} onDblClick={() => !r.blocked && add()} onContextMenu={menu} onClick={e => { if (!e.target.closest('button')) togglePreview(rec); }}
+    onDragStart={e => dragRecord(e, rec)} onDblClick={e => { if (!e.target.closest('button') && !r.blocked) add(); }} onContextMenu={menu} onClick={e => { if (!e.target.closest('button')) togglePreview(rec); }}
     onPointerEnter={() => warmPreview(rec)} onPointerLeave={() => warmPreview(null)} onFocus={() => warmPreview(rec, 400)}
     onKeyDown={e => {
+      if (e.target !== e.currentTarget) return;
       if (e.key === ' ') { e.preventDefault(); togglePreview(rec); } else if (e.key === 'Enter' || e.key === '+') { e.preventDefault(); r.blocked ? (selectedRecord.value = rec) : add(); }
       else if (e.key === 'Escape') stopPreview(); else if (e.key.toLowerCase() === 'f' && !e.ctrlKey) toggleFavorite(rec); else if (e.key === 'i') selectedRecord.value = rec;
     }}>
@@ -202,7 +203,7 @@ function AudioRow({ rec, panel }) {
 async function afterMusic(clipId) {
   const p = prefs.value;
   if (p.libraryBalance) { const { balanceClip } = await import('../lib/creative.js'); await balanceClip(clipId); }
-  if (p.libraryDuck) { const pr = project.value; const hasVoice = pr.tracks.some(t => t.voice && pr.clips.some(c => c.trackId === t.id)); if (hasVoice) { const { applyDucking } = await import('./Studio.jsx'); await applyDucking(); } else toast('Duck under voice will start working once you record or mark a voice track.', 'info'); }
+  if (p.libraryDuck) { const pr = project.value; if (!pr?.clips.some(c => c.id === clipId)) return; const hasVoice = pr.tracks.some(t => t.voice && pr.clips.some(c => c.trackId === t.id)); if (hasVoice) { const { applyDucking } = await import('./Studio.jsx'); await applyDucking(); } else toast('Add or mark a voice track, then turn on ducking in Audio Studio to lower this music while you speak.', 'info'); }
 }
 function copy(text) { navigator.clipboard.writeText(text).then(() => toast('Credit copied.')).catch(() => toast('Copy failed.', 'error')); }
 
@@ -218,8 +219,7 @@ function PlayButton({ active, onClick, disabled }) {
 
 function PreviewBar() {
   const pv = preview.value; if (!pv.key) return null;
-  const all = [...searches.music.value.results, ...searches.sfx.value.results, ...lists.value.audio.favorites, ...lists.value.audio.recents];
-  const title = all.find(x => x.key === pv.key)?.title || pv.title || 'Preview'; const t = previewTime.value;
+  const title = pv.title || 'Preview'; const t = previewTime.value;
   const seekAt = e => { const r = e.currentTarget.getBoundingClientRect(); seekPreview((e.clientX - r.left) / r.width); };
   const scrub = e => { if (e.button !== 0) return; const el = e.currentTarget; el.setPointerCapture(e.pointerId); seekAt(e); const mv = ev => seekAt({ currentTarget: el, clientX: ev.clientX }); const up = () => { el.removeEventListener('pointermove', mv); el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', up); }; el.addEventListener('pointermove', mv); el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up); };
   const playingNow = pv.state === 'playing' || pv.state === 'loading';
@@ -232,7 +232,7 @@ function PreviewBar() {
     </div>
     <div class="pv-row">
       <div class="pv-track grow" role="slider" aria-label="Preview position" aria-valuemin={0} aria-valuemax={Math.round(pv.d)} aria-valuenow={Math.round(t)} tabIndex={0} onPointerDown={scrub}
-        onKeyDown={e => { if (!pv.d) return; if (e.key === 'ArrowRight') seekPreview((t + 5) / pv.d); if (e.key === 'ArrowLeft') seekPreview((t - 5) / pv.d); }}><i style={{ width: (pv.d ? Math.min(1, t / pv.d) * 100 : 0) + '%' }} /></div>
+        onKeyDown={e => { if (!pv.d) return; if (['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(e.key)) { e.preventDefault(); e.stopPropagation(); seekPreview(e.key === 'Home' ? 0 : e.key === 'End' ? 1 : (t + (e.key === 'ArrowRight' ? 5 : -5)) / pv.d); } }}><i style={{ width: (pv.d ? Math.min(1, t / pv.d) * 100 : 0) + '%' }} /></div>
       <Volume2 size={13} class="muted" />
       <input type="range" class="pv-vol" min="0" max="1" step="0.05" aria-label="Preview volume" data-tip="Preview volume" value={prefs.value.libraryPreviewVolume ?? 0.8} onInput={e => setPreviewVolume(+e.target.value)} onChange={e => savePrefs({ libraryPreviewVolume: +e.target.value })} />
     </div>
@@ -278,8 +278,8 @@ function MyAudio() {
     {!all.length ? <div class="lib-state"><Music size={22} /><b>No audio yet</b><span>Add music or sound effects from the other tabs, import your own files, or record a voiceover. Everything here works offline.</span></div>
       : <div class="audio-list" role="listbox" aria-label="My audio" onKeyDown={e => navKeys(e, '.lib-row')}>{all.map(a => {
         const src = a.source && a.source.provider !== 'local' ? a.source : null;
-        return <div key={a.id} class={`audio-row lib-row ${a.missing ? 'blocked' : ''}`} role="option" tabIndex={0} draggable={!a.missing} onDragStart={e => dragAsset(e, a, kindOf(a))} onDblClick={() => add(a)}
-          onKeyDown={e => { if (e.key === ' ') { e.preventDefault(); play(a); } if (e.key === 'Enter') add(a); }}
+        return <div key={a.id} class={`audio-row lib-row ${a.missing ? 'blocked' : ''}`} role="option" tabIndex={0} draggable={!a.missing} onDragStart={e => dragAsset(e, a, kindOf(a))} onDblClick={e => { if (!e.target.closest('button')) add(a); }}
+          onKeyDown={e => { if (e.target !== e.currentTarget) return; if (e.key === ' ') { e.preventDefault(); play(a); } if (e.key === 'Enter') { e.preventDefault(); add(a); } }}
           onContextMenu={e => openMenu(e, [{ text: 'Add at playhead', icon: Plus, onClick: () => add(a) }, src && { text: 'Copy credit', icon: Copy, onClick: () => copy(creditLine(src)) }, src?.sourcePageUrl && { text: 'Open source page', icon: ExternalLink, onClick: () => window.open(src.sourcePageUrl, '_blank') }, native && !a.missing && { text: 'Reveal file', icon: FolderOpen, onClick: () => native.showInFolder(a.folder + '\\' + a.fileName) }, a.missing && { text: 'Relink…', icon: Link2, onClick: () => relinkOne(a) }])}>
           <PlayButton active={preview.value.key === keyOf(a)} disabled={a.missing} onClick={() => play(a)} />
           <div class="grow lib-meta"><div class="ellipsis lib-title">{(src?.title || a.name).replace(/\.[^.]+$/, '')}</div><div class="lib-sub">{src ? <LicenseBadge rec={src} compact /> : null}<small class="muted ellipsis">{a.missing ? 'File missing — relink to use' : [shortTime(a.duration), a.recording ? 'Recording' : src ? src.sourceName || 'Openverse' : a.kind === 'audio' ? 'Your file' : 'From video', p.mediaIds.includes(a.id) ? 'In project' : 'Ready offline'].filter(Boolean).join(' · ')}</small></div></div>
@@ -311,21 +311,35 @@ export function StickerLibrary() {
 function Discover() {
   const s = searches.stickers.value; const groups = GROUPS; const L = lists.value.sticker;
   const gridRef = useRef(); const pixabay = libStatus.value?.pixabay?.configured;
+  const cats = categories.value.assetpolish || [];
+  const total = cats.find(c => c.group === 'all')?.count;
+  const topics = cats.filter(c => c.group === 'topic'), collections = cats.filter(c => c.group === 'collection');
+  const browsingAssetPolish = !s.source || s.source === 'assetpolish';
+  useEffect(() => {
+    loadCategories('assetpolish');
+    if (searches.stickers.value.status === 'idle') search('stickers', {}, { now: true });
+  }, []);
   return <>
     <SearchField panel="stickers" placeholder="Search stickers — party, star, arrow, cat…" onArrowDown={() => gridRef.current?.querySelector('.st-card')?.focus()} />
-    {!s.q.trim() && <>
+    <div class="lib-catalog-head"><b>{total != null ? total.toLocaleString() + ' free assets' : 'Free stickers & illustrations'}</b><span class="muted">AssetPolish · CC0{collections.length ? ` · ${collections.length} collections` : ''}</span></div>
+    <div class="lib-filters sticker-filters">
+      <Select label="Sticker source" value={s.source} options={[['', 'All sources'], ['assetpolish', 'AssetPolish'], ['fluent', 'Fluent Emoji'], ['openverse', 'Openverse'], ...(pixabay ? [['pixabay', 'Pixabay']] : [])]} onChange={v => search('stickers', { source: v, category: '', collection: '' }, { now: true })} />
+      {browsingAssetPolish && <>
+        <Select label="Sticker topic" value={s.category} options={[[ '', 'All topics' ], ...topics.map(c => [c.id, `${c.name} (${c.count})`])]} onChange={v => search('stickers', { category: v, source: v ? 'assetpolish' : s.source }, { now: true })} />
+      </>}
+    </div>
+    {browsingAssetPolish && <details class="lib-collections" open={!!s.collection}><summary>{s.collection ? s.collection.replace(/^collection:/, '') : 'Browse collections'}</summary><Select label="Sticker collection" value={s.collection} options={[[ '', 'All collections' ], ...collections.map(c => [c.id, `${c.name} (${c.count})`])]} onChange={v => search('stickers', { collection: v, source: v ? 'assetpolish' : s.source }, { now: true })} /></details>}
+    <div ref={gridRef}>{s.status === 'loading' || s.status === 'idle' ? <Skeleton grid rows={12} /> : s.status === 'empty' || s.status === 'error' ? <StateCard s={s} panel="stickers" onRetry={() => search('stickers', {}, { now: true })} /> : <><ResultCount s={s} panel="stickers" noun="asset" /><StickerGrid items={s.results} /><MoreButton s={s} panel="stickers" /></>}</div>
+    <details class="lib-emoji-browse"><summary>Emoji, shapes & saved stickers</summary>
       {L.recents.length > 0 && <><h4 class="group-title">Recently used</h4><StickerGrid items={L.recents.slice(0, 12)} /></>}
       {L.favorites.length > 0 && <><h4 class="group-title">Favorites</h4><StickerGrid items={L.favorites.slice(0, 24)} /></>}
-      <h4 class="group-title">Animated emoji</h4>
       <div class="cat-grid">{groups.map(g => <button key={g.id} class="cat-tile" onClick={() => { stickerTab.value = 'animated'; search('fluent', { category: g.id, q: '' }, { now: true }); }}><span class="emo">{g.glyph}</span><span>{g.name}</span></button>)}<button class="cat-tile" onClick={() => (stickerTab.value = 'static')}><Shapes size={22} /><span>Shapes & emoji</span></button></div>
-      <Chips label="Illustrations & silhouettes" items={STICKER_IDEAS} onPick={q => search('stickers', { q }, { now: true })} />
-    </>}
-    {s.q.trim() && <div ref={gridRef}>{s.status === 'loading' ? <Skeleton grid rows={12} /> : s.status === 'empty' || s.status === 'error' ? <StateCard s={s} panel="stickers" onRetry={() => search('stickers', {}, { now: true })} /> : <><ResultCount s={s} panel="stickers" noun="sticker" /><StickerGrid items={s.results} /><MoreButton s={s} panel="stickers" /></>}</div>}
-    <p class="muted hint lib-intro">Animated emoji by Microsoft, plus free stickers, illustrations and silhouettes from AssetPolish, Openverse{pixabay ? ' and Pixabay' : ''} — none need a credit. Only the ones you add are downloaded, then they work offline. Import your own GIF, APNG, WebP, SVG or Lottie files too.</p>
+    </details>
+    <p class="muted hint lib-intro">No credits needed. Motion designs from AssetPolish are offered as still stickers; use Animated for moving emoji. Added stickers are saved locally and work offline.</p>
   </>;
 }
 const GROUPS = [['Smileys & Emotion', '😀'], ['People & Body', '👋'], ['Animals & Nature', '🦊'], ['Food & Drink', '🍕'], ['Activities', '🎉'], ['Travel & Places', '🚀'], ['Objects', '💡'], ['Flags', '🏁']].map(([id, glyph]) => ({ id, name: id.replace(' & ', ' & '), glyph }));
-function MoreButton({ s, panel = 'fluent' }) { return s.page < s.pages ? <div class="lib-more"><button class="btn sm ghost" disabled={s.status === 'more'} onClick={() => search(panel, {}, { more: true })}>{s.status === 'more' ? <LoaderCircle size={14} class="spin" /> : null}Show more</button></div> : null; }
+function MoreButton({ s, panel = 'fluent' }) { return s.page < s.pages ? <div class="lib-more lib-pagination"><span class="muted">Showing {s.results.length.toLocaleString()} of {s.total.toLocaleString()}</span><button class="btn sm ghost" disabled={s.status === 'more'} onClick={() => search(panel, {}, { more: true })}>{s.status === 'more' ? <LoaderCircle size={14} class="spin" /> : null}Show more</button></div> : null; }
 function Animated() {
   const s = searches.fluent.value;
   useEffect(() => { if (!s.category && !s.q) search('fluent', { category: GROUPS[0].id }, { now: true }); }, []);
@@ -359,6 +373,7 @@ function ImageCard({ rec }) {
     {!loaded && <span class="st-skel" aria-hidden="true">{broken ? <TriangleAlert size={16} class="muted" /> : <Shapes size={18} class="muted" />}</span>}
     {!broken && <img src={src} alt="" loading="lazy" draggable={false} class={loaded ? 'on' : ''} onLoad={() => setLoaded(true)} onError={() => setBroken(true)} />}
     <span class="st-src">{from}</span>
+    <span class="st-name">{rec.title}</span>
     {rec.animated && <span class="st-anim" data-tip="Animated"><Sparkles size={10} /></span>}
     {rec.imported && <span class="st-ready" data-tip="Downloaded — works offline"><Check size={10} /></span>}
     {rec.favorite && <Heart size={11} class="st-fav" fill="currentColor" />}

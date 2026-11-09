@@ -234,9 +234,12 @@ export async function scriptToCaptions() {
   return segs;
 }
 export async function applyDucking() {
-  const p = project.value; const d0 = { on: true, amount: -12, speed: 'normal', ...(p.settings.ducking || {}) };
+  const p = project.value; if (!p) return;
+  const d0 = { amount: -12, speed: 'normal', ...(p.settings.ducking || {}), on: true };
   const voices = voiceClips(p); if (!voices.length) { toast('Ducking needs a voice track. Record a voiceover, or right-click an audio track and mark it as a voice track.', 'warn'); return; }
   const speech = await voiceSpeech(voices);
+  if (project.value?.id !== p.id) return;
+  if (!speech.length) return toast('No speech was detected. Ducking was not applied; check your voice track and try again.', 'warn');
   const timing = { fast: { attack: 0.12, release: 0.35 }, normal: { attack: 0.25, release: 0.6 }, slow: { attack: 0.5, release: 1.2 } }[d0.speed] || { attack: 0.25, release: 0.6 };
   commit('Auto ducking', d => { d.settings.ducking = d0; for (const c of backgroundClips(d)) c.duckKeys = duckKeys(c, speech, { amount: d0.amount, ...timing }); });
   toast(`Background audio now dips ${Math.abs(d0.amount)} dB while you speak.`);

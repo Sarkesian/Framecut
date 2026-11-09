@@ -8,6 +8,8 @@ class JobQueue {
   }
   // fn(job) receives {signal, progress(p, message)} and returns a result.
   add({ type, label, lane = 'light', meta = {}, hidden = false }, fn) {
+    if (!Object.hasOwn(this.lanes, lane)) throw Error('Unknown job lane: ' + lane);
+    this.prune();
     const controller = new AbortController();
     const job = { id: randomUUID(), type, label, lane, meta, hidden, status: 'queued', progress: 0, message: '', error: null, result: null, created: Date.now(), controller };
     job.promise = new Promise((resolve, reject) => { job.resolve = resolve; job.reject = reject; });
@@ -21,7 +23,7 @@ class JobQueue {
       this.running[lane]++; job.status = 'running'; job.started = Date.now();
       const ctx = { signal: job.controller.signal, progress: (p, message) => { job.progress = Math.max(0, Math.min(1, p)); if (message) job.message = message; } };
       Promise.resolve().then(() => job.fn(ctx)).then(result => {
-        if (job.status === 'cancelled') return job.reject(Error('Cancelled'));
+        if (job.status === 'cancelled') return job.reject(Object.assign(Error('Cancelled'), { cancelled: true }));
         job.status = 'done'; job.progress = 1; job.result = result; job.resolve(result);
       }, err => {
         if (job.status !== 'cancelled') { job.status = err?.cancelled ? 'cancelled' : 'failed'; job.error = err?.message || String(err); }
@@ -31,7 +33,12 @@ class JobQueue {
   }
   cancel(id) {
     const job = this.jobs.get(id); if (!job || !['queued', 'running'].includes(job.status)) return false;
-    job.status = 'cancelled'; job.controller.abort(); if (!job.started) job.reject(Object.assign(Error('Cancelled'), { cancelled: true }));
+    job.status = 'cancelled'; job.controller.abort();
+    if (!job.started) {
+      job.finished = Date.now();
+      this.waiting[job.lane] = this.waiting[job.lane].filter(j => j !== job);
+      job.reject(Object.assign(Error('Cancelled'), { cancelled: true }));
+    }
     return true;
   }
   prune() { const cutoff = Date.now() - 30 * 60e3; for (const [id, j] of this.jobs) if (j.finished && j.finished < cutoff) this.jobs.delete(id); }

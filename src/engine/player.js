@@ -20,6 +20,7 @@ export class Player {
     this.raf = null; this.loop = this.loop.bind(this);
     this.ctx = null;
     this.drawRequested = false;
+    this.lifecycle = new AbortController(); this.destroyed = false;
   }
   audio() { if (!this.ctx) { this.ctx = new AudioContext({ latencyHint: 'playback' }); this.master = this.ctx.createGain(); this.master.connect(this.ctx.destination); } return this.ctx; }
   invalidate() { this.plan = null; this.requestDraw(); }
@@ -52,8 +53,8 @@ export class Player {
   }
   async loadLut(id) {
     if (this.comp.luts.has(id) || this.lutsLoading.has(id)) return; this.lutsLoading.add(id);
-    try { const r = await fetch('/api/luts/' + encodeURIComponent(id)); if (!r.ok) throw Error('LUT unavailable'); this.comp.setLut(id, parseCube(await r.text())); this.requestDraw(); }
-    catch (e) { this.onError?.('A color filter could not be loaded: ' + e.message); }
+    try { const r = await fetch('/api/luts/' + encodeURIComponent(id), { signal: this.lifecycle.signal }); if (!r.ok) throw Error('LUT unavailable'); const cube = await r.text(); if (this.destroyed) return; this.comp.setLut(id, parseCube(cube)); this.requestDraw(); }
+    catch (e) { if (!this.destroyed) this.onError?.('A color filter could not be loaded: ' + e.message); }
     finally { this.lutsLoading.delete(id); }
   }
   duration() { return this.getPlan()?.duration || 0; }
@@ -77,12 +78,11 @@ export class Player {
   step(frames) { const fps = this.getPlan()?.fps || 30; this.pause(); this.seek(Math.round(this.t * fps + frames) / fps); }
   setRate(r) { this.rate = r; if (this.playing) { this.clockT = this.t; this.clockNow = performance.now(); } }
 
-  // rAF is paused while the window is occluded or hidden; a timer fallback keeps paused-frame redraws
-  // (seeks, edits, snapshots) working there too, whichever fires first wins.
+  // Coalesce paused redraws within the current event. Unlike rAF and timers,
+  // microtasks also run reliably when Windows occludes the editor window.
   requestDraw() {
-    if (this.playing || this.drawRequested) return; this.drawRequested = true;
-    const run = () => { if (!this.drawRequested) return; this.drawRequested = false; clearTimeout(this.drawTimer); this.frame(); };
-    requestAnimationFrame(run); this.drawTimer = setTimeout(run, 100);
+    if (this.destroyed || this.playing || this.drawRequested) return; this.drawRequested = true;
+    queueMicrotask(() => { if (!this.drawRequested || this.destroyed) return; this.drawRequested = false; this.frame(); });
   }
   loop() {
     if (!this.playing) return;
@@ -215,19 +215,30 @@ export class Player {
     if (Math.random() < 0.01) this.comp.gc();
   }
   processedUrl(A) {
+    if (this.destroyed) return null;
     const key = A.mediaId + '|' + A.processed;
     const s = this.processed.get(key);
     if (s?.url) return s.url;
-    if (!s) {
+    if (!s || (s.retryAt && Date.now() >= s.retryAt)) {
       this.processed.set(key, { pending: true });
-      fetch('/api/tools/audiofx', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mediaId: A.mediaId, clip: { audioFx: A.clip.audioFx } }) }).then(r => r.json()).then(async d => {
+      const signal = this.lifecycle.signal;
+      fetch('/api/tools/audiofx', { method: 'POST', signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mediaId: A.mediaId, clip: { audioFx: A.clip.audioFx } }) }).then(r => { if (!r.ok) throw Error('Audio processing request failed (' + r.status + ')'); return r.json(); }).then(async d => {
+        if (signal.aborted) return;
         if (d.error) throw Error(d.error);
         if (d.url) { this.processed.set(key, { url: d.url }); this.requestDraw(); return; }
-        for (;;) { await new Promise(r => setTimeout(r, 400)); const j = await (await fetch('/api/jobs/' + d.job)).json(); if (j.status === 'done') { this.processed.set(key, { url: j.result.url }); this.requestDraw(); return; } if (j.status === 'failed') throw Error(j.error); }
-      }).catch(err => { this.processed.delete(key); this.onError?.('Audio effects could not be applied: ' + err.message); });
+        if (!d.job) throw Error('Audio processing did not return a task.');
+        while (!signal.aborted) {
+          await new Promise(r => setTimeout(r, 400)); if (signal.aborted) return;
+          const r = await fetch('/api/jobs/' + d.job, { signal }); if (!r.ok) throw Error('Audio processing task is unavailable (' + r.status + ')');
+          const j = await r.json(); if (signal.aborted) return;
+          if (j.status === 'done') { if (!j.result?.url) throw Error('Audio processing returned no file.'); this.processed.set(key, { url: j.result.url }); this.requestDraw(); return; }
+          if (j.status === 'failed' || j.status === 'cancelled') throw Error(j.error || 'Audio processing was cancelled.');
+          if (!['queued', 'running'].includes(j.status)) throw Error('Audio processing returned an unknown task state.');
+        }
+      }).catch(err => { if (signal.aborted) return; this.processed.set(key, { retryAt: Date.now() + 10000 }); this.onError?.('Audio effects could not be applied: ' + err.message); });
     }
     return null;
   }
-  snapshot(type = 'image/jpeg', q = 0.82) { return this.canvas.toDataURL(type, q); }
-  destroy() { this.pause(); cancelAnimationFrame(this.raf); for (const k of [...this.pool.keys()]) this.release(k); for (const e of this.audioEls.values()) { e.el.pause(); e.el.src = ''; } this.ctx?.close(); }
+  snapshot(type = 'image/jpeg', q = 0.82) { this.frame(); return this.canvas.toDataURL(type, q); }
+  destroy() { this.destroyed = true; this.lifecycle.abort(); this.pause(); cancelAnimationFrame(this.raf); clearTimeout(this.drawTimer); this.drawRequested = false; for (const k of [...this.pool.keys()]) this.release(k); for (const e of this.audioEls.values()) { e.el.pause(); e.el.removeAttribute('src'); e.el.load(); } this.audioEls.clear(); this.processed.clear(); this.ctx?.close(); }
 }

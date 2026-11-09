@@ -15,20 +15,20 @@ export const libStatus = signal(null);
 export const busyKeys = signal(new Map()); // key -> progress 0..1 (or null = indeterminate)
 export const selectedRecord = signal(null); // detail drawer
 
-const blank = () => ({ q: '', length: '', source: '', category: '', results: [], page: 0, pages: 0, total: 0, status: 'idle', error: null, scroll: 0 });
+const blank = () => ({ q: '', length: '', source: '', category: '', collection: '', results: [], page: 0, pages: 0, total: 0, status: 'idle', error: null, scroll: 0 });
 export const searches = { music: signal(blank()), sfx: signal(blank()), fluent: signal(blank()), stickers: signal(blank()) };
 // Music, sound effects and the sticker search ask every free source at once ('all'); the server merges
 // them. The Animated tab browses Fluent Emoji only. Picking a source in the filter narrows to it.
 const PROVIDER = { music: 'all', sfx: 'all', fluent: 'fluent', stickers: 'all' };
 const KIND = { music: 'music', sfx: 'sfx', fluent: 'sticker', stickers: 'sticker' };
-const OWN_SOURCES = ['ccmixter', 'sfxkit', 'pixabay', 'openverse', 'assetpolish']; // source filter values that are whole providers
+const OWN_SOURCES = ['ccmixter', 'sfxkit', 'pixabay', 'openverse', 'assetpolish', 'fluent']; // source filter values that are whole providers
 // Category browsing (no search words) is answered by the source that owns the categories.
 const CATEGORY_PROVIDER = { sfx: 'sfxkit', fluent: 'fluent' };
 
 export const usageMode = () => (project.value?.usageMode === 'personal' ? 'personal' : 'commercial');
 export function setUsageMode(mode) {
   commit('Usage: ' + (mode === 'personal' ? 'personal' : 'commercial'), p => { p.usageMode = mode; });
-  for (const k of ['music', 'sfx']) if (searches[k].value.results.length || searches[k].value.q) search(k, {}, { now: true });
+  for (const k of ['music', 'sfx', 'stickers']) if (searches[k].value.results.length || searches[k].value.q) search(k, {}, { now: true });
 }
 export const rightsOf = rec => assessRights({ provider: rec.provider, license: rec.license, licenseVersion: rec.licenseVersion, kind: rec.kind, usage: usageMode(), verification: rec.licenseRecord || rec.licenseCheck || null });
 
@@ -39,37 +39,44 @@ export const warmSources = kind => api('/api/creative/warm?kind=' + kind).catch(
 export async function loadStatus() { try { libStatus.value = await api('/api/creative/status'); } catch {} return libStatus.value; }
 
 // ----- search -----
-const timers = {}, controllers = {};
+const timers = {}, controllers = {}, retries = {}, revisions = {};
 export function search(panel, patch = {}, { now = false, more = false } = {}) {
-  const s = searches[panel]; s.value = { ...s.value, ...patch };
+  const s = searches[panel];
+  if (more && ['loading', 'more'].includes(s.value.status)) return;
+  // Invalidate at the keystroke, before the debounce: an older response must never
+  // populate a new query, including when the user clears it or types one character.
+  controllers[panel]?.abort(); clearTimeout(retries[panel]);
+  const revision = revisions[panel] = (revisions[panel] || 0) + 1;
+  s.value = { ...s.value, ...patch };
   clearTimeout(timers[panel]);
-  const go = () => runSearch(panel, more);
+  const go = () => runSearch(panel, more, false, revision);
   if (now || more) go(); else timers[panel] = setTimeout(go, 420);
 }
-async function runSearch(panel, more, retried = false) {
+async function runSearch(panel, more, retried = false, revision = revisions[panel]) {
+  if (revision !== revisions[panel]) return;
   const s = searches[panel], cur = s.value;
   const q = cur.q.trim();
-  const browsing = !q && cur.category && CATEGORY_PROVIDER[panel];
-  if (panel !== 'fluent' && !q && !browsing) { s.value = { ...cur, results: [], status: 'idle', error: null, total: 0, page: 0, pages: 0, partial: [] }; return; }
-  if (panel !== 'fluent' && q && q.length < 2) return;
+  const stickerBrowse = panel === 'stickers';
+  const browsing = stickerBrowse || (!q && cur.category && CATEGORY_PROVIDER[panel]);
+  if (panel !== 'fluent' && ((!q && !browsing) || (!stickerBrowse && q && q.length < 2))) { s.value = { ...cur, results: [], status: 'idle', error: null, total: 0, page: 0, pages: 0, partial: [], sources: [] }; return; }
   controllers[panel]?.abort(); const ctl = new AbortController(); controllers[panel] = ctl;
   const page = more ? cur.page + 1 : 1;
   s.value = { ...cur, status: more ? 'more' : 'loading', error: null };
   const own = OWN_SOURCES.includes(cur.source);
-  const provider = cur.category && CATEGORY_PROVIDER[panel] ? CATEGORY_PROVIDER[panel] : own ? cur.source : cur.source ? 'openverse' : PROVIDER[panel];
-  const params = new URLSearchParams({ provider, kind: KIND[panel], q, page: String(page), usage: usageMode(), length: cur.length, source: own ? '' : cur.source, category: cur.category });
+  const provider = stickerBrowse && (cur.category || cur.collection || (!q && !cur.source)) ? 'assetpolish' : cur.category && CATEGORY_PROVIDER[panel] ? CATEGORY_PROVIDER[panel] : own ? cur.source : cur.source ? 'openverse' : PROVIDER[panel];
+  const params = new URLSearchParams({ provider, kind: KIND[panel], q, page: String(page), usage: usageMode(), length: cur.length, source: own ? '' : cur.source, category: cur.category, ...(stickerBrowse ? { collection: cur.collection } : {}) });
   try {
     const r = await fetch('/api/creative/search?' + params, { signal: ctl.signal }); const d = await r.json();
     if (!r.ok) throw Object.assign(Error(d.error), { code: d.code, retryAfter: d.retryAfter });
-    if (ctl.signal.aborted) return;
+    if (ctl.signal.aborted || revision !== revisions[panel]) return;
     const seen = new Set(more ? s.value.results.map(x => x.key) : []);
     const items = (more ? s.value.results : []).concat(d.items.filter(x => !seen.has(x.key)));
     s.value = { ...s.value, results: items, page: d.page, pages: d.pages, total: d.total, status: items.length ? 'ok' : 'empty', error: null, sources: d.sources || [{ provider: d.provider || provider, total: d.total }], partial: d.partial || [] };
     if (panel !== 'fluent' && q) rememberSearch(panel, q);
     // A slow source keeps working in the background and caches its answer: ask once more so it fills in.
-    if (!more && !retried && d.partial?.some(p => p.code === 'slow')) setTimeout(() => { const now = s.value; if (now.q.trim() === q && now.source === cur.source && now.length === cur.length && now.category === cur.category && now.page <= 1) runSearch(panel, false, true); }, 7000);
+    if (!more && !retried && d.partial?.some(p => p.code === 'slow')) retries[panel] = setTimeout(() => { if (revision === revisions[panel] && s.value.page <= 1) runSearch(panel, false, true, revision); }, 7000);
   } catch (e) {
-    if (e.name === 'AbortError') return;
+    if (ctl.signal.aborted || revision !== revisions[panel] || e.name === 'AbortError') return;
     s.value = { ...s.value, status: 'error', error: { message: e.message, code: e.code || (navigator.onLine === false ? 'offline' : null), retryAfter: e.retryAfter } };
   }
 }
@@ -231,7 +238,9 @@ export function insertSticker(a, { at = time.value, pos } = {}) {
 }
 // One entry point for clicks, Enter and drops.
 export async function useRecord(rec, { at = time.value, trackId, pos } = {}) {
+  const projectId = project.value?.id; if (!projectId) return null;
   const a = await obtain(rec); if (!a) return null;
+  if (project.value?.id !== projectId) { toast('Download saved to the library. Open the intended project to add it.', 'info'); return null; }
   return rec.kind === 'sticker' ? insertSticker(a, { at, pos }) : insertAudio(a, rec.kind, { at, trackId });
 }
 // Drag payload understood by the timeline and the player (see Timeline.jsx / Preview.jsx).
@@ -274,12 +283,13 @@ async function finishPicked(r) {
 
 // Loudness-match just the new music clip to the project's mix targets (voice recordings are not touched).
 export async function balanceClip(clipId) {
-  const p = project.value; const c = p.clips.find(x => x.id === clipId); if (!c) return;
+  const p = project.value; const c = p?.clips.find(x => x.id === clipId); if (!c) return;
   const voice = p.clips.some(x => trackOf(p, x.trackId)?.voice && !x.muted);
   const target = voice ? p.settings.mix?.musicTarget ?? -26 : -18;
   try {
     const r = await api('/api/tools/loudness', { mediaId: c.mediaId, from: c.in, to: c.in + Math.min(c.duration, 90) * (c.speed || 1), clip: c });
-    if (r.lufs === null) return;
+    if (project.value?.id !== p.id || !project.value.clips.some(x => x.id === clipId)) return;
+    if (!Number.isFinite(r.lufs)) return toast('This track has no measurable audio to balance.', 'warn');
     let g = Math.pow(10, (target - r.lufs) / 20); if (Number.isFinite(r.peak)) g = Math.min(g, Math.pow(10, (-1 - r.peak) / 20) * 2);
     g = Math.max(0.05, Math.min(4, g));
     commit('Auto balance music', d => { const x = d.clips.find(k => k.id === clipId); if (x) x.volume = +g.toFixed(3); });

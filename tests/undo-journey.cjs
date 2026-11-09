@@ -49,7 +49,10 @@ const shots = path.resolve('test-output');
     await check('add text with T', async () => { await page.locator('body').click({ position: { x: 800, y: 900 } }); await page.keyboard.press('t'); });
     await check('emoji sticker click', async () => { await page.locator('.rail-btn', { hasText: 'Stickers' }).click(); await page.locator('.lib-tabs button', { hasText: 'Static' }).click(); await page.locator('.fchip', { hasText: 'Smileys' }).click(); await page.locator('.emoji').first().click(); });
     await check('library sticker dragged in while the search box has focus', async () => {
-      await page.locator('.lib-tabs button', { hasText: 'Discover' }).click(); await page.locator('.lib-search input').fill('star'); await page.locator('.st-card').first().waitFor({ timeout: 20000 });
+      await page.locator('.lib-tabs button', { hasText: 'Discover' }).click();
+      // This journey tests undo/focus, independently of Openverse's live thumbnail quota.
+      await page.getByRole('combobox', { name: 'Sticker source' }).selectOption('fluent');
+      await page.locator('.lib-search input').fill('star'); await page.locator('.st-card').first().waitFor({ timeout: 20000 });
       await page.locator('.lib-search input').focus();
       const lane = page.locator('.track-row .track-lane').first(); const lb = await lane.boundingBox();
       const n = await page.evaluate(() => window.__fc.state.project.value.clips.length);
