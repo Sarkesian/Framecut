@@ -3,6 +3,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { startServer } = require('./server.cjs');
 const P = require('./paths.cjs');
+const { readJsonSync, writeJsonSync } = require('./jsonstore.cjs');
 
 let service, win;
 const testDir = process.env.FRAMECUT_TEST_DIR;
@@ -37,8 +38,10 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 if (!rootProblem && !testDir && !app.requestSingleInstanceLock()) app.quit();
 
 const configPath = () => path.join(L.dataDir, 'framecut-config.json');
-function readConfig() { try { return P.fromStored(JSON.parse(fs.readFileSync(configPath(), 'utf8')), L.dataDir); } catch { return {}; } }
-function writeConfig(c) { fs.writeFileSync(configPath(), JSON.stringify(P.toStored(c, L.dataDir), null, 2)); }
+// The config holds a custom projects folder; losing it would make every project there seem to vanish, so it
+// is written atomically and read with a fallback to the last good copy.
+function readConfig() { try { const { value } = readJsonSync(configPath(), null, { keepBackup: false }); return value && typeof value === 'object' ? P.fromStored(value, L.dataDir) : {}; } catch { return {}; } }
+function writeConfig(c) { const file = configPath(); writeJsonSync(file, P.toStored(c, L.dataDir), 2); try { fs.copyFileSync(file, file + '.bak'); } catch {} }
 const projectsDir = () => readConfig().projectsDir || L.projects;
 
 const MEDIA_FILTERS = [
@@ -60,16 +63,27 @@ function registerIpc() {
     const from = projectsDir(), to = path.resolve(String(next || L.projects));
     if (to.toLowerCase() === from.toLowerCase()) return { projectsDir: from };
     const problem = P.writableProblem(to); if (problem) throw Error(`FrameCut can’t write to ${to} (${problem}). Choose a folder in your user profile or on another drive.`);
+    const rel = path.relative(from, to);
+    if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) throw Error('Choose a folder outside the current projects folder.');
+    // Project folders are small (media stays where it is), so: copy everything, switch, then remove the
+    // originals. If any copy fails, the copies made so far are removed and nothing changes.
+    const kept = [], copied = [];
     for (const name of fs.existsSync(from) ? fs.readdirSync(from) : []) {
       const src = path.join(from, name), dst = path.join(to, name);
-      if (fs.existsSync(dst)) continue;
-      try { fs.renameSync(src, dst); } catch { fs.cpSync(src, dst, { recursive: true, errorOnExist: true, force: false }); fs.rmSync(src, { recursive: true, force: true }); }
+      // Same name already there: leave both untouched (never merge or overwrite) and report it.
+      if (fs.existsSync(dst)) { if (!name.startsWith('.')) kept.push(name); continue; }
+      try { fs.cpSync(src, dst, { recursive: true, errorOnExist: true, force: false }); copied.push(name); }
+      catch (e) {
+        for (const n of [...copied, name]) try { fs.rmSync(path.join(to, n), { recursive: true, force: true }); } catch {}
+        throw Error(`Moving projects failed (${e.code || e.message}). Nothing was changed; your projects are still in ${from}.`);
+      }
     }
     const cfg = readConfig(); if (to === L.projects) delete cfg.projectsDir; else cfg.projectsDir = to; writeConfig(cfg);
-    return { projectsDir: to };
+    for (const n of copied) try { fs.rmSync(path.join(from, n), { recursive: true, force: true }); } catch {}
+    return { projectsDir: to, keptInOldFolder: kept.length ? { folder: from, count: kept.length } : null };
   });
   ipcMain.handle('open-data-folder', () => shell.openPath(L.dataDir));
-  ipcMain.handle('relaunch', () => { app.relaunch(); app.exit(0); });
+  ipcMain.handle('relaunch', () => { app.relaunch(); app.quit(); }); // quit (not exit) so the service shuts down cleanly
   ipcMain.handle('set-title-colors', (_e, { color, symbolColor }) => { try { win.setTitleBarOverlay({ color, symbolColor, height: 40 }); } catch {} });
   ipcMain.handle('toggle-fullscreen', () => win.setFullScreen(!win.isFullScreen()));
 }
@@ -148,13 +162,30 @@ Protected folders such as Program Files and Windows can’t be used. Reinstall F
     callback(false);
   });
   ses.setPermissionCheckHandler((wc, permission, origin) => origin?.startsWith(service.url) && ['media', 'clipboard-sanitized-write', 'fullscreen'].includes(permission));
-  win.webContents.on('render-process-gone', (_e, d) => { if (d.reason !== 'clean-exit') setTimeout(() => win.reload(), 300); });
+  // Reload after a renderer crash, but don't spin forever if the page crashes on every load.
+  const crashes = [];
+  win.webContents.on('render-process-gone', (_e, d) => {
+    if (d.reason === 'clean-exit' || win.isDestroyed()) return;
+    const now = Date.now(); crashes.push(now); while (crashes.length && now - crashes[0] > 60e3) crashes.shift();
+    if (crashes.length <= 3) return setTimeout(() => { if (!win.isDestroyed()) win.reload(); }, 300);
+    dialog.showErrorBox('FrameCut Studio stopped working', `The editor crashed repeatedly (${d.reason}). Your project is autosaved; restart FrameCut Studio to continue. Details are in ${L.logs}.`);
+    app.quit();
+  });
   await win.loadURL(service.url);
 });
 function debounce(fn, ms) { let t; return () => { clearTimeout(t); t = setTimeout(fn, ms); }; }
 app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
 app.on('window-all-closed', () => app.quit());
-app.on('before-quit', () => service?.close());
+// Quitting waits (briefly) for the service to stop recordings and write its indexes; otherwise a media
+// import or finished take from the last moments could be missing from media.json next time.
+let closing = null;
+app.on('before-quit', e => {
+  if (!service || closing === 'done') return;
+  e.preventDefault(); if (closing) return;
+  closing = Promise.race([service.close(), new Promise(r => setTimeout(r, 5000))])
+    .catch(err => console.error('Shutting down the FrameCut service failed:', err.message))
+    .finally(() => { closing = 'done'; app.quit(); });
+});
 // Leave data\temp empty when FrameCut closes.
 app.on('will-quit', () => { try { service?.speech.stop(); } catch {} });
 app.on('quit', () => { if (!rootProblem) P.emptyDir(L.temp); });

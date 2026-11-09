@@ -40,6 +40,10 @@ if (typeof window !== 'undefined') {
   window.addEventListener('pointerdown', e => { if (!e.isTrusted) return; gesture.id++; gesture.active = true; }, true);
   const release = e => { if (e.isTrusted) setTimeout(() => { gesture.active = false; }, 0); };
   window.addEventListener('pointerup', release, true); window.addEventListener('pointercancel', release, true);
+  // A drag released outside the window never delivers pointerup: end the gesture on blur or on the first
+  // move with no button held, so later keyboard edits don't merge into the drag's undo entry.
+  window.addEventListener('blur', () => { gesture.active = false; });
+  window.addEventListener('pointermove', e => { if (gesture.active && e.buttons === 0) gesture.active = false; }, true);
 }
 let coalesce = { key: null, at: 0, g: null };
 // Apply an edit: fn receives a draft copy; history records the previous version.

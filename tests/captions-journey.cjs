@@ -77,6 +77,8 @@ const norm = s => s.toLowerCase().replace(/[^a-z0-9' ]+/g, ' ').trim();
     const pid = await page.evaluate(async () => { await window.__fc.state.saveNow(); return window.__fc.state.project.value.id; });
     const snap = await page.evaluate(() => JSON.stringify(window.__fc.captions.captionClips(window.__fc.state.project.value).map(c => [c.text, c.words.length])));
     await page.evaluate(async id => { await window.__fc.state.closeProject(); await window.__fc.state.openProject(id); }, pid);
+    // The preview player is created when the editor mounts (an effect after the next paint), not inside openProject.
+    await page.waitForFunction(() => !!window.__fc.state.player.current, null, { timeout: 10000, polling: 50 });
     assert.equal(await page.evaluate(() => JSON.stringify(window.__fc.captions.captionClips(window.__fc.state.project.value).map(c => [c.text, c.words.length]))), snap);
 
     step('export, then compare frames with the preview while words pop');

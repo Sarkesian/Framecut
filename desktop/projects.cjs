@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { normalizeProject, newProject, projectDuration, uid } = require('../shared/model.mjs');
+const { writeAtomic } = require('./jsonstore.cjs');
 
 const SAFE_ID = /^[a-z0-9-]{8,64}$/i;
 class Projects {
@@ -49,12 +50,20 @@ class Projects {
       throw e;
     }
   }
-  async save(project, { backup = true } = {}) {
+  // Saves of one project run strictly in call order, so the newest state is always the one left on disk.
+  save(project, opts) {
+    const id = project?.id; this.dir(id); // validates the id before queueing
+    this.queues ||= new Map();
+    const run = (this.queues.get(id) || Promise.resolve()).catch(() => {}).then(() => this._save(project, opts));
+    this.queues.set(id, run); run.finally(() => { if (this.queues.get(id) === run) this.queues.delete(id); }).catch(() => {});
+    return run;
+  }
+  async _save(project, { backup = true } = {}) {
     const p = normalizeProject(project); delete p.recovered;
     p.modified = new Date().toISOString();
     const dir = this.dir(p.id); await fsp.mkdir(path.join(dir, 'backups'), { recursive: true });
-    const file = path.join(dir, 'project.json'), tmp = file + '.tmp', json = JSON.stringify(p);
-    await fsp.writeFile(tmp, json); await fsp.rename(tmp, file);
+    const file = path.join(dir, 'project.json'), json = JSON.stringify(p);
+    await writeAtomic(file, json); // unique temp file + replace
     // Keep a version snapshot at most every 3 minutes; retain 30.
     const last = this.lastBackup.get(p.id) || 0;
     if (backup && Date.now() - last > 180e3) {

@@ -3,7 +3,7 @@ import { matteStatus, deleteMatteModel, MATTE_MODEL } from '../lib/matte.js';
 import { useEffect, useState } from 'preact/hooks';
 import { HardDrive, Cpu, Captions, Bot, FolderOpen, Trash2, Check, TriangleAlert, Library as LibraryIcon, KeyRound, Ban } from 'lucide-preact';
 import { loadStatus, libStatus } from '../lib/creative.js';
-import { prefs, savePrefs, health, toast } from '../lib/state.js';
+import { prefs, savePrefs, health, toast, saveNow } from '../lib/state.js';
 import { api, native } from '../lib/api.js';
 import { showDialog, Modal, Select, Toggle, Segmented, confirm } from './kit.jsx';
 import { bytes } from '../lib/format.js';
@@ -63,7 +63,12 @@ function Storage() {
   const moveProjects = async dir => {
     const ok = await confirm({ title: 'Move projects and restart?', text: `Your projects will be moved to ${dir}. Media stays where it is. FrameCut restarts to finish.`, ok: 'Move and restart' });
     if (!ok) return;
-    try { await native.setStorage({ projectsDir: dir }); native.relaunch(); } catch (e) { toast(String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')); }
+    try {
+      await saveNow(); // the open project's latest edits must be in the folder before it is copied
+      const r = await native.setStorage({ projectsDir: dir });
+      if (r?.keptInOldFolder) await confirm({ title: 'Some projects were not moved', text: `${r.keptInOldFolder.count} project folder(s) already existed in ${dir}, so the copies in ${r.keptInOldFolder.folder} were left there untouched.`, ok: 'Restart' });
+      native.relaunch();
+    } catch (e) { toast(String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')); }
   };
   const change = async () => { const dir = await native.chooseFolder({ title: 'Choose where FrameCut keeps your projects', defaultPath: cfg?.projectsDir }); if (dir) moveProjects(dir); };
   const inside = cfg && cfg.projectsDir === cfg.defaultProjectsDir;

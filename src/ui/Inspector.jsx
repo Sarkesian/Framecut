@@ -4,7 +4,7 @@ import { useDraft } from './kit.jsx';
 import { Lock, FlipHorizontal2, FlipVertical2, RotateCcw, Trash2, Rewind, Snowflake, Gauge, Scissors, AudioLines, Unlink, Wand2, X, Plus, AlignLeft, AlignCenter, AlignRight, Bold, Italic, CaseUpper, Film, Type, Music, Sparkles, LoaderCircle, Scan, Layers } from 'lucide-preact';
 import { project, primary, selection, time, toast, asset, media, player, commit, fonts, prefs } from '../lib/state.js';
 import { api, waitJob } from '../lib/api.js';
-import { updateClip, updateClips, setSpeed, detachAudio, splitAt, trackOf, freeTrack, setClipText } from '../lib/edit.js';
+import { updateClip, updateClips, setSpeed, detachAudio, cutClip, trackOf, freeTrack, setClipText } from '../lib/edit.js';
 import { toggleLock } from '../lib/viewport.js';
 import { dimensions } from '../../shared/model.mjs';
 import { Slider, Toggle, Segmented, Select, Color, Section, Empty } from './kit.jsx';
@@ -233,22 +233,36 @@ async function freezeFrame(c) {
   const src = c.in + (t - c.start) * (c.speed || 1);
   const r = await api('/api/tools/freeze', { mediaId: c.mediaId, time: src });
   const m = new Map(media.value); m.set(r.asset.id, r.asset); media.value = m;
-  splitAt(t, [c.id]);
   const f = newClip('image', { mediaId: r.asset.id, name: 'Freeze frame', start: t, duration: 2, fit: c.fit, transform: structuredClone(c.transform), color: structuredClone(c.color), filter: structuredClone(c.filter) });
-  commit('Freeze frame', p => { const main = trackOf(p, c.trackId); f.trackId = main.id; for (const x of p.clips) if (x.trackId === main.id && x.start >= t - 1e-4) x.start += main.main ? 2 : 0; if (!main.main) f.trackId = freeTrack(p, 'video', t, t + 2).id; p.clips.push(f); if (!p.mediaIds.includes(r.asset.id)) p.mediaIds.push(r.asset.id); }, { select: [f.id] });
+  // One undo step: split this clip (only this one — never another clip under the playhead) and insert.
+  commit('Freeze frame', p => {
+    const cur = p.clips.find(x => x.id === c.id); if (!cur) return false;
+    const at = Math.min(clipEnd(cur), Math.max(cur.start, t)); f.start = at;
+    cutClip(p, cur, at - cur.start); // no-op within a frame of the edges: the freeze goes at that edge
+    const main = trackOf(p, cur.trackId); f.trackId = main.id;
+    if (main.main) { for (const x of p.clips) if (x.trackId === main.id && x.start >= at - 1e-4) x.start += 2; }
+    else f.trackId = freeTrack(p, 'video', at, at + 2).id;
+    p.clips.push(f); if (!p.mediaIds.includes(r.asset.id)) p.mediaIds.push(r.asset.id);
+  }, { select: [f.id] });
   toast('Freeze frame added (2 s). Drag its edge to change the length.');
 }
 async function splitScenes(c) {
   const srcLen = c.duration * (c.speed || 1);
   const { job } = await api('/api/tools/scenes', { mediaId: c.mediaId, from: c.in, to: c.in + srcLen });
   const r = await waitJob(job);
-  const cuts = r.times.map(s => c.start + (s - c.in) / (c.speed || 1)).filter(t => t > c.start + 0.3 && t < clipEnd(c) - 0.3);
-  if (!cuts.length) return toast('No scene changes found in this clip.', 'warn');
+  // The clip may have been moved, trimmed, re-timed or deleted while the analysis ran: work from its
+  // current state, using the scene times as source times.
+  let pieces = 0;
   commit('Split at scenes', p => {
-    let cur = p.clips.find(x => x.id === c.id);
-    for (const t of cuts) { const local = t - cur.start; const r2 = structuredClone(cur); r2.id = crypto.randomUUID(); r2.start = t; r2.duration = cur.duration - local; r2.in = cur.in + local * (cur.speed || 1); r2.transition = null; cur.duration = local; p.clips.push(r2); cur = r2; }
+    let cur = p.clips.find(x => x.id === c.id); if (!cur) return false;
+    const speed = cur.speed || 1;
+    const locals = r.times.map(s => (s - (cur.in || 0)) / speed).filter(l => l > 0.3 && l < cur.duration - 0.3).sort((a, b) => a - b);
+    let done = 0;
+    for (const l of locals) { const r2 = cutClip(p, cur, l - done); if (!r2) continue; done = l; cur = r2; pieces++; }
+    if (!pieces) return false;
   });
-  toast(`Split into ${cuts.length + 1} scenes.`);
+  if (!pieces) return toast('No scene changes found in this clip.', 'warn');
+  toast(`Split into ${pieces + 1} scenes.`);
 }
 
 function TextPanel({ c }) {

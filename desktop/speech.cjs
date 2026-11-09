@@ -95,15 +95,21 @@ class Speech {
     };
     const proc = { kill: () => {} }; this.proc = proc;
     server.once('listening', () => {
+      if (this.proc !== proc) { server.close(); return; } // stop() ran before the port was ready: don't spawn an orphan
       const child = spawn(python, ['-I', path.join(__dirname, 'speech', 'worker.py').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`), '--port', String(port())], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'], env: this.env(hfHome) });
       proc.kill = () => killTree(child); proc.child = child;
       child.stderr.on('data', d => { this.err = (this.err + d).slice(-8000); });
       child.on('exit', code => onExit(code));
+      // A missing or broken python.exe emits 'error' (and never 'exit'): without this handler it is an
+      // uncaught exception in the main process and every pending caption job waits forever.
+      child.on('error', e => { this.err = (this.err + '\n' + e.message).slice(-8000); onExit(e.code || 'error'); });
     });
-    const onExit = code => { server.close(); this.sock = null; if (this.proc === proc) this.proc = null; for (const p of this.pending.values()) p.reject(Error('The caption engine stopped unexpectedly' + (this.err ? ': ' + this.err.trim().split('\n').at(-1) : ` (code ${code}).`))); this.pending.clear(); };
+    let exited = false;
+    const onExit = code => { if (exited) return; exited = true; server.close(); this.sock = null; if (this.proc === proc) this.proc = null; for (const p of this.pending.values()) p.reject(Error('The caption engine stopped unexpectedly' + (this.err ? ': ' + this.err.trim().split('\n').at(-1) : ` (code ${code}).`))); this.pending.clear(); };
     return proc;
   }
-  touch() { clearTimeout(this.idle); this.idle = setTimeout(() => { if (!this.pending.size) this.request({ op: 'unload' }).catch(() => {}); }, IDLE_MS); }
+  // Unload the model when idle — only if the worker is still running (never respawn Python just to unload).
+  touch() { clearTimeout(this.idle); this.idle = setTimeout(() => { if (!this.pending.size && this.proc) this.request({ op: 'unload' }).catch(() => {}); }, IDLE_MS); }
   request(msg, { onProgress, signal } = {}) {
     this.start(); const id = ++this.seq, ready = this.sockReady;
     return new Promise((resolve, reject) => {
@@ -163,6 +169,7 @@ class Speech {
   }
   align({ project, clipIds, from, to, text, language }) {
     return this.jobs.add({ type: 'captions-align', label: 'Re-aligning captions', lane: 'heavy' }, async ({ signal, progress }) => {
+      const st = await this.status(); if (!st.ready) throw Object.assign(Error('The caption engine is not set up yet.'), { code: 'setup' });
       let last = 0.05; const mix = await this.mixdown(project, clipIds, 0, to, signal);
       const part = path.join(this.cacheDir, 'captions', `part-${mix.key}-${Math.round(from * 1000)}-${Math.round(to * 1000)}.wav`);
       if (!fs.existsSync(part)) await run(ffmpeg, ['-y', '-v', 'error', '-ss', String(from), '-t', String(to - from), '-i', mix.file, '-c:a', 'pcm_s16le', part], { signal });

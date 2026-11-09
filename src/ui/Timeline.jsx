@@ -195,7 +195,10 @@ function Envelope({ c, w, z, sel }) {
     e.stopPropagation(); e.preventDefault(); if (e.button !== 0) return;
     const el = e.currentTarget; const lo = i > 0 ? keys[i - 1].t + 0.01 : 0, hi = i < keys.length - 1 ? keys[i + 1].t - 0.01 : c.duration;
     // Shift locks the level (move in time only).
-    beginDrag(e, { threshold: 2, move: ev => { const p = vAt(ev); save(x => { x.volumeKeys[i] = { t: Math.min(hi, Math.max(lo, p.t)), v: ev.shiftKey ? keys[i].v : Math.round(p.v * 1000) / 1000 }; }, 'Move volume point', 'env:' + c.id + i); el.dataset.tip = db(p.v); } });
+    // Envelope drags commit as they go (one coalesced undo entry). Escape / Ctrl+Z mid-drag cancels the
+    // drag, so roll that entry back like every other timeline drag does.
+    let saved = false;
+    beginDrag(e, { threshold: 2, cancel: () => { if (saved) undo(); }, move: ev => { const p = vAt(ev); saved = true; save(x => { x.volumeKeys[i] = { t: Math.min(hi, Math.max(lo, p.t)), v: ev.shiftKey ? keys[i].v : Math.round(p.v * 1000) / 1000 }; }, 'Move volume point', 'env:' + c.id + i); el.dataset.tip = db(p.v); } });
   };
   // The clip captures the pointer on press, so a double-click is detected from two quick presses here.
   const down = e => {
@@ -388,10 +391,16 @@ function clipDown(e, c, t, z) {
           const x = pp.clips.find(k => k.id === id); const dest = id === lead && d.target ? d.target : x.trackId;
           const destTrack = trackOf(pp, dest); x.start = Math.max(0, x.start + d.dt);
           if (destTrack.kind !== trackKindFor(x.kind)) continue;
-          if (destTrack.main) { x.trackId = dest; x.start -= 1e-3; continue; }
+          // Magnetic main: a tiny lead orders the dropped clip before the one it lands on; packing removes it.
+          // Without gapless packing that offset would stay (off-frame, overlapping), so it is not applied.
+          if (destTrack.main) { x.trackId = dest; if (pp.settings.magnetic) x.start -= 1e-3; continue; }
           x.trackId = dest;
         }
         const keep = new Set(work);
+        if (!pp.settings.magnetic) {
+          const bad = work.some(id => { const x = pp.clips.find(k => k.id === id); return x.trackId === main.id && pp.clips.some(o => o.id !== x.id && o.trackId === main.id && o.start < clipEnd(x) - 1e-4 && clipEnd(o) > x.start + 1e-4); });
+          if (bad) { toast('Clips on the main track can’t overlap. Drop it in a gap, or turn on Gapless main.', 'warn'); return false; }
+        }
         for (const id of work) { const x = pp.clips.find(k => k.id === id); const tr = trackOf(pp, x.trackId); if (!tr.main && overlaps(pp, x.trackId, x.start, clipEnd(x), keep)) x.trackId = freeTrack(pp, tr.kind, x.start, clipEnd(x), { ignore: keep }).id; }
         // magnetic main track: order by new start, then pack
         const mains = pp.clips.filter(k => k.trackId === main.id).sort((a2, b2) => a2.start - b2.start); let tt = 0; if (pp.settings.magnetic) for (const k of mains) { k.start = tt; tt += k.duration; }

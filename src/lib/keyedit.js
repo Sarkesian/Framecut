@@ -56,6 +56,10 @@ export function moveKeys(dt) {
 }
 export function deleteKeys() {
   const n = keySel.value.length; if (!n) return false;
+  // Selected diamonds can go stale (e.g. "Remove all keyframes", undo). Then Delete must fall through to
+  // deleting the clip instead of recording an empty "Delete keyframe" step.
+  const live = keySel.value.some(s => { const c = project.value?.clips.find(x => x.id === s.id); return c?.keyframes && KEY_PROPS.some(p => c.keyframes[p]?.some(k => Math.abs(k.t - s.t) < SAME)); });
+  if (!live) { keySel.value = []; return false; }
   commit(n > 1 ? `Delete ${n} keyframes` : 'Delete keyframe', d => {
     const touched = new Set();
     for (const s of keySel.value) {

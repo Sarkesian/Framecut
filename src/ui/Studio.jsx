@@ -31,7 +31,9 @@ const markers = signal([]);
 
 export const currentCapture = () => capture;
 export function openStudio() { studioOpen.value = true; }
-export function closeStudio() { if (recState.value === 'rec') return toast('Stop recording first.', 'warn'); studioOpen.value = false; focusMode.value = false; capture?.close(); capture = null; }
+// Closing while a take is starting, counting down or still being saved would tear the microphone down
+// under it (and leak a meter helper that blocks the next exclusive-mode take).
+export function closeStudio() { if (recState.value !== 'idle') return toast(recState.value === 'saving' ? 'Saving your take — one moment.' : 'Stop recording first.', 'warn'); studioOpen.value = false; focusMode.value = false; capture?.close(); capture = null; }
 
 // Recording engine: 'pro' = native WASAPI (exclusive / raw), 'browser' = Chromium capture.
 let nativeOk = null;
@@ -42,32 +44,79 @@ async function engineFor() {
   if (nativeOk === null) nativeOk = !!(await nativeDevices()).available;
   return nativeOk ? 'native' : 'browser';
 }
-export async function getCapture(deviceId) {
+// Opening a microphone takes a while (Pro mode spawns helpers). Overlapping calls (studio mount + a quick
+// click on Record / Check microphone / a device pick) share one open instead of orphaning a half-open
+// capture that keeps the mic or a meter helper running.
+let opening = null;
+export function getCapture(deviceId) {
+  const run = () => openCapture(deviceId);
+  const p = (opening || Promise.resolve()).catch(() => {}).then(run);
+  opening = p; p.finally(() => { if (opening === p) opening = null; }).catch(() => {});
+  return p;
+}
+async function openCapture(deviceId) {
   const eng = await engineFor();
   if (capture && capture.settings && (capture.engine || 'browser') === eng && (capture.settings.deviceId === (deviceId || 'default') || capture.settings.deviceId === deviceId || (!deviceId && (capture.ctx || capture.engine === 'native')))) return capture;
   await capture?.close();
   const onMeter = m => { meter.value = m; if (recState.value === 'rec' && m.wave?.length) pushLivePeaks(m.wave); };
-  capture = eng === 'native' ? new NativeCapture({ onMeter }) : new Capture({ onMeter });
-  capture.onNotice = msg => toast(msg, 'info', { timeout: 7000 });
-  capture.onEnded = () => { if (recState.value === 'rec') { stopRecording().then(() => toast('The microphone was disconnected. Your take up to that moment was saved.', 'warn')); } else toast('The microphone was disconnected.', 'warn'); };
+  const wire = c => {
+    c.onNotice = msg => toast(msg, 'info', { timeout: 7000 });
+    c.onWriteError = () => { if (recState.value === 'rec') stopRecording(); }; // stop at the failure; the take so far is kept
+    c.onEnded = () => { if (recState.value === 'rec') { stopRecording().then(ok => { if (ok) toast('The microphone was disconnected. Your take up to that moment was saved.', 'warn'); }); } else toast('The microphone was disconnected.', 'warn'); };
+    return c;
+  };
+  capture = wire(eng === 'native' ? new NativeCapture({ onMeter }) : new Capture({ onMeter }));
   try { await capture.open(deviceId); }
   catch (e) {
     if (eng !== 'native') throw e;
     // Pro capture unavailable for this device: fall back to the browser engine rather than failing.
-    toast('Pro recording could not open this microphone (' + e.message + '). Using standard recording.', 'warn');
-    capture = new Capture({ onMeter }); capture.onNotice = msg => toast(msg, 'info'); await capture.open(deviceId);
+    toast('Direct recording could not open this microphone (' + e.message + '). Using Compatible recording instead.', 'warn');
+    await capture.close?.();
+    capture = wire(new Capture({ onMeter })); await capture.open(deviceId);
   }
   capInfo.value = { ...capture.settings, engine: capture.engine || 'browser' };
   return capture;
 }
-const MODE_NAMES = { exclusive: 'Exclusive · bit-perfect', raw: 'Raw · no driver effects', shared: 'Shared', browser: 'Standard' };
+const MODE_NAMES = { exclusive: 'Exclusive · bit-perfect', raw: 'Raw · no driver effects', shared: 'Shared', browser: 'Compatible' };
 const opts = () => ({ engine: 'pro', playVideo: true, countdown: true, preroll: 0, monitor: false, trimSilence: true, ...(prefs.value.recording || {}) });
 const setOpt = patch => savePrefs({ recording: { ...opts(), ...patch } });
 
+// ---- Sync offset: a manual correction per microphone for devices whose reported latency is wrong
+// (Bluetooth headsets, some USB interfaces). Stored in ms; positive moves the voice earlier.
+const micKey = () => String(capture?.settings?.label || prefs.value.audioInput || 'default').replace(/^(Default|Communications) - /, '').trim().toLowerCase() || 'default';
+// Slider drags fire faster than preferences save, so the latest value is held here until it is saved;
+// otherwise each move would compute its change from a stale value and move the take too far.
+const liveOffsets = signal({});
+export const syncOffsetMs = () => { const k = micKey(); return +(k in liveOffsets.value ? liveOffsets.value[k] : (opts().syncOffsets || {})[k] || 0); };
+// Changing the offset also re-places the most recent take, so you can adjust it by ear right after a take.
+function setSyncOffset(ms) {
+  const prev = syncOffsetMs(), delta = (ms - prev) / 1000; if (!delta) return;
+  const key = micKey(); liveOffsets.value = { ...liveOffsets.value, [key]: ms };
+  setOpt({ syncOffsets: { ...(opts().syncOffsets || {}), ...liveOffsets.value } }).catch(e => toast('The sync offset could not be saved: ' + e.message, 'error'));
+  const id = lastRecording.value; if (!id || !project.value?.clips.some(c => c.id === id)) return;
+  commit('Adjust take sync', d => {
+    const c = d.clips.find(x => x.id === id); const a = c && asset(c.mediaId); if (!c || !a) return false;
+    const nin = Math.max(0, Math.min((a.duration || 0) - 0.1, (c.in || 0) + delta)); if (Math.abs(nin - (c.in || 0)) < 1e-6) return false;
+    c.in = nin; c.duration = Math.max(0.1, Math.min(c.duration, ((a.duration || 0) - nin) / (c.speed || 1)));
+    const take = c.takes?.findLast?.(t => t.mediaId === c.mediaId); if (take) take.in = nin;
+  }, { key: 'syncoff:' + id });
+}
+function SyncOffset() {
+  const ms = syncOffsetMs();
+  const hint = ms === 0 ? 'Takes are placed using the measured delay of this microphone.' : `Takes from this microphone are placed ${Math.abs(ms)} ms ${ms > 0 ? 'earlier' : 'later'} than measured.`;
+  return <div class="field">
+    <Slider label="Sync offset (this microphone)" min={-300} max={300} step={5} def={0} value={ms} fmt={v => (v > 0 ? '+' : '') + Math.round(v) + ' ms'} onChange={setSyncOffset} />
+    <small class="muted">{hint} If your voice sounds late against the video, move the slider right; if early, move it left. The last take moves with it so you can check by ear.</small>
+  </div>;
+}
+
 export async function startRecording({ retake = false } = {}) {
   if (recState.value !== 'idle') return;
+  // Claim the recorder synchronously: a second press (double click, key repeat) while the microphone
+  // opens must not start a parallel take.
+  recState.value = 'starting';
   const o = opts();
-  try { await getCapture(prefs.value.audioInput); } catch (e) { return toast('FrameCut couldn’t open the microphone: ' + (e.message || 'no access') + '. Check the cable and Windows privacy settings.', 'error'); }
+  try { await getCapture(prefs.value.audioInput); } catch (e) { recState.value = 'idle'; return toast('FrameCut couldn’t open the microphone: ' + (e.message || 'no access') + '. Check the cable and Windows privacy settings.', 'error'); }
   const pl = player.current; const p = project.value;
   const outLabel = deviceLabel(devices.value.outputs, activeOutput.value);
   if (o.playVideo && isSpeaker(outLabel) && p.clips.some(c => c.kind !== 'text') && !headphoneHinted) { headphoneHinted = true; toast('Tip: use headphones so the video’s sound doesn’t leak into your microphone.', 'info', { timeout: 6000 }); }
@@ -75,14 +124,15 @@ export async function startRecording({ retake = false } = {}) {
   const prev = retake && lastRecording.value && p.clips.find(c => c.id === lastRecording.value);
   const at = prev ? prev.start : time.value;
   stopPreview(); // library previews never play into a take
-  if (o.countdown) { recState.value = 'count'; for (let i = 3; i > 0; i--) { countdown.value = i; await new Promise(r => setTimeout(r, 800)); if (recState.value !== 'count') return; } }
+  if (o.countdown) { recState.value = 'count'; for (let i = 3; i > 0; i--) { countdown.value = i; await new Promise(r => setTimeout(r, 800)); if (recState.value !== 'count') return; } recState.value = 'starting'; }
   const pre = o.playVideo ? Math.min(o.preroll || 0, at) : 0;
   markers.value = [];
   try {
     if (o.playVideo && pl) { pl.pause(); pl.seek(at - pre); }
     const info = await capture.start({ name: `Voiceover ${new Date().toLocaleString().replace(/[/:]/g, '-')}` });
     recState.value = 'rec'; capInfo.value = { ...capture.settings, engine: capture.engine || 'browser' };
-    const lat = o.playVideo ? capture.latency(pl?.ctx) : 0;
+    // Measured device latency plus the user's per-microphone sync offset (positive = place takes earlier).
+    const lat = o.playVideo ? capture.latency(pl?.ctx) + syncOffsetMs() / 1000 : 0;
     session = { at, pre, started: performance.now(), latency: lat, retakeOf: prev?.id || null, playing: o.playVideo };
     if (o.playVideo && pl) { pl.play(); session.timelineAtStart = at - pre; }
     // Native capture starts in another process: add the measured gap between capture start and playback start.
@@ -96,7 +146,7 @@ let session = null;
 export function markMistake() { if (recState.value !== 'rec' || !session) return; const t = (performance.now() - session.started) / 1000; markers.value = [...markers.value, { t, label: 'Mistake' }]; toast('Marked. You’ll see it on the waveform.', 'info', { timeout: 1500 }); }
 export async function stopRecording() {
   if (recState.value === 'count') { recState.value = 'idle'; return; }
-  if (recState.value !== 'rec') return;
+  if (recState.value !== 'rec') return false;
   recState.value = 'saving'; const s = session; const pl = player.current;
   try {
     pl?.pause(); await capture.setMonitor(false);
@@ -129,8 +179,10 @@ export async function stopRecording() {
     const R = a.recording || {}, fmt = R.sampleRate ? `${R.sampleRate / 1000} kHz · ${R.bits || 24}-bit${R.float ? ' float' : ''} WAV${R.mode ? ' · ' + MODE_NAMES[R.mode] : ''}` : 'WAV';
     lastTake.value = { fmt, clipped: r.clipped || 0, effectiveBits: r.effectiveBits, bits: R.bits, float: R.float, limited: capture?.settings?.capability?.limited };
     toast(`${s.retakeOf ? 'New take' : 'Recording'} saved · ${shortTime(dur)} · ${fmt}${r.clipped ? ` · ${r.clipped} clipped samples — lower your input level` : ''}`, r.clipped ? 'warn' : 'info');
+    if (r.interrupted) toast(`${r.interrupted} Everything recorded up to that moment was kept.`, 'warn', { timeout: 9000 });
     if (project.value.settings.ducking?.on) applyDucking();
-  } catch (e) { toast('The recording could not be saved: ' + e.message, 'error'); }
+    return true;
+  } catch (e) { toast('The recording could not be saved: ' + e.message, 'error'); return false; }
   finally { recState.value = 'idle'; session = null; endLiveTake(); if (capture?.settings) capInfo.value = { ...capture.settings, engine: capture.engine || 'browser' }; }
 }
 export function cleanVoice(ids) {
@@ -257,7 +309,7 @@ function InputPanel() {
   };
   const t = lastTake.value;
   return <div class="input-panel">
-    <div class="input-fmt"><span class={`chip ${native ? 'accent' : ''}`}>{native ? MODE_NAMES[s.mode] || 'Pro' : 'Standard'}</span><span class="muted mono">{s.sampleRate ? s.sampleRate / 1000 + ' kHz' : ''}{s.sampleSize ? ` · ${s.sampleSize}-bit` : ''}{s.channels ? ` · ${s.channels === 1 ? 'mono' : 'stereo'}` : ''}</span></div>
+    <div class="input-fmt"><span class={`chip ${native ? 'accent' : ''}`}>{native ? MODE_NAMES[s.mode] || 'Direct' : 'Compatible'}</span><span class="muted mono">{s.sampleRate ? s.sampleRate / 1000 + ' kHz' : ''}{s.sampleSize ? ` · ${s.sampleSize}-bit` : ''}{s.channels ? ` · ${s.channels === 1 ? 'mono' : 'stereo'}` : ''}</span></div>
     {s.capability?.limited && <div class="check warn"><TriangleAlert size={13} /><span>{s.capability.note}</span></div>}
     {native && g && <>
       <Slider label={`Input gain${g.hardware ? ' (device)' : ' (driver)'}`} min={g.min} max={g.max} step={Math.max(0.1, g.step || 0.5)} value={g.db} unit=" dB" disabled={recState.value === 'rec'} onChange={setGain} />
@@ -347,12 +399,13 @@ export function StudioPanel() {
         <Toggle label="Play the video while recording" on={o.playVideo} onChange={v => setOpt({ playVideo: v })} />
         <Toggle label="3-second countdown" on={o.countdown} onChange={v => setOpt({ countdown: v })} />
         {o.playVideo && <Slider label="Pre-roll" min={0} max={5} step={0.5} value={o.preroll} def={0} unit=" s" onChange={v => setOpt({ preroll: v })} />}
+        {o.playVideo && <SyncOffset />}
         <Toggle label="Trim silence at start and end" on={o.trimSilence} onChange={v => setOpt({ trimSilence: v })} hint="Only the very beginning and end — pauses inside your take are kept" />
         <Toggle label="Hear yourself (monitoring)" on={o.monitor} onChange={v => { if (v && isSpeaker(deviceLabel(devices.value.outputs, activeOutput.value))) toast('Monitoring through speakers can cause feedback. Use headphones.', 'warn'); setOpt({ monitor: v }); capture?.setMonitor(v && recState.value === 'rec', activeOutput.value); }} />
         <div class="field"><label>Profile for new recordings</label><Select value={prefs.value.recordingProfile || 'original'} options={[...AUDIO_PROFILES, ...(prefs.value.audioProfiles || [])].map(x => [x.id, x.name])} onChange={v => savePrefs({ recordingProfile: v })} /></div>
         <MicCheck />
-        <div class="field"><label>Recording engine</label><Segmented value={o.engine || 'pro'} options={[['pro', 'Pro (WASAPI)'], ['browser', 'Standard']]} onChange={async v => { if (recState.value === 'rec') return; await setOpt({ engine: v }); nativeOk = null; try { await getCapture(prefs.value.audioInput); } catch (e) { toast(e.message, 'error'); } }} />
-          <small class="muted">Pro records straight from the device: bit-perfect in exclusive mode where the microphone allows it, otherwise raw (no driver effects). Standard uses Chromium’s capture.</small></div>
+        <div class="field"><label>Recording engine</label><Segmented value={o.engine || 'pro'} options={[['pro', 'Direct (best quality)'], ['browser', 'Compatible']]} onChange={async v => { if (recState.value === 'rec') return; await setOpt({ engine: v }); nativeOk = null; try { await getCapture(prefs.value.audioInput); } catch (e) { toast(e.message, 'error'); } }} />
+          <small class="muted">Direct records straight from the Windows audio driver: bit-perfect where the microphone allows it, otherwise with no driver effects. Use Compatible only if Direct can’t open your microphone. Both are free and save uncompressed WAV.</small></div>
         <p class="muted hint">Recordings are saved uncompressed as WAV with all Windows voice processing off.</p>
       </Section>
       <Section title="Mix" open>
@@ -369,6 +422,12 @@ export function StudioPanel() {
 export function FocusScript() { return scriptVisible.value ? <div class="focus-script"><Script /></div> : null; }
 export const studioKeys = e => {
   if (!studioOpen.value) return false;
+  const live = recState.value !== 'idle';
+  // A held key auto-repeats: R must not start and immediately stop a take.
+  if (e.repeat && (e.key === 'r' || e.key === 'R' || (live && e.key === ' '))) return true;
+  // The take is placed assuming the video plays continuously; pausing it with Space mid-take would put
+  // everything after the pause out of sync, so Space does nothing while recording.
+  if (e.key === ' ' && live) { if (recState.value === 'rec') toast('Press R or Esc to stop recording.', 'info', { timeout: 1800 }); return true; }
   if (e.key === 'r' || e.key === 'R') { if (e.shiftKey) startRecording({ retake: true }); else recState.value === 'rec' || recState.value === 'count' ? stopRecording() : startRecording(); return true; }
   if ((e.key === 'm' || e.key === 'M') && recState.value === 'rec') { markMistake(); return true; }
   if (e.key === 'Escape' && (recState.value === 'rec' || recState.value === 'count')) { stopRecording(); return true; }

@@ -12,7 +12,7 @@ const labelFor = id => (devices.value.inputs.find(d => d.id === (id || 'default'
 export class NativeCapture {
   constructor({ onMeter } = {}) { this.onMeter = onMeter; this.engine = 'native'; this.meterSession = null; this.recSession = null; this.es = null; }
   async open(deviceId) {
-    await this.close();
+    await this.close(); this.closed = false;
     this.label = labelFor(deviceId); this.deviceId = deviceId || 'default';
     const list = (await nativeDevices(true)).devices || [];
     const dev = list.find(d => d.name === this.label) || list.find(d => this.label && (d.name.includes(this.label) || this.label.includes(d.name))) || list.find(d => d.isDefault);
@@ -31,8 +31,11 @@ export class NativeCapture {
   get track() { return { readyState: this.meterSession || this.recSession ? 'live' : 'ended' }; }
   // Shared-mode metering without writing a file.
   async meter() {
-    if (this.meterSession) return;
+    // Once closed, never start (or keep) a meter: an orphaned shared-mode stream would block the next
+    // exclusive-mode take with "device in use".
+    if (this.meterSession || this.closed) return;
     const r = await api('/api/native-audio/start', { endpointId: this.device.id, mode: 'shared', file: false });
+    if (this.closed || this.meterSession) { await api(`/api/native-audio/${r.session}/stop`, {}).catch(() => {}); return; }
     this.meterSession = r.session; this.listen(r.session);
   }
   async stopMeter() { const id = this.meterSession; if (!id) return; this.meterSession = null; this.es?.close(); this.es = null; await api(`/api/native-audio/${id}/stop`, {}).catch(() => {}); }
@@ -50,7 +53,7 @@ export class NativeCapture {
       if (ev.type === 'closed') es.close();
     };
   }
-  async setMonitor(on) { if (on && !this.monitorWarned) { this.monitorWarned = true; this.onNotice?.('Live monitoring isn’t available with pro recording. Use your interface’s or headset’s direct monitoring — it has zero delay.'); } }
+  async setMonitor(on) { if (on && !this.monitorWarned) { this.monitorWarned = true; this.onNotice?.('Live monitoring isn’t available with Direct recording. Use your interface’s or headset’s direct monitoring — it has zero delay.'); } }
   // Input latency of the device; playback start offset is added via markPlay().
   latency(outputCtx) { return (this.started?.latencyMs || 0) / 1000 + (outputCtx?.outputLatency || outputCtx?.baseLatency || 0); }
   markPlay() { return this.started ? Math.max(0, (Date.now() - this.started.t) / 1000) : 0; }
@@ -70,5 +73,5 @@ export class NativeCapture {
   }
   get recording() { return !!this.recSession; }
   async setGain(db) { const g = await api('/api/native-audio/gain', { endpointId: this.device.id, db }); this.settings = { ...this.settings, gain: g }; this.device.gain = g; return g; }
-  async close() { this.es?.close(); this.es = null; await this.stopMeter(); }
+  async close() { this.closed = true; this.es?.close(); this.es = null; await this.stopMeter(); }
 }

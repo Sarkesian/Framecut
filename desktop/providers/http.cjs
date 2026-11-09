@@ -66,7 +66,7 @@ class SafeHttp {
   }
   async json(u, opts = {}, { onHeaders } = {}) {
     const res = await this.open(u, { ...opts, headers: { Accept: 'application/json', ...(opts.headers || {}) } });
-    try { onHeaders?.(res.headers); const text = await readLimited(res, 4 * 1024 ** 2); return JSON.parse(text.toString('utf8')); }
+    try { onHeaders?.(res.headers); const text = await readLimited(res, 4 * 1024 ** 2, opts.timeout || 20000); return JSON.parse(text.toString('utf8')); }
     catch (e) { if (e instanceof SyntaxError) throw Object.assign(Error('The media service sent an unreadable answer.'), { code: 'http' }); throw e; }
     finally { res.cleanup(); }
   }
@@ -77,8 +77,10 @@ class SafeHttp {
     if (declared > maxBytes) { res.body?.cancel().catch(() => {}); res.cleanup(); throw Object.assign(Error('That file is too large to import.'), { code: 'size' }); }
     const part = file + '.part'; const hash = createHash('sha256'); let bytes = 0;
     const out = fs.createWriteStream(part);
+    const watch = stallWatch(res, timeout);
     try {
       for await (const chunk of Readable.fromWeb(res.body)) {
+        watch.kick();
         bytes += chunk.length; if (bytes > maxBytes) throw Object.assign(Error('That file is too large to import.'), { code: 'size' });
         hash.update(chunk); if (!out.write(chunk)) await new Promise(r => out.once('drain', r));
         onProgress?.(declared ? bytes / declared : null, bytes);
@@ -87,13 +89,28 @@ class SafeHttp {
       if (!bytes) throw Object.assign(Error('The download was empty.'), { code: 'http' });
       await fsp.rename(part, file);
       return { bytes, sha256: hash.digest('hex'), contentType: (res.headers.get('content-type') || '').split(';')[0], finalUrl: res.finalUrl };
-    } catch (e) { out.destroy(); await fsp.unlink(part).catch(() => {}); if (signal?.aborted) throw Object.assign(Error('Cancelled'), { cancelled: true }); throw e.code ? e : Object.assign(Error('The download was interrupted.'), { code: 'offline', cause: e }); }
-    finally { res.cleanup(); }
+    } catch (e) { out.destroy(); await fsp.unlink(part).catch(() => {}); if (watch.stalled) throw watch.error(); if (signal?.aborted) throw Object.assign(Error('Cancelled'), { cancelled: true }); throw e.code ? e : Object.assign(Error('The download was interrupted.'), { code: 'offline', cause: e }); }
+    finally { watch.stop(); res.cleanup(); }
   }
 }
-async function readLimited(res, max) {
-  const parts = []; let n = 0;
-  for await (const c of Readable.fromWeb(res.body)) { n += c.length; if (n > max) throw Object.assign(Error('Answer too large.'), { code: 'size' }); parts.push(c); }
+// The request timeout covers only the wait for headers. While the body streams, a server that stops
+// sending (dropped connection, stalled CDN) would otherwise hang the download or search forever:
+// abort when no data has arrived for `ms`.
+function stallWatch(res, ms) {
+  let timer = null;
+  const w = {
+    stalled: false,
+    error: () => Object.assign(Error('The download stalled. Check your internet connection and try again.'), { code: 'timeout' }),
+    kick() { clearTimeout(timer); timer = setTimeout(() => { w.stalled = true; res.controller?.abort(w.error()); }, ms); },
+    stop() { clearTimeout(timer); },
+  };
+  w.kick(); return w;
+}
+async function readLimited(res, max, idleMs = 20000) {
+  const parts = []; let n = 0; const watch = stallWatch(res, idleMs);
+  try { for await (const c of Readable.fromWeb(res.body)) { watch.kick(); n += c.length; if (n > max) throw Object.assign(Error('Answer too large.'), { code: 'size' }); parts.push(c); } }
+  catch (e) { if (watch.stalled) throw watch.error(); throw e; }
+  finally { watch.stop(); }
   return Buffer.concat(parts);
 }
 module.exports = { SafeHttp, isPrivate };

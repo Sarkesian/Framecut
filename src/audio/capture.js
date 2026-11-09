@@ -23,7 +23,13 @@ export class Capture {
     this.monitorGain = this.ctx.createGain(); this.monitorGain.gain.value = 0; this.source.connect(this.monitorGain).connect(this.ctx.destination);
     this.node.port.onmessage = ({ data }) => {
       if (data.type === 'meter') { this.lastMeter = data; this.onMeter?.({ peakDb: db(data.peak), rmsDb: db(data.rms), clip: data.clip, channels: data.channels, wave: data.wave }); }
-      if (data.type === 'pcm' && this.recId) { const id = this.recId; const body = data.data; this.bytes += body.byteLength; this.queue = this.queue.then(() => fetch(`/api/record/${id}/chunk`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body }).then(r => { if (!r.ok) throw Error('The recording could not be written to disk.'); })).catch(e => { this.error = e; }); }
+      // After a failed write (disk full, 4 GB limit) nothing more is appended — later chunks would leave a
+      // silent gap and shift the rest of the take — and the take is stopped, keeping what was written.
+      if (data.type === 'pcm' && this.recId && !this.error) {
+        const id = this.recId; const body = data.data; this.bytes += body.byteLength;
+        this.queue = this.queue.then(() => (this.error ? null : fetch(`/api/record/${id}/chunk`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body }).then(async r => { if (!r.ok) { let msg = ''; try { msg = (await r.json()).error; } catch {} throw Error(msg || 'The recording could not be written to disk.'); } })))
+          .catch(e => { if (!this.error) { this.error = e; this.onWriteError?.(e); } });
+      }
       if (data.type === 'started') this._started?.(data);
       if (data.type === 'stopped') this._stopped?.();
     };
@@ -33,6 +39,10 @@ export class Capture {
   async setMonitor(on, sinkId) { if (!this.ctx) return; if (this.ctx.setSinkId && sinkId !== undefined) await this.ctx.setSinkId(sinkId === 'default' ? '' : sinkId).catch(() => {}); this.monitorGain.gain.setTargetAtTime(on ? 1 : 0, this.ctx.currentTime, 0.02); }
   // Total input→speaker delay to compensate when recording over playback.
   latency(outputCtx) { return (this.ctx?.baseLatency || 0) + (this.settings?.latency || 0) + (outputCtx?.outputLatency || outputCtx?.baseLatency || 0); }
+  // Seconds between the first captured sample and the moment playback is started (called right after
+  // play()). The take's file starts this much before the video does, so it is added to the in-point —
+  // the same correction the direct (WASAPI) engine makes.
+  markPlay() { return this.startPerf ? Math.max(0, (performance.now() - this.startPerf) / 1000) : 0; }
   async start({ name }) {
     this.error = null; this.bytes = 0;
     const { id } = await api('/api/record/start', { sampleRate: this.settings.sampleRate, channels: this.settings.channels, name, device: this.settings.label });
@@ -45,8 +55,10 @@ export class Capture {
     const stopped = new Promise(r => (this._stopped = r)); this.node.port.postMessage('stop'); await stopped;
     await this.queue; const id = this.recId; this.recId = null;
     if (discard) { await api('/api/record/' + id, undefined, 'DELETE'); return null; }
-    if (this.error) { await api(`/api/record/${id}/finish`, {}).catch(() => {}); throw this.error; }
-    return api(`/api/record/${id}/finish`, {});
+    const r = await api(`/api/record/${id}/finish`, {});
+    // Everything up to the failed write is intact and contiguous: keep it and say why it ended.
+    if (this.error) { if (!r?.asset) throw this.error; r.interrupted = this.error.message; }
+    return r;
   }
   get recording() { return !!this.recId; }
   close() { try { this.node?.disconnect(); this.source?.disconnect(); this.stream?.getTracks().forEach(t => t.stop()); this.ctx?.close(); } catch {} this.node = this.stream = this.ctx = null; }
@@ -66,6 +78,6 @@ export async function micCheck(capture, seconds = 3) {
     level: peak > -0.5 ? 'too-loud' : peak > -18 ? 'good' : peak > -30 ? 'quiet' : 'very-quiet',
     noisy: floor > -50,
     processing: { echoCancellation: capture.settings.echoCancellation, noiseSuppression: capture.settings.noiseSuppression, autoGainControl: capture.settings.autoGainControl },
-    format: capture.engine === 'native' ? `${{ exclusive: 'Exclusive (bit-perfect)', raw: 'Raw (no driver effects)', shared: 'Shared' }[capture.settings.mode] || 'Pro'} · ${capture.settings.sampleRate / 1000} kHz / ${capture.settings.sampleSize}-bit ${capture.settings.channels === 1 ? 'mono' : 'stereo'} · saved as WAV without conversion` : `Device delivers ${capture.settings.sampleRate / 1000} kHz${capture.settings.sampleSize ? ` / ${capture.settings.sampleSize}-bit` : ""} ${capture.settings.channels === 1 ? "mono" : "stereo"} · saved losslessly as 24-bit WAV`,
+    format: capture.engine === 'native' ? `${{ exclusive: 'Exclusive (bit-perfect)', raw: 'Raw (no driver effects)', shared: 'Shared' }[capture.settings.mode] || 'Direct'} · ${capture.settings.sampleRate / 1000} kHz / ${capture.settings.sampleSize}-bit ${capture.settings.channels === 1 ? 'mono' : 'stereo'} · saved as WAV without conversion` : `Device delivers ${capture.settings.sampleRate / 1000} kHz${capture.settings.sampleSize ? ` / ${capture.settings.sampleSize}-bit` : ""} ${capture.settings.channels === 1 ? "mono" : "stereo"} · saved losslessly as 24-bit WAV`,
   };
 }

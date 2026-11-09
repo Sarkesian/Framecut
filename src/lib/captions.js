@@ -232,9 +232,12 @@ export function placeWords(r, { from, to }) {
     p.captions ||= defaultCaptions();
     if (p.captions.preset === undefined) p.captions.preset = prefs.value.captionDefault || 'word-pop';
     let t = capTrackOf(p); if (!t) { t = addTrack(p, 'text'); t.captions = true; t.name = 'Captions'; }
-    p.clips = p.clips.filter(c => !(c.trackId === t.id && c.start < to && clipEnd(c) > from));
+    const off = (+p.settings.captionShift || 0) / 1000; // existing captions sit shifted by the caption timing
+    p.clips = p.clips.filter(c => !(c.trackId === t.id && c.start < to + off && clipEnd(c) > from + off));
     const eff = effOf(p, { trackId: t.id }), groups = groupWords(r.words, eff.layout, { aspect: aspectOf(p), size: eff.style.size });
-    for (const g of groups) p.clips.push(newClip('text', { trackId: t.id, caption: true, start: g.start, duration: Math.max(0.2, g.end - g.start), text: g.text, name: g.text.replace(/\n/g, ' ').slice(0, 40), words: g.words.map(w => ({ text: w.text, start: w.start - g.start, end: w.end - g.start, conf: w.conf, flag: w.flag || undefined, src: w.src })) }));
+    // Regenerated captions keep the project's chosen caption timing (Transcript › Caption timing).
+    const shift = (+p.settings.captionShift || 0) / 1000;
+    for (const g of groups) p.clips.push(newClip('text', { trackId: t.id, caption: true, start: Math.max(0, +(g.start + shift).toFixed(4)), duration: Math.max(0.2, g.end - g.start), text: g.text, name: g.text.replace(/\n/g, ' ').slice(0, 40), words: g.words.map(w => ({ text: w.text, start: w.start - g.start, end: w.end - g.start, conf: w.conf, flag: w.flag || undefined, src: w.src })) }));
     r.groups = groups.length;
     (p.captions.transcripts ||= []).push({ id: uid(), at: new Date().toISOString(), from, to, engine: r.engine, language: r.language, text: r.words.map(w => w.text).join(' '), words: r.words.map(w => [w.text, +w.start.toFixed(3), +w.end.toFixed(3)]) });
     p.captions.transcripts = p.captions.transcripts.slice(-5);

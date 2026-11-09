@@ -25,7 +25,7 @@ class Studio {
   // Render the clip's audio chain for the whole source file. Loudness normalisation is a measured second pass.
   async ensureProcessedAudio(a, clip, { signal, progress } = {}) {
     const file = this.processedAudioPath(a, clip); if (fs.existsSync(file)) return file;
-    const fx = fxOf(clip), tmp = file + '.part.wav';
+    const fx = fxOf(clip), tmp = `${file}.${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.part.wav`; // unique: preview and export may render the same file at once
     const pass = (chain, out, p0, p1) => run(ffmpeg, ['-y', '-v', 'error', '-i', a.path, '-vn', '-af', chain, '-ar', '48000', '-ac', '2', '-c:a', 'pcm_f32le', '-progress', 'pipe:1', out], { signal, onStdout: progress && progressFrom(a.duration, p => progress(p0 + p * (p1 - p0))) });
     if (fx.level.on && fx.level.mode === 'loudness') {
       const lufs = await this.measureLoudness(a.path, audioChain({ ...fx, limiter: { on: false } }), { signal });
@@ -185,7 +185,17 @@ class Studio {
   // ---------- Export ----------
   exportVideo({ project: raw, rasters = {}, settings = {} }) {
     const project = normalizeProject(raw);
-    const output = settings.output; if (!output) throw Error('Choose where to save your video.');
+    const output = settings.output ? path.resolve(String(settings.output)) : ''; if (!output) throw Error('Choose where to save your video.');
+    if (!path.extname(output)) throw Error('Add a file extension to the file name (for example .mp4).');
+    // Never write over media the editor uses: the export replaces the file at the very end, which would
+    // destroy a source clip (or a recording) still referenced by this or another project.
+    const same = p => !!p && path.resolve(p).toLowerCase() === output.toLowerCase();
+    const used = [...this.library.assets.values()].find(a => same(a.path) || same(a.proxy));
+    if (used) throw Object.assign(Error(`“${path.basename(output)}” is a media file in your library (${used.name}). Choose a different file name for the export.`), { code: 'source' });
+    if (!settings.overwrite && fs.existsSync(output)) throw Object.assign(Error(`“${path.basename(output)}” already exists in that folder.`), { code: 'exists' });
+    // Side files (temp, .srt, credits) sit next to the output: derive them from the file's own stem only.
+    const stem = output.slice(0, output.length - path.extname(output).length);
+    settings = { ...settings, output };
     return this.jobs.add({ type: 'export', label: 'Exporting ' + project.name, lane: 'export', meta: { projectId: project.id, output } }, async ({ signal, progress }) => {
       const dir = await fsp.mkdtemp(path.join(this.cacheDir, 'export-'));
       try {
@@ -211,9 +221,9 @@ class Studio {
         const enc = await detectEncoders();
         const hw = settings.hardware === 'off' || this.prefs().hardware === 'off' ? null : enc.preferred;
         const ext = path.extname(output).slice(1).toLowerCase();
-        const tmp = output.replace(/(\.[^.]+)?$/, `.framecut-part.${ext || 'mp4'}`);
+        const tmp = `${stem}.framecut-part.${ext || 'mp4'}`;
         const attempt = async hardwareEncoder => {
-          const plan = renderPlan(project, { assets, rasters: rasterFiles, luts, processedAudio, settings: { ...settings, hardwareEncoder } });
+          const plan = renderPlan(project, { assets, rasters: rasterFiles, luts, processedAudio, settings: { ...settings, hardwareEncoder }, captionPresets: this.prefs().captionPresets || [] });
           await fsp.writeFile(path.join(dir, 'graph.txt'), plan.graph);
           progress(0, 'Rendering…');
           await new Promise((resolve, reject) => {
@@ -229,15 +239,16 @@ class Studio {
         let plan;
         try { plan = await attempt(hw); }
         catch (e) { if (!hw || e.cancelled) throw e; progress(0, 'Hardware encoder unavailable, using software encoder…'); plan = await attempt(null); }
-        await fsp.rm(output, { force: true }); await fsp.rename(tmp, output);
-        if (settings.subtitles === 'srt') await fsp.writeFile(output.replace(/(\.[^.]+)?$/, '.srt'), toSrt(project, settings.range));
+        // rename replaces an existing file in one step (the user confirmed overwriting it); no separate delete.
+        await fsp.rename(tmp, output);
+        if (settings.subtitles === 'srt') await fsp.writeFile(stem + '.srt', toSrt(project, settings.range));
         // Credits for licensed library assets (CC BY etc.), saved next to the video when asked.
         let creditsFile = null;
-        if (typeof settings.credits === 'string' && settings.credits.trim()) { creditsFile = output.replace(/(\.[^.]+)?$/, ' - credits.txt'); await fsp.writeFile(creditsFile, settings.credits.slice(0, 200000).replace(/\r?\n/g, '\r\n')); }
+        if (typeof settings.credits === 'string' && settings.credits.trim()) { creditsFile = stem + ' - credits.txt'; await fsp.writeFile(creditsFile, settings.credits.slice(0, 200000).replace(/\r?\n/g, '\r\n')); }
         const st = await fsp.stat(output);
         return { output, bytes: st.size, duration: plan.duration, width: plan.width, height: plan.height, creditsFile };
       } catch (e) {
-        await fsp.rm(output.replace(/(\.[^.]+)?$/, `.framecut-part.${path.extname(output).slice(1) || 'mp4'}`), { force: true }).catch(() => {});
+        await fsp.rm(`${stem}.framecut-part.${path.extname(output).slice(1).toLowerCase() || 'mp4'}`, { force: true }).catch(() => {});
         throw e;
       } finally { await fsp.rm(dir, { recursive: true, force: true }).catch(() => {}); }
     });
