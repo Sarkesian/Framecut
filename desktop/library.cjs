@@ -6,6 +6,7 @@ const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
 const { run, ffmpeg, probeMedia, detectEncoders } = require('./tools.cjs');
 const { toStored, fromStored } = require('./paths.cjs');
+const { writeJson, readJsonSync } = require('./jsonstore.cjs');
 
 const PLAYABLE_V = new Set(['h264', 'vp8', 'vp9', 'av1', 'hevc', 'mjpeg', 'png', 'gif', 'webp', 'bmp']);
 const PLAYABLE_A = new Set(['aac', 'mp3', 'opus', 'vorbis', 'flac', 'pcm_s16le', 'pcm_s24le', 'pcm_f32le', 'pcm_u8', 'pcm_s32le', 'alac']);
@@ -25,16 +26,19 @@ class Library {
   }
   async init() {
     for (const d of Object.values(this.dirs)) await fsp.mkdir(d, { recursive: true });
-    try {
-      for (const a of fromStored(JSON.parse(await fsp.readFile(this.indexPath, 'utf8')), this.dataDir)) {
-        if (!a.kind) a.kind = a.video ? 'video' : 'audio'; // v1 assets
-        a.missing = !fs.existsSync(a.path); this.assets.set(a.id, a);
-      }
-    } catch {}
+    // Every project refers to media by id through this index, so a damaged media.json must never be
+    // replaced by an empty one: fall back to the last good copy and keep the damaged file for recovery.
+    const { value, source, damaged } = readJsonSync(this.indexPath, []);
+    if (damaged || source === 'backup') console.error(`media.json could not be read${damaged ? ` (kept as ${path.basename(damaged)})` : ''}; ${source === 'backup' ? 'restored the last good copy' : 'starting with an empty library'}.`);
+    for (const a of Array.isArray(value) ? fromStored(value, this.dataDir) : []) {
+      if (!a?.id || typeof a.path !== 'string') continue;
+      if (!a.kind) a.kind = a.video ? 'video' : 'audio'; // v1 assets
+      a.missing = !fs.existsSync(a.path); this.assets.set(a.id, a);
+    }
     for (const a of this.assets.values()) if (!a.missing) this.ensureDerivatives(a);
   }
-  persist() { clearTimeout(this.saveTimer); this.saveTimer = setTimeout(() => this.flush().catch(() => {}), 200); }
-  async flush() { const tmp = this.indexPath + '.tmp'; await fsp.writeFile(tmp, JSON.stringify(toStored([...this.assets.values()].map(a => ({ ...a, missing: undefined })), this.dataDir), null, 1)); await fsp.rename(tmp, this.indexPath); }
+  persist() { clearTimeout(this.saveTimer); this.saveTimer = setTimeout(() => this.flush().catch(e => console.error('Saving media.json failed:', e.message)), 200); }
+  flush() { clearTimeout(this.saveTimer); return writeJson(this.indexPath, toStored([...this.assets.values()].map(a => ({ ...a, missing: undefined })), this.dataDir), 1); }
   get(id) { return this.assets.get(id); }
   public(a) {
     if (!a) return null;

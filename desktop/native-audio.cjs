@@ -87,7 +87,10 @@ class NativeAudio {
     proc.stdout.on('data', d => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { const l = buf.slice(0, i).trim(); buf = buf.slice(i + 1); if (l) try { handle(JSON.parse(l)); } catch {} } });
     s.exited = new Promise(r => proc.on('close', code => { s.code = code; if (!s.done && !s.error) handle({ type: 'error', message: 'The audio helper stopped unexpectedly.' }); handle({ type: 'closed' }); for (const res of s.clients) res.end(); r(); }));
     // Wait until capture is running (or failed).
-    await new Promise(resolve => { const t = setInterval(() => { if (s.started || s.error || s.code !== undefined) { clearInterval(t); resolve(); } }, 15); });
+    // A hung driver (stuck in Activate/Initialize) must not hang the request forever.
+    const deadline = Date.now() + 15000;
+    await new Promise(resolve => { const t = setInterval(() => { if (s.started || s.error || s.code !== undefined || Date.now() > deadline) { clearInterval(t); resolve(); } }, 15); });
+    if (!s.started && !s.error && s.code === undefined) { s.error = { message: 'The microphone did not respond. Unplug and reconnect it, or choose another input.' }; try { proc.kill(); } catch {} }
     if (!s.started) { this.sessions.delete(sid); throw Object.assign(Error(s.error?.message || 'Recording could not start.'), { code: s.error?.code }); }
     if (file) await fsp.writeFile(s.metaFile, JSON.stringify({ wav: s.wav, name: s.name, recording: this.recordingMeta(s) }));
     return { session: sid, ...s.started };
@@ -107,9 +110,21 @@ class NativeAudio {
     try { s.proc.stdin.write('stop\n'); } catch {}
     const timer = setTimeout(() => s.proc.kill(), 5000); await s.exited; clearTimeout(timer); this.sessions.delete(sid);
     if (!s.file) return { done: s.done };
-    await fsp.rm(s.metaFile, { force: true });
-    if (discard || !s.done || s.done.frames < 100) { await fsp.rm(s.wav, { force: true }); if (!discard && !s.done) throw Error(s.error?.message || 'Nothing was recorded.'); return null; }
+    if (discard || (s.done && s.done.frames < 100)) { await fsp.rm(s.metaFile, { force: true }); await fsp.rm(s.wav, { force: true }); return null; }
+    if (!s.done) {
+      // The helper ended without a clean "done" (microphone unplugged, driver error, stalled device). It
+      // still finalises the WAV header as it exits, so keep everything captured up to that moment rather
+      // than deleting the take. The .native.json marker stays until the import succeeds, so a failure here
+      // is retried by crash recovery on the next start instead of losing the file.
+      const st = await fsp.stat(s.wav).catch(() => null);
+      const frameBytes = Math.max(1, (s.started?.channels || 1) * ((s.started?.fileBits || 24) >> 3));
+      if (!st || st.size < 44 + frameBytes * 100) { await fsp.rm(s.metaFile, { force: true }); await fsp.rm(s.wav, { force: true }); throw Error(s.error?.message || 'Nothing was recorded.'); }
+      const a = await this.library.importPath(s.wav, { name: s.name + '.wav', recording: this.recordingMeta(s, { interrupted: true }) });
+      await fsp.rm(s.metaFile, { force: true });
+      return { asset: this.library.public(a), seconds: a.duration, interrupted: s.error?.message || 'The recording stopped unexpectedly.', started: s.started };
+    }
     const a = await this.library.importPath(s.wav, { name: s.name + '.wav', recording: this.recordingMeta(s, { effectiveBits: s.done.effectiveBits, clipped: s.done.clipped }) });
+    await fsp.rm(s.metaFile, { force: true });
     return { asset: this.library.public(a), seconds: s.done.seconds, clipped: s.done.clipped, effectiveBits: s.done.effectiveBits, started: s.started };
   }
   async stopAll() { for (const id of [...this.sessions.keys()]) await this.stop(id, { discard: !this.sessions.get(id).file }).catch(() => {}); }

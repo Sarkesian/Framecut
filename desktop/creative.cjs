@@ -9,6 +9,7 @@ const { randomUUID, createHash } = require('node:crypto');
 const { Readable } = require('node:stream');
 const { run, ffmpeg, ffprobe } = require('./tools.cjs');
 const { toStored, fromStored } = require('./paths.cjs');
+const { writeJson, readJsonSync } = require('./jsonstore.cjs');
 const { SafeHttp } = require('./providers/http.cjs');
 const { Openverse } = require('./providers/openverse.cjs');
 const { Fluent } = require('./providers/fluent.cjs');
@@ -35,11 +36,12 @@ class Creative {
   async init() {
     for (const d of Object.values(this.dirs)) await fsp.mkdir(d, { recursive: true });
     await fsp.rm(this.dirs.bake, { recursive: true, force: true }); await fsp.mkdir(this.dirs.bake, { recursive: true });
-    try { this.state = { ...this.state, ...fromStored(JSON.parse(await fsp.readFile(this.statePath, 'utf8')), this.dataDir) }; } catch {}
+    const { value } = readJsonSync(this.statePath, null);
+    if (value && typeof value === 'object' && !Array.isArray(value)) this.state = { ...this.state, ...fromStored(value, this.dataDir) };
     this.prunePreviews().catch(() => {});
   }
-  persist() { clearTimeout(this.saveTimer); this.saveTimer = setTimeout(() => this.flush().catch(() => {}), 300); }
-  async flush() { const tmp = this.statePath + '.tmp'; await fsp.writeFile(tmp, JSON.stringify(toStored(this.state, this.dataDir))); await fsp.rename(tmp, this.statePath); }
+  persist() { clearTimeout(this.saveTimer); this.saveTimer = setTimeout(() => this.flush().catch(e => console.error('Saving creative.json failed:', e.message)), 300); }
+  flush() { clearTimeout(this.saveTimer); return writeJson(this.statePath, toStored(this.state, this.dataDir)); }
   provider(id) { const p = this.providers[id]; if (!p) throw Object.assign(Error(PROVIDERS[id]?.reason || 'Unknown media source.'), { code: 'unavailable' }); return p; }
 
   // ----- credentials (kept in the OS credential store via the desktop shell; never sent to the UI) -----

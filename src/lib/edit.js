@@ -117,17 +117,37 @@ export function splitAt(t = time.value, ids) {
   const right = [];
   commit('Split', p => {
     for (const t0 of targets) {
-      const c = p.clips.find(x => x.id === t0.id); if (trackOf(p, c.trackId)?.locked) continue;
-      const local = t - c.start;
-      const r = structuredClone(c); r.id = uid(); r.start = t; r.duration = c.duration - local; r.transition = null; r.animIn = null;
-      if (hasMedia(c) || c.sticker?.type === 'media') r.in = (c.in || 0) + local * (c.speed || 1);
-      if (c.words) { r.words = c.words.filter(w => w.start >= local).map(w => ({ ...w, start: w.start - local, end: w.end - local })); c.words = c.words.filter(w => w.start < local); }
-      if (c.keyframes) { shiftKeys(r, local, r.duration); shiftKeys(c, 0, local); }
-      c.duration = local; c.animOut = null; c.fadeOut = 0; r.fadeIn = 0;
-      p.clips.push(r); right.push(r.id);
+      const c = p.clips.find(x => x.id === t0.id); if (!c || trackOf(p, c.trackId)?.locked) continue;
+      const r = cutClip(p, c, t - c.start); if (r) right.push(r.id);
     }
-  }, { select: right.slice(0, 1) });
+    if (!right.length) return false; // nothing unlocked to split: no empty undo entry
+  });
+  // Keep the right-hand piece selected (computed after the commit ran) so the Inspector stays open.
+  if (right.length) selection.value = right.slice(0, 1);
 }
+// Split clip `c` (inside a commit draft) at clip-local time `local`. Returns the new right-hand clip, or
+// null when the cut would leave a piece shorter than 0.03 s. Everything time-based is divided between the
+// halves: media in-point, caption words, keyframes, volume envelope. Fades/animations stay on the outer
+// edges only, and the separated-audio link stays with the left half.
+const MIN_PIECE = 0.03;
+export function cutClip(p, c, local) {
+  if (!(local > MIN_PIECE && local < c.duration - MIN_PIECE)) return null;
+  const r = structuredClone(c); r.id = uid(); r.start = c.start + local; r.duration = c.duration - local; r.transition = null; r.animIn = null;
+  delete r.detachedAudio;
+  if (hasMedia(c) || c.sticker?.type === 'media') r.in = (c.in || 0) + local * (c.speed || 1);
+  if (c.words) { r.words = c.words.filter(w => w.start >= local).map(w => ({ ...w, start: w.start - local, end: w.end - local })); c.words = c.words.filter(w => w.start < local); }
+  if (c.keyframes) { shiftKeys(r, local, r.duration); shiftKeys(c, 0, local); }
+  if (c.volumeKeys) {
+    r.volumeKeys = c.volumeKeys.map(k => ({ ...k, t: k.t - local })).filter(k => k.t >= 0 && k.t <= r.duration);
+    c.volumeKeys = c.volumeKeys.filter(k => k.t <= local);
+    if (!r.volumeKeys.length) delete r.volumeKeys; if (!c.volumeKeys.length) delete c.volumeKeys;
+  }
+  if (c.duckKeys) { delete c.duckKeys; delete r.duckKeys; } // automatic ducking is recomputed, not carried over
+  c.duration = local; c.animOut = null; c.fadeOut = 0; r.fadeIn = 0;
+  p.clips.push(r); return r;
+}
+// A copy of a clip must not stay linked to (and silenced by) the original's separated audio.
+function unlinkCopy(c) { if (c.detachedAudio) { delete c.detachedAudio; c.muted = false; } }
 export function deleteClips(ids = selection.value, { ripple = false } = {}) {
   const p0 = project.value; ids = ids.filter(id => { const c = p0.clips.find(x => x.id === id); return c && !trackOf(p0, c.trackId)?.locked; });
   if (!ids.length) return;
@@ -143,7 +163,7 @@ export function duplicateClips(ids = selection.value) {
   const out = [];
   commit('Duplicate', p => {
     for (const s of src) {
-      const c = structuredClone(s); c.id = uid(); c.transition = null;
+      const c = structuredClone(s); c.id = uid(); c.transition = null; unlinkCopy(c);
       const t = trackOf(p, s.trackId);
       if (t.main) { c.start = clipEnd(s) - 1e-3; for (const x of p.clips) if (x.trackId === t.id && x.start >= clipEnd(s) - EPS) x.start += c.duration; c.start = clipEnd(s); }
       else { c.start = clipEnd(s); c.trackId = freeTrack(p, t.kind, c.start, c.start + c.duration, { prefer: t.id }).id; }
@@ -161,9 +181,13 @@ export function pasteClips(at = time.value, { inPlace = false } = {}) {
   if (inPlace) at = clipboardBase;
   const out = [];
   commit('Paste', p => {
-    for (const s of clipboard) {
-      const c = structuredClone(s); delete c._offset; delete c._kind; delete c._main; c.id = uid(); c.start = at + s._offset; c.transition = null;
-      if (s._main) { const main = mainTrack(p); for (const x of p.clips) if (x.trackId === main.id && x.start >= at - EPS) x.start += c.duration; c.trackId = main.id; }
+    // Make room on the main track once, for all pasted main clips together, so they keep their order.
+    const main = mainTrack(p), mainLen = clipboard.filter(s => s._main).reduce((n, s) => n + s.duration, 0);
+    if (mainLen) for (const x of p.clips) if (x.trackId === main.id && x.start >= at - EPS) x.start += mainLen;
+    let mainAt = at;
+    for (const s of [...clipboard].sort((a, b) => a._offset - b._offset)) {
+      const c = structuredClone(s); delete c._offset; delete c._kind; delete c._main; c.id = uid(); c.start = at + s._offset; c.transition = null; unlinkCopy(c);
+      if (s._main) { c.trackId = main.id; c.start = mainAt; mainAt += c.duration; }
       else c.trackId = freeTrack(p, s._kind || trackKindFor(c.kind), c.start, c.start + c.duration).id;
       p.clips.push(c); out.push(c.id);
     }
@@ -251,6 +275,9 @@ export function setSpeed(id, speed) {
     const c = p.clips.find(x => x.id === id); if (!c) return false;
     const srcLen = c.duration * (c.speed || 1), k = (c.speed || 1) / speed; c.speed = speed; c.duration = srcLen / speed;
     if (c.keyframes) for (const p2 of Object.keys(c.keyframes)) c.keyframes[p2] = c.keyframes[p2].map(x => ({ ...x, t: x.t * k }));
+    // The volume envelope and caption words are clip-local times too: they follow the new speed.
+    if (c.volumeKeys) c.volumeKeys = c.volumeKeys.map(x => ({ ...x, t: x.t * k }));
+    if (c.duckKeys) delete c.duckKeys;
     if (!trackOf(p, c.trackId).main) { const ignore = new Set([c.id]); if (overlaps(p, c.trackId, c.start, clipEnd(c), ignore)) c.trackId = freeTrack(p, trackKindFor(c.kind), c.start, clipEnd(c), { ignore }).id; }
   }, { key: 'speed:' + id });
 }

@@ -7,6 +7,7 @@ import { api, native, waitJob } from '../lib/api.js';
 import { showDialog, closeDialog, Modal, Select, Segmented, Toggle, Progress } from './kit.jsx';
 import { dimensions, RESOLUTIONS, FRAME_RATES, clipEnd, projectDuration } from '../../shared/model.mjs';
 import { exportRasters } from '../engine/raster.js';
+import { userPresets } from '../lib/captions.js';
 import { timecode, bytes, shortTime } from '../lib/format.js';
 
 const FORMATS = [
@@ -62,11 +63,14 @@ function ExportDialog() {
   const p = project.value;
   const [s, setS] = useState(() => ({ format: 'mp4', codec: 'h264', quality: 'high', bitrate: 0, hardware: (prefs.value.hardware ?? 'auto') !== 'off', audioBitrate: 192, subtitles: 'burn', range: 'all', ...p.export, fps: p.export?.fps || p.settings.fps, resolution: p.export?.resolution || p.settings.resolution }));
   const [output, setOutput] = useState(''), [phase, setPhase] = useState('setup'), [prog, setProg] = useState({ p: 0, msg: '' }), [result, setResult] = useState(null), [error, setError] = useState(null);
-  const job = useRef(null), started = useRef(0);
+  const job = useRef(null), started = useRef(0), confirmed = useRef(null); // path the user agreed to overwrite
+  const [errorCode, setErrorCode] = useState(null);
   const set = patch => setS(x => { const n = { ...x, ...patch }; if (patch.format) n.codec = (CODECS[patch.format] || [[null]])[0][0]; return n; });
   const audioOnly = AUDIO_ONLY.includes(s.format);
   const ext = s.format === 'm4a' ? 'm4a' : s.format;
-  useEffect(() => { api(`/api/export/default-path?name=${encodeURIComponent(p.name)}&ext=${ext}`).then(r => setOutput(o => (o ? o.replace(/\.[^.\\/]+$/, '.' + ext) : r.path))).catch(() => {}); }, [ext]);
+  // Changing the format changes the extension; the server refuses to replace an existing file without the
+  // user's say-so, so a switch to MOV never silently overwrites an older "name.mov".
+  useEffect(() => { api(`/api/export/default-path?name=${encodeURIComponent(p.name)}&ext=${ext}`).then(r => setOutput(o => (o ? o.replace(/\.[^.\\/]+$/, '') + '.' + ext : r.path))).catch(() => {}); }, [ext]);
   const [W, H] = dimensions(p.settings.ratio, s.resolution);
   const hasCaptions = p.clips.some(c => c.kind === 'text' && p.tracks.find(t => t.id === c.trackId)?.captions);
   const sel = p.clips.filter(c => selection.value.includes(c.id));
@@ -80,12 +84,14 @@ function ExportDialog() {
   const [ack, setAck] = useState(false), [saveCredits, setSaveCredits] = useState(() => prefs.value.saveCredits !== false);
   const rightsHold = pf.blocked.length > 0 && !ack;
 
-  const browse = async () => { if (!native) return; const f = await native.saveFile({ title: 'Save video as', defaultPath: output, filters: [{ name: s.format.toUpperCase(), extensions: [ext] }] }); if (f) setOutput(f); };
+  // The Windows save dialog already asks before replacing a file, so a path chosen there counts as confirmed.
+  const browse = async () => { if (!native) return; const f = await native.saveFile({ title: 'Save video as', defaultPath: output, filters: [{ name: s.format.toUpperCase(), extensions: [ext] }] }); if (f) { setOutput(f); confirmed.current = f; } };
   const start = async (overrides = {}) => {
     setError(null); setPhase('render'); setProg({ p: 0, msg: 'Preparing text and graphics…' }); started.current = Date.now();
     try {
       const settings = { ...s, ...overrides, range: s.range === 'selection' ? range : null, output, hardware: (overrides.hardware ?? s.hardware) ? 'auto' : 'off', credits: saveCredits && pf.credits ? pf.credits : null };
-      const rasters = await exportRasters(p, W, H, id => asset(id));
+      if (confirmed.current === output) settings.overwrite = true;
+      const rasters = await exportRasters(p, W, H, id => asset(id), { captionPresets: userPresets() }); // same caption styles as the preview
       const { job: id } = await api('/api/export', { project: p, rasters, settings });
       job.current = id;
       commit('Export settings', d => { d.export = { format: s.format, codec: s.codec, resolution: s.resolution, fps: s.fps, quality: s.quality, bitrate: s.bitrate, audioBitrate: s.audioBitrate, subtitles: s.subtitles }; });
@@ -94,7 +100,7 @@ function ExportDialog() {
       setResult(r); setPhase('done');
     } catch (e) {
       if (e.cancelled) { setPhase('setup'); toast('Export cancelled. Nothing was saved.'); return; }
-      setError(e.message); setPhase('error');
+      setError(e.message); setErrorCode(e.code || null); setPhase('error');
     }
   };
   const cancel = () => { if (job.current) api('/api/jobs/' + job.current, undefined, 'DELETE'); };
@@ -110,7 +116,7 @@ function ExportDialog() {
   return <Modal title="Export" size="wide" footer={<>
     <span class="muted grow">{audioOnly ? 'Audio' : `${W}×${H} · ${s.fps} fps`} · {timecode(len, s.fps)} · about {bytes(est)}</span>
     <button class="btn ghost" onClick={() => closeDialog()}>Cancel</button><button class="btn primary lg" disabled={!output || rightsHold} data-tip={rightsHold ? 'Resolve or confirm the asset rights below first' : null} onClick={() => start()}><Download size={16} />Export</button></>}>
-    {phase === 'error' && <div class="notice error"><TriangleAlert size={16} /><div><b>The export didn’t finish.</b><div style={{ whiteSpace: 'pre-line' }}>{error}</div><div class="row" style={{ marginTop: 8 }}><button class="btn sm" onClick={() => start()}>Try again</button>{s.hardware && <button class="btn sm" onClick={() => start({ hardware: false })}>Try without hardware encoding</button>}</div></div></div>}
+    {phase === 'error' && <div class="notice error"><TriangleAlert size={16} /><div><b>The export didn’t finish.</b><div style={{ whiteSpace: 'pre-line' }}>{error}</div><div class="row" style={{ marginTop: 8 }}>{errorCode === 'exists' ? <button class="btn sm danger" onClick={() => { confirmed.current = output; start(); }}>Replace the existing file</button> : <button class="btn sm" onClick={() => start()}>Try again</button>}{s.hardware && <button class="btn sm" onClick={() => start({ hardware: false })}>Try without hardware encoding</button>}</div></div></div>}
     <div class="export-grid">
       <div>
         <div class="field"><label>Save to</label><div class="row"><input class="input mono" value={output} onInput={e => setOutput(e.target.value)} aria-label="Output file" />{native && <button class="btn" onClick={browse}><FolderOpen size={15} />Browse</button>}</div></div>

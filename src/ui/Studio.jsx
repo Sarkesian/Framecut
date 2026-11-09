@@ -31,7 +31,9 @@ const markers = signal([]);
 
 export const currentCapture = () => capture;
 export function openStudio() { studioOpen.value = true; }
-export function closeStudio() { if (recState.value === 'rec') return toast('Stop recording first.', 'warn'); studioOpen.value = false; focusMode.value = false; capture?.close(); capture = null; }
+// Closing while a take is starting, counting down or still being saved would tear the microphone down
+// under it (and leak a meter helper that blocks the next exclusive-mode take).
+export function closeStudio() { if (recState.value !== 'idle') return toast(recState.value === 'saving' ? 'Saving your take — one moment.' : 'Stop recording first.', 'warn'); studioOpen.value = false; focusMode.value = false; capture?.close(); capture = null; }
 
 // Recording engine: 'pro' = native WASAPI (exclusive / raw), 'browser' = Chromium capture.
 let nativeOk = null;
@@ -42,20 +44,35 @@ async function engineFor() {
   if (nativeOk === null) nativeOk = !!(await nativeDevices()).available;
   return nativeOk ? 'native' : 'browser';
 }
-export async function getCapture(deviceId) {
+// Opening a microphone takes a while (Pro mode spawns helpers). Overlapping calls (studio mount + a quick
+// click on Record / Check microphone / a device pick) share one open instead of orphaning a half-open
+// capture that keeps the mic or a meter helper running.
+let opening = null;
+export function getCapture(deviceId) {
+  const run = () => openCapture(deviceId);
+  const p = (opening || Promise.resolve()).catch(() => {}).then(run);
+  opening = p; p.finally(() => { if (opening === p) opening = null; }).catch(() => {});
+  return p;
+}
+async function openCapture(deviceId) {
   const eng = await engineFor();
   if (capture && capture.settings && (capture.engine || 'browser') === eng && (capture.settings.deviceId === (deviceId || 'default') || capture.settings.deviceId === deviceId || (!deviceId && (capture.ctx || capture.engine === 'native')))) return capture;
   await capture?.close();
   const onMeter = m => { meter.value = m; if (recState.value === 'rec' && m.wave?.length) pushLivePeaks(m.wave); };
-  capture = eng === 'native' ? new NativeCapture({ onMeter }) : new Capture({ onMeter });
-  capture.onNotice = msg => toast(msg, 'info', { timeout: 7000 });
-  capture.onEnded = () => { if (recState.value === 'rec') { stopRecording().then(() => toast('The microphone was disconnected. Your take up to that moment was saved.', 'warn')); } else toast('The microphone was disconnected.', 'warn'); };
+  const wire = c => {
+    c.onNotice = msg => toast(msg, 'info', { timeout: 7000 });
+    c.onWriteError = () => { if (recState.value === 'rec') stopRecording(); }; // stop at the failure; the take so far is kept
+    c.onEnded = () => { if (recState.value === 'rec') { stopRecording().then(ok => { if (ok) toast('The microphone was disconnected. Your take up to that moment was saved.', 'warn'); }); } else toast('The microphone was disconnected.', 'warn'); };
+    return c;
+  };
+  capture = wire(eng === 'native' ? new NativeCapture({ onMeter }) : new Capture({ onMeter }));
   try { await capture.open(deviceId); }
   catch (e) {
     if (eng !== 'native') throw e;
     // Pro capture unavailable for this device: fall back to the browser engine rather than failing.
     toast('Pro recording could not open this microphone (' + e.message + '). Using standard recording.', 'warn');
-    capture = new Capture({ onMeter }); capture.onNotice = msg => toast(msg, 'info'); await capture.open(deviceId);
+    await capture.close?.();
+    capture = wire(new Capture({ onMeter })); await capture.open(deviceId);
   }
   capInfo.value = { ...capture.settings, engine: capture.engine || 'browser' };
   return capture;
@@ -66,8 +83,11 @@ const setOpt = patch => savePrefs({ recording: { ...opts(), ...patch } });
 
 export async function startRecording({ retake = false } = {}) {
   if (recState.value !== 'idle') return;
+  // Claim the recorder synchronously: a second press (double click, key repeat) while the microphone
+  // opens must not start a parallel take.
+  recState.value = 'starting';
   const o = opts();
-  try { await getCapture(prefs.value.audioInput); } catch (e) { return toast('FrameCut couldn’t open the microphone: ' + (e.message || 'no access') + '. Check the cable and Windows privacy settings.', 'error'); }
+  try { await getCapture(prefs.value.audioInput); } catch (e) { recState.value = 'idle'; return toast('FrameCut couldn’t open the microphone: ' + (e.message || 'no access') + '. Check the cable and Windows privacy settings.', 'error'); }
   const pl = player.current; const p = project.value;
   const outLabel = deviceLabel(devices.value.outputs, activeOutput.value);
   if (o.playVideo && isSpeaker(outLabel) && p.clips.some(c => c.kind !== 'text') && !headphoneHinted) { headphoneHinted = true; toast('Tip: use headphones so the video’s sound doesn’t leak into your microphone.', 'info', { timeout: 6000 }); }
@@ -75,7 +95,7 @@ export async function startRecording({ retake = false } = {}) {
   const prev = retake && lastRecording.value && p.clips.find(c => c.id === lastRecording.value);
   const at = prev ? prev.start : time.value;
   stopPreview(); // library previews never play into a take
-  if (o.countdown) { recState.value = 'count'; for (let i = 3; i > 0; i--) { countdown.value = i; await new Promise(r => setTimeout(r, 800)); if (recState.value !== 'count') return; } }
+  if (o.countdown) { recState.value = 'count'; for (let i = 3; i > 0; i--) { countdown.value = i; await new Promise(r => setTimeout(r, 800)); if (recState.value !== 'count') return; } recState.value = 'starting'; }
   const pre = o.playVideo ? Math.min(o.preroll || 0, at) : 0;
   markers.value = [];
   try {
@@ -96,7 +116,7 @@ let session = null;
 export function markMistake() { if (recState.value !== 'rec' || !session) return; const t = (performance.now() - session.started) / 1000; markers.value = [...markers.value, { t, label: 'Mistake' }]; toast('Marked. You’ll see it on the waveform.', 'info', { timeout: 1500 }); }
 export async function stopRecording() {
   if (recState.value === 'count') { recState.value = 'idle'; return; }
-  if (recState.value !== 'rec') return;
+  if (recState.value !== 'rec') return false;
   recState.value = 'saving'; const s = session; const pl = player.current;
   try {
     pl?.pause(); await capture.setMonitor(false);
@@ -129,8 +149,10 @@ export async function stopRecording() {
     const R = a.recording || {}, fmt = R.sampleRate ? `${R.sampleRate / 1000} kHz · ${R.bits || 24}-bit${R.float ? ' float' : ''} WAV${R.mode ? ' · ' + MODE_NAMES[R.mode] : ''}` : 'WAV';
     lastTake.value = { fmt, clipped: r.clipped || 0, effectiveBits: r.effectiveBits, bits: R.bits, float: R.float, limited: capture?.settings?.capability?.limited };
     toast(`${s.retakeOf ? 'New take' : 'Recording'} saved · ${shortTime(dur)} · ${fmt}${r.clipped ? ` · ${r.clipped} clipped samples — lower your input level` : ''}`, r.clipped ? 'warn' : 'info');
+    if (r.interrupted) toast(`${r.interrupted} Everything recorded up to that moment was kept.`, 'warn', { timeout: 9000 });
     if (project.value.settings.ducking?.on) applyDucking();
-  } catch (e) { toast('The recording could not be saved: ' + e.message, 'error'); }
+    return true;
+  } catch (e) { toast('The recording could not be saved: ' + e.message, 'error'); return false; }
   finally { recState.value = 'idle'; session = null; endLiveTake(); if (capture?.settings) capInfo.value = { ...capture.settings, engine: capture.engine || 'browser' }; }
 }
 export function cleanVoice(ids) {
@@ -369,6 +391,12 @@ export function StudioPanel() {
 export function FocusScript() { return scriptVisible.value ? <div class="focus-script"><Script /></div> : null; }
 export const studioKeys = e => {
   if (!studioOpen.value) return false;
+  const live = recState.value !== 'idle';
+  // A held key auto-repeats: R must not start and immediately stop a take.
+  if (e.repeat && (e.key === 'r' || e.key === 'R' || (live && e.key === ' '))) return true;
+  // The take is placed assuming the video plays continuously; pausing it with Space mid-take would put
+  // everything after the pause out of sync, so Space does nothing while recording.
+  if (e.key === ' ' && live) { if (recState.value === 'rec') toast('Press R or Esc to stop recording.', 'info', { timeout: 1800 }); return true; }
   if (e.key === 'r' || e.key === 'R') { if (e.shiftKey) startRecording({ retake: true }); else recState.value === 'rec' || recState.value === 'count' ? stopRecording() : startRecording(); return true; }
   if ((e.key === 'm' || e.key === 'M') && recState.value === 'rec') { markMistake(); return true; }
   if (e.key === 'Escape' && (recState.value === 'rec' || recState.value === 'count')) { stopRecording(); return true; }

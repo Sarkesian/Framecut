@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { normalizeProject, newProject, projectDuration, uid } = require('../shared/model.mjs');
+const { writeAtomic } = require('./jsonstore.cjs');
 
 const SAFE_ID = /^[a-z0-9-]{8,64}$/i;
 class Projects {
@@ -53,8 +54,8 @@ class Projects {
     const p = normalizeProject(project); delete p.recovered;
     p.modified = new Date().toISOString();
     const dir = this.dir(p.id); await fsp.mkdir(path.join(dir, 'backups'), { recursive: true });
-    const file = path.join(dir, 'project.json'), tmp = file + '.tmp', json = JSON.stringify(p);
-    await fsp.writeFile(tmp, json); await fsp.rename(tmp, file);
+    const file = path.join(dir, 'project.json'), json = JSON.stringify(p);
+    await writeAtomic(file, json); // unique temp file + replace, serialised per file
     // Keep a version snapshot at most every 3 minutes; retain 30.
     const last = this.lastBackup.get(p.id) || 0;
     if (backup && Date.now() - last > 180e3) {

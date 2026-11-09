@@ -17,6 +17,7 @@ const { Creative } = require('./creative.cjs');
 const { Speech } = require('./speech.cjs');
 const { audioFx: fxOf, audioChain } = require('../shared/audio.mjs');
 const { num } = require('../shared/model.mjs');
+const { writeJson, readJsonSync, settle } = require('./jsonstore.cjs');
 
 const DEFAULT_PREFS = { proxies: 'auto', hardware: 'auto', autosave: true, accent: 'aurora', captionEngine: 'whisper-web', captionModel: 'base', snapping: true, showTips: true, exportFolder: null, ai: { preset: 'ollama', baseUrl: 'http://127.0.0.1:11434/v1', model: '', speechModel: 'whisper-1' } };
 
@@ -25,7 +26,7 @@ async function startServer({ dataDir = path.join(__dirname, '..', '.workspace'),
   for (const d of [dataDir, cacheDir, path.join(dataDir, 'fonts'), path.join(dataDir, 'luts'), path.join(dataDir, 'media', 'recordings'), path.join(dataDir, 'templates')]) await fsp.mkdir(d, { recursive: true });
   const prefsPath = path.join(dataDir, 'preferences.json');
   let prefs = { ...DEFAULT_PREFS };
-  try { prefs = { ...prefs, ...JSON.parse(await fsp.readFile(prefsPath, 'utf8')) }; } catch {}
+  { const { value } = readJsonSync(prefsPath, null); if (value && typeof value === 'object' && !Array.isArray(value)) prefs = { ...prefs, ...value }; }
   const getPrefs = () => prefs;
   const jobs = new JobQueue({ lanes: { heavy: 1, light: Math.max(2, Math.min(4, os.cpus().length >> 2)), export: 1 } });
   const library = new Library({ dataDir, cacheDir, jobs, prefs: getPrefs }); await library.init();
@@ -54,7 +55,7 @@ async function startServer({ dataDir = path.join(__dirname, '..', '.workspace'),
   app.get('/api/preferences', (_req, res) => res.json(prefs));
   app.put('/api/preferences', wrap(async (req, res) => {
     const next = { ...prefs, ...req.body }; delete next.key; if (next.ai) delete next.ai.key;
-    prefs = next; await fsp.writeFile(prefsPath, JSON.stringify(prefs, null, 2)); res.json(prefs);
+    prefs = next; await writeJson(prefsPath, prefs, 2); res.json(prefs);
   }));
   app.get('/api/storage', wrap(async (_req, res) => {
     const size = async dir => { let total = 0; const walk = async d => { for (const e of await fsp.readdir(d, { withFileTypes: true }).catch(() => [])) { const p = path.join(d, e.name); if (e.isDirectory()) await walk(p); else total += (await fsp.stat(p).catch(() => ({ size: 0 }))).size; } }; await walk(dir); return total; };
@@ -275,7 +276,15 @@ async function startServer({ dataDir = path.join(__dirname, '..', '.workspace'),
 
   const server = await new Promise(resolve => { const s = app.listen(port, '127.0.0.1', () => resolve(s)); });
   const url = 'http://127.0.0.1:' + server.address().port;
-  return { url, library, projects, jobs, studio, creative, speech, async close() { await nativeAudio.stopAll(); for (const j of jobs.jobs.values()) jobs.cancel(j.id); await library.flush().catch(() => {}); await creative.flush().catch(() => {}); speech.stop(); server.close(); } };
+  return { url, library, projects, jobs, studio, creative, speech, async close() {
+    // Finish takes and pending index writes before anything is torn down; each step is independent so one
+    // failure can't skip the rest.
+    await nativeAudio.stopAll().catch(e => console.error('Stopping recordings failed:', e.message));
+    for (const j of jobs.jobs.values()) jobs.cancel(j.id);
+    await library.flush().catch(e => console.error('Saving media.json failed:', e.message));
+    await creative.flush().catch(e => console.error('Saving creative.json failed:', e.message));
+    await settle(); speech.stop(); server.close();
+  } };
 }
 if (require.main === module) startServer({ port: +process.env.PORT || 0 }).then(s => console.log('FRAMECUT_URL=' + s.url));
 module.exports = { startServer, run, ffmpeg, ffprobe, num };

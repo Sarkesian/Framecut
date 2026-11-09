@@ -6,8 +6,12 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 
+// A RIFF/WAV file can describe at most 4 GiB of data. Takes are capped below that (MAX_DATA) and the
+// header fields are clamped, so a header can always be written.
+const MAX_DATA = 0xFFFFFFFF - 36 - 1024 * 1024;
 function wavHeader({ sampleRate, channels, bits = 24, dataBytes }) {
   const h = Buffer.alloc(44), blockAlign = channels * bits / 8;
+  dataBytes = Math.min(dataBytes, 0xFFFFFFFF - 36);
   h.write('RIFF', 0); h.writeUInt32LE(36 + dataBytes, 4); h.write('WAVE', 8); h.write('fmt ', 12); h.writeUInt32LE(16, 16); h.writeUInt16LE(1, 20);
   h.writeUInt16LE(channels, 22); h.writeUInt32LE(sampleRate, 24); h.writeUInt32LE(sampleRate * blockAlign, 28); h.writeUInt16LE(blockAlign, 32); h.writeUInt16LE(bits, 34);
   h.write('data', 36); h.writeUInt32LE(dataBytes, 40); return h;
@@ -47,7 +51,9 @@ class Recorder {
     const n = Math.floor(body.byteLength / 4);
     // Request bodies may start at any byte offset; Float32Array needs 4-byte alignment.
     const f32 = body.byteOffset % 4 === 0 ? new Float32Array(body.buffer, body.byteOffset, n) : new Float32Array(Uint8Array.prototype.slice.call(body, 0, n * 4).buffer);
-    const { buf, clipped, peak } = toInt24(f32); s.clipped += clipped; s.peak = Math.max(s.peak, peak); s.bytes += buf.length;
+    const { buf, clipped, peak } = toInt24(f32);
+    if (s.bytes + buf.length > MAX_DATA) throw Object.assign(Error('This take reached the 4 GB WAV limit. Stop and start a new take to continue.'), { code: 'full' });
+    s.clipped += clipped; s.peak = Math.max(s.peak, peak); s.bytes += buf.length;
     await new Promise((res, rej) => s.stream.write(buf, e => (e ? rej(e) : res())));
     return { bytes: s.bytes };
   }
@@ -61,7 +67,7 @@ class Recorder {
   async finalize(meta, { recovered } = {}) {
     const metaFile = meta.metaFile || meta.pcm.replace(/\.pcm$/, '.rec.json');
     const size = (await fsp.stat(meta.pcm).catch(() => ({ size: 0 }))).size;
-    const frame = 3 * meta.channels, dataBytes = size - (size % frame);
+    const frame = 3 * meta.channels, usable = Math.min(size, MAX_DATA), dataBytes = usable - (usable % frame);
     if (dataBytes < frame * 100) { await fsp.rm(meta.pcm, { force: true }); await fsp.rm(metaFile, { force: true }); return null; }
     const out = fs.createWriteStream(meta.wav); out.write(wavHeader({ sampleRate: meta.sampleRate, channels: meta.channels, dataBytes }));
     await new Promise((res, rej) => fs.createReadStream(meta.pcm, { start: 0, end: dataBytes - 1 }).on('error', rej).pipe(out).on('finish', res).on('error', rej));
