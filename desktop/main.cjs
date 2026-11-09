@@ -67,7 +67,19 @@ app.whenReady().then(async () => {
   if (cfg.maximized && !testDir) win.maximize();
   win.once('ready-to-show', () => { if (!process.env.FRAMECUT_TEST) win.show(); });
   const saveBounds = () => { if (testDir) return; const c = readConfig(); c.maximized = win.isMaximized(); if (!win.isMaximized() && !win.isFullScreen()) c.window = win.getBounds(); writeConfig(c); };
-  win.on('resize', debounce(saveBounds, 600)); win.on('move', debounce(saveBounds, 600)); win.on('close', saveBounds);
+  win.on('resize', debounce(saveBounds, 600)); win.on('move', debounce(saveBounds, 600));
+  // Closing asks the editor first: it flushes the autosave and warns about anything that would be lost
+  // (a failed save, a recording or an export in progress). A hung or crashed page never blocks quitting.
+  let allowClose = false, asking = false, hung = false;
+  win.webContents.on('unresponsive', () => { hung = true; }); win.webContents.on('responsive', () => { hung = false; });
+  win.on('close', e => {
+    saveBounds();
+    if (allowClose || testDir || hung || win.webContents.isCrashed()) return;
+    e.preventDefault(); if (asking) return; asking = true;
+    win.webContents.executeJavaScript('window.__framecutCanClose ? window.__framecutCanClose() : true', true)
+      .then(ok => { asking = false; if (ok !== false) { allowClose = true; win.close(); } })
+      .catch(() => { asking = false; allowClose = true; win.close(); });
+  });
   win.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:\/\//.test(url) && !url.startsWith(service.url)) shell.openExternal(url); return { action: 'deny' }; });
   win.webContents.on('will-navigate', (event, url) => { if (!url.startsWith(service.url + '/')) event.preventDefault(); });
   const ses = win.webContents.session;

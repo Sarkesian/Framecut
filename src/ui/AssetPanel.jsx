@@ -35,7 +35,8 @@ const SearchBox = ({ value, onInput, placeholder = 'Search' }) => <div class="se
 function MediaTab() {
   const p = project.value; const [q, setQ] = useState(''), [kind, setKind] = useState('all'), [scope, setScope] = useState('project'), [over, setOver] = useState(false), [busy, setBusy] = useState(false);
   const all = [...media.value.values()].filter(a => a.role !== 'sticker' && a.role !== 'library-audio');
-  const list = all.filter(a => (scope === 'all' || p.mediaIds.includes(a.id)) && (kind === 'all' || (kind === 'fav' ? p.favorites.includes(a.id) : a.kind === kind)) && a.name.toLowerCase().includes(q.toLowerCase()) && a.kind !== 'audio' || (a.kind === 'audio' && kind === 'audio' && (scope === 'all' || p.mediaIds.includes(a.id)) && a.name.toLowerCase().includes(q.toLowerCase())));
+  // "All" really means all: audio you imported is listed with your videos and photos (it used to be hidden there).
+  const list = all.filter(a => (scope === 'all' || p.mediaIds.includes(a.id)) && (kind === 'all' || (kind === 'fav' ? p.favorites.includes(a.id) : a.kind === kind)) && a.name.toLowerCase().includes(q.toLowerCase()));
   const missing = all.filter(a => a.missing && p.mediaIds.includes(a.id));
   const drop = async e => {
     e.preventDefault(); setOver(false); if (!e.dataTransfer.files.length) return;

@@ -13,6 +13,7 @@ import { api } from './lib/api.js';
 import { installTooltips, TooltipHost, MenuHost, DialogHost, ToastHost } from './ui/kit.jsx';
 import { Home } from './ui/Home.jsx';
 import { Editor } from './ui/Editor.jsx';
+import { installExitGuard } from './ui/exitGuard.jsx';
 import * as stateMod from './lib/state.js';
 import * as editMod from './lib/edit.js';
 import * as studioMod from './ui/Studio.jsx';
@@ -48,7 +49,7 @@ function App() {
 }
 
 async function boot() {
-  installTooltips();
+  installTooltips(); installExitGuard();
   document.addEventListener('contextmenu', e => { if (!e.target.closest('input,textarea')) e.preventDefault(); });
   // Dropping files anywhere outside a drop zone must never navigate away.
   for (const ev of ['dragover', 'drop']) window.addEventListener(ev, e => { if (!e.defaultPrevented) e.preventDefault(); });

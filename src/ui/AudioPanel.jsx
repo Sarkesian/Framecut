@@ -1,11 +1,12 @@
 // Audio inspector: one-click profiles, the ten essential tools (simple / advanced), fades, takes, and mixing helpers.
 import { useEffect, useState } from 'preact/hooks';
-import { Wand2, Copy, ClipboardPaste, Unlink, Volume2, VolumeX, Play, Check, Save, RotateCcw, Ear, Trash2 } from 'lucide-preact';
+import { Wand2, Copy, ClipboardPaste, Unlink, Volume2, VolumeX, Play, Pause, Check, Save, RotateCcw, Ear, Trash2 } from 'lucide-preact';
 import { project, selection, asset, toast, prefs, savePrefs, player, commit, media } from '../lib/state.js';
 import { updateClip, updateClips, detachAudio } from '../lib/edit.js';
 import { Slider, Toggle, Segmented, Select, Section, prompt } from './kit.jsx';
 import { AUDIO_PROFILES, AUDIO_DEFAULTS, audioFx, profileFx } from '../../shared/audio.mjs';
 import { shortTime } from '../lib/format.js';
+import { preview, togglePreview, stopPreview } from '../lib/creative.js';
 
 let fxClipboard = null;
 const customProfiles = () => prefs.value.audioProfiles || [];
@@ -90,11 +91,13 @@ function Tool({ title, on, onToggle, hint, children }) {
   return <section class={`tool ${on ? 'on' : ''}`}><header><span class="grow" data-tip={hint}>{title}</span><Toggle label="" on={on} onChange={onToggle} /></header>{on && children && <div class="tool-body">{children}</div>}</section>;
 }
 function Takes({ c }) {
-  const [playing, setPlaying] = useState(null);
-  const audition = k => { const a = asset(k.mediaId); if (!a) return; const el = window.__takeAudio ||= new Audio(); if (playing === k.mediaId) { el.pause(); setPlaying(null); return; } el.src = a.url; el.play(); el.onended = () => setPlaying(null); setPlaying(k.mediaId); };
+  // Takes play through the shared preview player: click again to pause, again to resume.
+  const keyOf = k => 'take:' + k.mediaId, pv = preview.value;
+  useEffect(() => () => { if (preview.peek().key?.startsWith('take:')) stopPreview(); }, [c.id]);
+  const audition = (k, i) => { const a = asset(k.mediaId); if (!a || a.missing) return; togglePreview({ key: keyOf(k), url: a.url, title: `Take ${i + 1}`, durationMs: (a.duration || 0) * 1000 }); };
   return <Section title={`Takes · ${c.takes.length}`}>
     {c.takes.map((k, i) => { const a = asset(k.mediaId); const active = k.mediaId === c.mediaId; return <div key={k.mediaId} class={`take ${active ? 'on' : ''}`}>
-      <button class="icon-btn sm" onClick={() => audition(k)} aria-label="Listen"><Play size={13} /></button>
+      {(() => { const on = pv.key === keyOf(k) && pv.state !== 'paused'; return <button class={`icon-btn sm ${pv.key === keyOf(k) ? 'on' : ''}`} disabled={!a || a.missing} onClick={() => audition(k, i)} aria-label={on ? 'Pause take' : 'Listen'} data-tip={on ? 'Pause' : 'Listen to this take'}>{on ? <Pause size={13} fill="currentColor" /> : <Play size={13} fill="currentColor" />}</button>; })()}
       <div class="grow"><b>Take {i + 1}</b><small class="muted">{a ? shortTime(a.duration) : 'missing'}{k.markers?.length ? ` · ${k.markers.length} marker${k.markers.length > 1 ? 's' : ''}` : ''}</small></div>
       {active ? <span class="chip accent">In use</span> : <button class="btn sm" onClick={() => updateClip(c.id, x => { x.mediaId = k.mediaId; x.in = k.in ?? 0; x.duration = a ? Math.max(0.1, (a.duration - (k.in ?? 0)) / (x.speed || 1)) : x.duration; x.markers = k.markers || []; }, { label: 'Choose take' })}>Use</button>}
     </div>; })}

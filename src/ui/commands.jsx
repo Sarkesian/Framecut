@@ -1,6 +1,7 @@
 // Central command registry: menu bar, keyboard shortcuts and the shortcut reference.
 import { Scissors, Copy, ClipboardPaste, Trash2, Undo2, Redo2, Type, Upload, Mic, Captions, ZoomIn, ZoomOut, Maximize, Settings, Keyboard, Download, FolderOpen, Plus, Save, ArrowLeft, Magnet, Sparkles, Film, Blend } from 'lucide-preact';
-import { project, selection, player, time, undo, redo, toast, saveNow, closeProject, commit, zoom, libraryTab, duration, primary, history, menu } from '../lib/state.js';
+import { project, selection, player, time, undo, redo, toast, saveNow, saveState, commit, zoom, libraryTab, duration, primary, history, menu } from '../lib/state.js';
+import { leaveProject, canSwitchProject } from './exitGuard.jsx';
 import { effect } from '@preact/signals';
 import { isDragging, stopDrag } from '../lib/drag.js';
 import { api, native, pickMedia } from '../lib/api.js';
@@ -94,10 +95,10 @@ export const ACTIONS = [
   { id: 'view-snap', label: 'Toggle viewer snapping', keys: ['Shift+N'], icon: Magnet, run: () => { setUi({ viewSnap: !ui.value.viewSnap }); toast(`Viewer snapping ${ui.value.viewSnap ? 'on' : 'off'}`); }, group: 'View' },
   { id: 'safe-area', label: 'Safe-area guides', keys: ["'"], run: () => setUi({ safeArea: !ui.value.safeArea }), group: 'View' },
 
-  { id: 'save', label: 'Save', keys: ['Ctrl+S'], icon: Save, run: async () => { await saveNow(); toast('Saved. FrameCut also saves every change automatically.'); }, group: 'File' },
+  { id: 'save', label: 'Save', keys: ['Ctrl+S'], icon: Save, run: async () => { await saveNow(); if (saveState.value === 'saved') toast('Saved. FrameCut also saves every change automatically.'); }, group: 'File' },
   { id: 'export', label: 'Export…', keys: ['Ctrl+E'], icon: Download, run: openExport, group: 'File' },
-  { id: 'new', label: 'New project', keys: ['Ctrl+N'], icon: Plus, run: async () => { await saveNow(); createProject({ ratio: project.value?.settings.ratio }); }, group: 'File' },
-  { id: 'open', label: 'Open project…', keys: ['Ctrl+O'], icon: FolderOpen, run: () => closeProject(), group: 'File' },
+  { id: 'new', label: 'New project', keys: ['Ctrl+N'], icon: Plus, run: async () => { const ratio = project.value?.settings.ratio; if (project.value && !(await canSwitchProject())) return; createProject({ ratio }); }, group: 'File' },
+  { id: 'open', label: 'Open project…', keys: ['Ctrl+O'], icon: FolderOpen, run: () => leaveProject(), group: 'File' },
   { id: 'shortcuts', label: 'Keyboard shortcuts', keys: ['?', 'Shift+/'], icon: Keyboard, run: () => openShortcuts(), group: 'Help' },
 ];
 const byId = Object.fromEntries(ACTIONS.map(a => [a.id, a]));

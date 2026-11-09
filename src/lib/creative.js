@@ -1,8 +1,8 @@
 // Creative Library client: search state that survives panel switches, debounced and cancellable
 // queries, audio previews on the chosen output device, rights-checked imports and timeline inserts.
-import { signal } from '@preact/signals';
+import { signal, effect } from '@preact/signals';
 import { api, waitJob, native } from './api.js';
-import { project, commit, time, toast, media, asset, player, refreshMedia, prefs } from './state.js';
+import { project, commit, time, toast, media, asset, player, refreshMedia, prefs, playing } from './state.js';
 import { newClip, clipEnd, projectDuration } from '../../shared/model.mjs';
 import { assessRights } from '../../shared/rights.mjs';
 import { freeTrack, addTrack, trackOf, overlaps } from './edit.js';
@@ -78,31 +78,49 @@ export async function toggleFavorite(rec) {
 }
 
 // ----- audio preview (never while recording; follows the editor's output device) -----
-export const preview = signal({ key: null, state: 'idle', t: 0, d: 0 });
-let audioEl = null, recordingCheck = () => false;
+// One shared preview player for every library list. Clicking the playing item pauses it; clicking it
+// again resumes from the same spot. `previewTime` ticks every frame while playing, kept apart from
+// `preview` so only the progress ring and the bar re-render, not every row in the list.
+export const preview = signal({ key: null, state: 'idle', d: 0, title: '' }); // state: idle | loading | playing | paused
+export const previewTime = signal(0);
+let audioEl = null, recordingCheck = () => false, raf = 0;
 export const setRecordingCheck = fn => { recordingCheck = fn; };
-export function stopPreview() { if (audioEl) { audioEl.pause(); audioEl.removeAttribute('src'); audioEl.load(); } preview.value = { key: null, state: 'idle', t: 0, d: 0 }; }
+const tick = () => { cancelAnimationFrame(raf); if (!audioEl || audioEl.paused || !preview.value.key) return; previewTime.value = audioEl.currentTime; raf = requestAnimationFrame(tick); };
+const patch = x => { if (preview.value.key) preview.value = { ...preview.value, ...x }; };
+export function stopPreview() { cancelAnimationFrame(raf); if (audioEl) { audioEl.pause(); audioEl.removeAttribute('src'); audioEl.load(); } preview.value = { key: null, state: 'idle', d: 0, title: '' }; previewTime.value = 0; }
+export function pausePreview() { if (audioEl && preview.value.key && !audioEl.paused) audioEl.pause(); }
+// rec: a library record, or { key, url, title, durationMs } for a file that is already local.
 export async function togglePreview(rec) {
-  if (preview.value.key === rec.key) return stopPreview();
+  if (preview.value.key === rec.key && audioEl) {
+    if (preview.value.state === 'paused') { if (recordingCheck()) return toast('Previews are paused while you record, so nothing leaks into your microphone.', 'warn'); player.current?.pause(); audioEl.play().catch(() => {}); }
+    else pausePreview();
+    return;
+  }
   if (recordingCheck()) return toast('Previews are paused while you record, so nothing leaks into your microphone.', 'warn');
   if (!audioEl) {
     audioEl = new Audio(); audioEl.preload = 'auto';
-    audioEl.addEventListener('timeupdate', () => { if (preview.value.key) preview.value = { ...preview.value, t: audioEl.currentTime, d: audioEl.duration || preview.value.d }; });
-    audioEl.addEventListener('playing', () => { if (preview.value.key) preview.value = { ...preview.value, state: 'playing' }; });
-    audioEl.addEventListener('waiting', () => { if (preview.value.key) preview.value = { ...preview.value, state: 'loading' }; });
+    audioEl.addEventListener('loadedmetadata', () => { if (Number.isFinite(audioEl.duration)) patch({ d: audioEl.duration }); });
+    audioEl.addEventListener('playing', () => { patch({ state: 'playing' }); tick(); });
+    audioEl.addEventListener('pause', () => { if (preview.value.key && audioEl.getAttribute('src')) { patch({ state: 'paused' }); previewTime.value = audioEl.currentTime; } });
+    audioEl.addEventListener('waiting', () => patch({ state: 'loading' }));
+    audioEl.addEventListener('seeked', () => { previewTime.value = audioEl.currentTime; });
     audioEl.addEventListener('ended', stopPreview);
     audioEl.addEventListener('error', () => { if (preview.value.key) { toast('This preview could not be played. The file may be unavailable right now.', 'warn'); stopPreview(); } });
   }
   player.current?.pause();
+  const key = rec.key;
+  preview.value = { key, state: 'loading', d: (rec.durationMs || 0) / 1000, title: rec.title || '' }; previewTime.value = 0;
   const sink = activeOutput.value && activeOutput.value !== 'default' ? activeOutput.value : '';
   if (audioEl.setSinkId) await audioEl.setSinkId(sink).catch(() => {});
+  if (preview.value.key !== key) return; // another item was clicked while switching outputs
   audioEl.volume = Math.min(1, Math.max(0, prefs.value.libraryPreviewVolume ?? 0.8));
-  audioEl.src = rec.imported && asset(rec.imported) ? asset(rec.imported).url : `/api/creative/preview/${rec.provider}/${encodeURIComponent(rec.sourceId)}`;
-  preview.value = { key: rec.key, state: 'loading', t: 0, d: (rec.durationMs || 0) / 1000 };
+  audioEl.src = rec.url || (rec.imported && asset(rec.imported) ? asset(rec.imported).url : `/api/creative/preview/${rec.provider}/${encodeURIComponent(rec.sourceId)}`);
   audioEl.play().catch(e => { if (e.name !== 'AbortError') { toast('Preview failed to start: ' + e.message, 'warn'); stopPreview(); } });
 }
+// Starting the timeline pauses a preview, so two things never play over each other.
+effect(() => { if (playing.value) pausePreview(); });
 export function setPreviewVolume(v) { if (audioEl) audioEl.volume = v; }
-export function seekPreview(frac) { if (audioEl?.duration) audioEl.currentTime = frac * audioEl.duration; }
+export function seekPreview(frac) { if (audioEl?.duration) { audioEl.currentTime = Math.max(0, Math.min(1, frac)) * audioEl.duration; previewTime.value = audioEl.currentTime; } }
 
 // ----- import + insert -----
 const setBusy = (key, v) => { const m = new Map(busyKeys.value); if (v === undefined) m.delete(key); else m.set(key, v); busyKeys.value = m; };

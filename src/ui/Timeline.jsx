@@ -119,7 +119,7 @@ export function Timeline() {
         <LiveTakeRow z={z} width={width} />
         <div class="tl-tail" style={{ width: width + HEADER_W }} />
         {snapLine.value && <div class={`snap-line k-${snapLine.value.kind}`} style={{ left: HEADER_W + snapLine.value.t * z }} />}
-        {ui.value.blade && bladeLine.value !== null && <div class="blade-line" style={{ left: HEADER_W + bladeLine.value * z }}><span class="mono">{timecode(bladeLine.value, fpsOf(p))}</span></div>}
+        {ui.value.blade && bladeLine.value !== null && <div class="blade-line" style={{ left: HEADER_W + bladeLine.value * z }}><span class="mono">{timecode(bladeLine.value, fpsOf(p))}{snapLine.value && Math.abs(snapLine.value.t - bladeLine.value) < 1e-6 ? ' · ' + ({ edge: 'clip edge', marker: 'marker', playhead: 'playhead', end: 'project end', start: 'start' }[snapLine.value.kind] || 'snap') : ''}</span></div>}
         {readout.value && <div class="tl-readout mono" style={{ left: HEADER_W + readout.value.t * z, top: scroll.value.top + RULER_H + 4 }}>{readout.value.text}</div>}
         {dropHint.value && <div class="drop-hint" style={{ left: HEADER_W + dropHint.value.x, top: dropHint.value.y, width: dropHint.value.w, height: dropHint.value.h }} />}
         {marquee.value && <div class="marquee" style={{ left: HEADER_W + marquee.value.x, top: marquee.value.y, width: marquee.value.w, height: marquee.value.h }} />}
@@ -226,9 +226,9 @@ function Clip({ c, t, z }) {
   const label = c.kind === 'text' ? c.text : c.kind === 'sticker' ? (c.sticker?.type === 'emoji' ? c.sticker.value : c.name || 'Sticker') : c.kind === 'adjust' ? [c.filter?.id && filterDef(c.filter.id)?.name, ...(c.effects || []).map(e => effectDef(e.id)?.name)].filter(Boolean).join(' + ') || c.name : c.name || a?.name || 'Clip';
   return <div class={`clip k-${c.kind} ${c.caption ? 'caption' : ''} ${sel ? 'sel' : ''} ${a?.missing ? 'missing' : ''} ${c.muted ? 'muted' : ''} ${d?.ids.includes(c.id) ? 'dragging' : ''} ${d?.copy && d.ids.includes(c.id) ? 'copying' : ''} ${c.locked ? 'locked' : ''}`}
     style={{ transform: `translate(${left}px, ${shiftY}px)`, width: w }} data-clip={c.id}
-    onPointerDown={e => clipDown(e, c, t, z)} onPointerMove={e => { if (ui.value.blade) bladeLine.value = bladeTimeAt(e, z); }} onPointerLeave={() => { bladeLine.value = null; }} onContextMenu={e => clipMenu(e, c, t, bladeTimeAt(e, z))} onDblClick={() => { if (c.kind === 'text') setTimeout(() => document.querySelector('.insp-text textarea')?.focus(), 30); }}>
+    onPointerDown={e => clipDown(e, c, t, z)} onPointerMove={e => { if (ui.value.blade) bladeLine.value = bladeTimeAt(e, z); }} onPointerLeave={() => { if (ui.value.blade) { bladeLine.value = null; snapLine.value = null; bladePrev = null; } }} onContextMenu={e => clipMenu(e, c, t, bladeTimeAt(e, z))} onDblClick={() => { if (c.kind === 'text') setTimeout(() => document.querySelector('.insp-text textarea')?.focus(), 30); }}>
     {(c.kind === 'video' || c.kind === 'image') && a && <Filmstrip c={c} a={a} start={start} w={w} z={z} h={trackH(t) - 18} />}
-    {(c.kind === 'audio' || (c.kind === 'video' && t.main)) && a?.audio && !c.muted && <Wave c={c} a={a} start={start} w={w} z={z} tall={c.kind === 'audio'} />}
+    {(c.kind === 'audio' || (c.kind === 'video' && t.main)) && a?.audio && !c.muted && <Wave c={c} a={a} start={start} w={w} z={z} tall={c.kind === 'audio'} h={trackH(t)} />}
     {((c.kind === 'audio') || (c.kind === 'video' && a?.audio)) && !c.muted && (sel || c.volumeKeys?.length > 0) && <Envelope c={c} w={w} z={z} sel={sel} />}
     <div class="clip-label">
       {c.speed && c.speed !== 1 && <span class="badge"><Gauge size={10} />{+c.speed.toFixed(2)}×</span>}
@@ -267,14 +267,14 @@ function usePeaks(url) {
   useEffect(() => { if (!url || peakCache.has(url)) { setPeaks(peakCache.get(url) || null); return; } fetch(url).then(r => r.arrayBuffer()).then(b => { const pk = new Uint8Array(b); peakCache.set(url, pk); setPeaks(pk); }).catch(() => {}); }, [url]);
   return peaks;
 }
-function Wave({ c, a, start, w, z, tall }) {
+function Wave({ c, a, start, w, z, tall, h }) {
   const peaks = usePeaks(a.wave); const ref = useRef();
   const { left, width } = scroll.value; const x0 = Math.max(0, Math.floor(left - HEADER_W - start * z)), x1 = Math.min(w, Math.ceil(left + width - start * z)); const vw = Math.max(0, x1 - x0);
   useEffect(() => {
     const cv = ref.current; if (!cv || !peaks || !vw) return; const dpr = window.devicePixelRatio || 1;
-    const hh = cv.parentElement.clientHeight; cv.width = Math.ceil(vw * dpr); cv.height = Math.ceil(hh * dpr); const g = cv.getContext('2d'); g.scale(dpr, dpr);
+    // The canvas's own CSS box (below the label for audio clips), so the drawing never spills outside the clip.
+    const hh = cv.clientHeight; if (!hh) return; cv.width = Math.ceil(vw * dpr); cv.height = Math.ceil(hh * dpr); const g = cv.getContext('2d'); g.scale(dpr, dpr);
     g.fillStyle = tall ? 'rgba(180,255,220,.75)' : 'rgba(200,220,255,.45)'; const mid = tall ? hh / 2 : hh - 2;
-    const keys = c.volumeKeys || c.duckKeys ? null : null;
     for (let x = 0; x < vw; x++) {
       const tl = (x0 + x) / z, src0 = c.in + tl * (c.speed || 1), src1 = c.in + (tl + 1 / z) * (c.speed || 1);
       let m = 0; for (let i = Math.floor(src0 * 100); i <= Math.floor(src1 * 100) && i < peaks.length; i++) if (peaks[i] > m) m = peaks[i];
@@ -282,8 +282,9 @@ function Wave({ c, a, start, w, z, tall }) {
       const v = Math.min(1, m / 255 * gain) * (tall ? hh * 0.46 : hh * 0.5);
       if (tall) g.fillRect(x, mid - v, 1, Math.max(1, v * 2)); else g.fillRect(x, mid - v, 1, v);
     }
-    if (c.volumeKeys?.length || c.duckKeys?.length) { g.strokeStyle = '#ffd36a'; g.lineWidth = 1.5; g.beginPath(); for (let x = 0; x < vw; x += 2) { const tl = (x0 + x) / z; const v = keyGain(c.volumeKeys, tl) * keyGain(c.duckKeys, tl); const y = hh - 4 - Math.min(1, v / 1.5) * (hh - 8); x ? g.lineTo(x, y) : g.moveTo(x, y); } g.stroke(); }
-  }, [peaks, x0, vw, z, c.in, c.speed, c.volume, c.volumeKeys, c.duckKeys]);
+    // Automatic ducking as a dashed line on the same scale as the volume envelope (whose own line is drawn by <Envelope>).
+    if (c.duckKeys?.length) { g.strokeStyle = 'rgba(255,211,106,.7)'; g.lineWidth = 1; g.setLineDash([3, 3]); g.beginPath(); for (let x = 0; x < vw; x += 2) { const tl = (x0 + x) / z; const v = keyGain(c.volumeKeys, tl) * keyGain(c.duckKeys, tl); const y = 1 + (1 - Math.min(ENV_MAX, v) / ENV_MAX) * (hh - 2); x ? g.lineTo(x, y) : g.moveTo(x, y); } g.stroke(); }
+  }, [peaks, x0, vw, z, h, c.in, c.speed, c.volume, c.volumeKeys, c.duckKeys]);
   if (!a.wave) return null;
   return <canvas ref={ref} class={`wave ${tall ? 'tall' : ''}`} style={{ left: x0, width: vw }} />;
 }
@@ -315,12 +316,24 @@ function withPartners(p, ids, alignedEdge) {
 }
 const endDragUi = () => { drag.value = null; snapLine.value = null; readout.value = null; };
 
-// Time under the pointer inside a clip lane: frame-exact, pulled to the playhead when close.
+// Time under the pointer inside a clip lane, frame-exact. With snapping on (Alt bypasses) the blade pulls to
+// anything worth cutting at: edges of clips on every other track (cut video to the end of the music, a
+// voiceover to the end of a shot…), markers, mistake markers inside the clip and the playhead. A target
+// only counts if it falls strictly inside the clip being cut, and an engaged target holds with hysteresis.
+let bladePrev = null;
 function bladeTimeAt(e, z) {
   const lane = e.currentTarget.closest('.track-lane'); if (!lane) return null;
-  const p = project.value, fps = fpsOf(p); let t = Math.max(0, (e.clientX - lane.getBoundingClientRect().left) / z);
-  if (p.settings.snapping && !e.altKey && Math.abs(t - time.value) * z < 8) t = time.value;
-  return Math.round(t * fps) / fps;
+  const p = project.value, fps = fpsOf(p); const raw = Math.max(0, (e.clientX - lane.getBoundingClientRect().left) / z);
+  const id = e.currentTarget.closest('[data-clip]')?.dataset.clip, c = id && p.clips.find(x => x.id === id);
+  if (p.settings.snapping && !e.altKey && c) {
+    const lo = c.start + 0.5 / fps, hi = clipEnd(c) - 0.5 / fps;
+    const targets = timelineTargets(p, { exclude: new Set([c.id]), playhead: time.value }).filter(x => x.t > lo && x.t < hi);
+    for (const m of c.markers || []) { const t = c.start + (m.t - (c.in || 0)) / (c.speed || 1); if (t > lo && t < hi) targets.push({ t, kind: 'marker' }); }
+    const hit = snapEdges([raw], targets, ui.value.snapPx / z, bladePrev);
+    bladePrev = hit; snapLine.value = hit ? { t: hit.target.t, kind: hit.target.kind } : null;
+    if (hit) return hit.target.t;
+  } else { bladePrev = null; snapLine.value = null; }
+  return Math.round(raw * fps) / fps;
 }
 function clipDown(e, c, t, z) {
   if (e.button === 0 && ui.value.blade) { e.stopPropagation(); e.preventDefault(); const at = bladeTimeAt(e, z); if (at !== null) bladeCut(at, e.shiftKey ? undefined : [c.id]); return; }

@@ -1,8 +1,8 @@
 // Waveform editor for the selected audio clip: zoom, drag-select a range, then split, delete, silence,
 // trim or adjust volume. Every operation is non-destructive (splits, trims and volume keyframes).
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { Scissors, Trash2, VolumeX, Crop, Play, ZoomIn, ZoomOut, Minus, Plus } from 'lucide-preact';
-import { project, primary, time, player, commit, toast, asset, selection } from '../lib/state.js';
+import { Scissors, Trash2, VolumeX, Crop, Play, Pause, ZoomIn, ZoomOut, Minus, Plus } from 'lucide-preact';
+import { project, primary, time, player, commit, toast, asset, selection, playing } from '../lib/state.js';
 import { splitAt } from '../lib/edit.js';
 import { clipEnd, uid } from '../../shared/model.mjs';
 import { keyGain } from '../../shared/audio.mjs';
@@ -13,6 +13,9 @@ export function WaveEditor() {
   const c = primary.value; const a = c && (c.kind === 'audio' || c.kind === 'video') ? asset(c.mediaId) : null;
   const cv = useRef(); const [peaks, setPeaks] = useState(null); const [sel, setSel] = useState(null); const [zoom, setZoom] = useState(1); const [scroll, setScroll] = useState(0);
   useEffect(() => { setSel(null); setZoom(1); setScroll(0); }, [c?.id]);
+  // Redraw when the panel is resized (the canvas is sized from its CSS box).
+  const [size, setSize] = useState(0);
+  useEffect(() => { const el = cv.current; if (!el) return; const ro = new ResizeObserver(() => setSize(el.clientWidth * 10000 + el.clientHeight)); ro.observe(el); return () => ro.disconnect(); }, [!!c, !!a?.audio]);
   useEffect(() => { if (!a?.wave) return; if (peaksCache.has(a.wave)) return setPeaks(peaksCache.get(a.wave)); fetch(a.wave).then(r => r.arrayBuffer()).then(b => { const pk = new Uint8Array(b); peaksCache.set(a.wave, pk); setPeaks(pk); }); }, [a?.wave]);
   const view = c ? { t0: scroll, t1: scroll + c.duration / zoom } : null; // clip-local seconds
   useEffect(() => {
@@ -31,7 +34,7 @@ export function WaveEditor() {
     for (let x = 0; x <= w; x += 2) { const tl = view.t0 + x / w * span; const v = keyGain(c.volumeKeys, tl); const y = h - 6 - Math.min(1, v / 2) * (h - 12); x ? g.lineTo(x, y) : g.moveTo(x, y); } g.stroke();
     for (const m of c.markers || []) { const tl = (m.t - c.in) / sp; if (tl < view.t0 || tl > view.t1) continue; const x = (tl - view.t0) / span * w; g.fillStyle = '#ff5f70'; g.fillRect(x - 1, 0, 2, h); g.beginPath(); g.moveTo(x - 5, 0); g.lineTo(x + 5, 0); g.lineTo(x, 7); g.fill(); }
     const ph = time.value - c.start; if (ph >= view.t0 && ph <= view.t1) { g.fillStyle = '#fff'; g.fillRect((ph - view.t0) / span * w - 1, 0, 2, h); }
-  }, [c, peaks, sel, zoom, scroll, time.value]);
+  }, [c, peaks, sel, zoom, scroll, time.value, size]);
   if (!c || !a) return <div class="wave-editor empty"><span class="muted">Select a recording or audio clip to edit its waveform.</span></div>;
   if (!a.audio) return <div class="wave-editor empty"><span class="muted">This clip has no sound.</span></div>;
   const toLocal = e => { const r = cv.current.getBoundingClientRect(); return Math.max(0, Math.min(c.duration, view.t0 + (e.clientX - r.left) / r.width * (view.t1 - view.t0))); };
@@ -68,10 +71,11 @@ export function WaveEditor() {
     setSel(null);
   };
   const trimSel = () => need() && commit('Trim to selection', p => { const x = p.clips.find(k => k.id === c.id); const sp = x.speed || 1; x.in += sel[0] * sp; x.start += sel[0]; x.duration = sel[1] - sel[0]; if (x.volumeKeys) x.volumeKeys = x.volumeKeys.map(k => ({ ...k, t: k.t - sel[0] })).filter(k => k.t >= 0 && k.t <= x.duration); setSel(null); });
-  const playSel = () => { const pl = player.current; if (!pl) return; const [s0, s1] = sel || [time.value - c.start, c.duration]; pl.seek(c.start + s0); pl.play(); if (sel) { const stopAt = c.start + s1; const chk = () => { if (!pl.playing) return; if (pl.t >= stopAt) pl.pause(); else requestAnimationFrame(chk); }; requestAnimationFrame(chk); } };
+  // Play toggles: pressing it while playing pauses where you are instead of jumping back to the start.
+  const playSel = () => { const pl = player.current; if (!pl) return; if (pl.playing) { pl.pause(); return; } const inClip = time.value >= c.start && time.value < clipEnd(c) - 0.05; const [s0, s1] = sel || [inClip ? time.value - c.start : 0, c.duration]; pl.seek(c.start + s0); pl.play(); if (sel) { const stopAt = c.start + s1; const chk = () => { if (!pl.playing) return; if (pl.t >= stopAt) pl.pause(); else requestAnimationFrame(chk); }; requestAnimationFrame(chk); } };
   return <div class="wave-editor">
     <div class="we-bar"><b class="ellipsis">{c.name || 'Audio'}</b><span class="muted mono">{sel ? `${(sel[1] - sel[0]).toFixed(2)} s selected` : 'Drag to select · Ctrl+wheel to zoom'}</span><div class="grow" />
-      <button class="icon-btn sm" data-tip="Play selection" onClick={playSel}><Play size={14} /></button>
+      <button class="icon-btn sm" data-tip={playing.value ? 'Pause' : sel ? 'Play selection' : 'Play clip'} aria-label={playing.value ? 'Pause' : 'Play'} onClick={playSel}>{playing.value ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}</button>
       <button class="icon-btn sm" data-tip="Split at selection edges" onClick={splitSel}><Scissors size={14} /></button>
       <button class="icon-btn sm" data-tip="Delete selection and close the gap" onClick={deleteSel}><Trash2 size={14} /></button>
       <button class="icon-btn sm" data-tip="Silence selection" onClick={silence}><VolumeX size={14} /></button>

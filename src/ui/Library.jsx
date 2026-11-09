@@ -2,7 +2,7 @@
 // then click, press Enter or drag to put an asset on the timeline. Every result shows its source
 // and license; anything that cannot be used for this project says why instead of failing silently.
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { Music, AudioLines, FolderOpen, Search, X, Play, Pause, Plus, Heart, LoaderCircle, Upload, WifiOff, TriangleAlert, Clock, Info, ExternalLink, Copy, Check, Sparkles, Shapes, Smile, Ban, Mic, Link2, Rows3, LayoutGrid, Volume2, Hourglass } from 'lucide-preact';
+import { Music, AudioLines, FolderOpen, Search, X, Play, Pause, Square, Plus, Heart, LoaderCircle, Upload, WifiOff, TriangleAlert, Clock, Info, ExternalLink, Copy, Check, Sparkles, Shapes, Smile, Ban, Mic, Link2, Rows3, LayoutGrid, Volume2, Hourglass } from 'lucide-preact';
 import { project, media, asset, toast, prefs, savePrefs, time, player } from '../lib/state.js';
 import { native, api } from '../lib/api.js';
 import { addSticker } from '../lib/edit.js';
@@ -15,7 +15,7 @@ import { creditLine, PROVIDERS } from '../../shared/rights.mjs';
 import { svgUrl } from '../engine/raster.js';
 import { shortTime } from '../lib/format.js';
 import {
-  audioTab, stickerTab, searches, search, recentSearches, lists, loadLists, loadStatus, libStatus, toggleFavorite, togglePreview, stopPreview, preview, seekPreview, setPreviewVolume,
+  audioTab, stickerTab, searches, search, recentSearches, lists, loadLists, loadStatus, libStatus, toggleFavorite, togglePreview, stopPreview, preview, previewTime, seekPreview, setPreviewVolume,
   useRecord, dragRecord, dragAsset, insertAudio, insertSticker, busyKeys, selectedRecord, usageMode, setUsageMode, rightsOf, importStickerFiles, pickStickerFiles,
 } from '../lib/creative.js';
 
@@ -138,12 +138,13 @@ function AudioList({ items, panel }) {
   return <div class="audio-list" role="listbox" aria-label="Results" onKeyDown={e => navKeys(e, '.lib-row')}>{items.map(r => <AudioRow key={r.key} rec={r} panel={panel} />)}</div>;
 }
 function AudioRow({ rec, panel }) {
-  const pv = preview.value, playing = pv.key === rec.key, busy = busyKeys.value.has(rec.key), prog = busyKeys.value.get(rec.key);
+  const pv = preview.value, playing = pv.key === rec.key, paused = playing && pv.state === 'paused', busy = busyKeys.value.has(rec.key), prog = busyKeys.value.get(rec.key);
   const r = rightsOf(rec); const sel = selectedRecord.value?.key === rec.key;
   const add = () => useRecord(rec).then(id => id && rec.kind === 'music' && afterMusic(id));
   const menu = e => openMenu(e, [
     { text: r.blocked ? 'Can’t be used — see why' : 'Add at playhead', icon: r.blocked ? Info : Plus, onClick: r.blocked ? () => (selectedRecord.value = rec) : add },
-    { text: playing ? 'Stop preview' : 'Preview', icon: playing ? Pause : Play, onClick: () => togglePreview(rec) },
+    { text: playing && !paused ? 'Pause preview' : paused ? 'Resume preview' : 'Preview', icon: playing && !paused ? Pause : Play, onClick: () => togglePreview(rec) },
+    playing && { text: 'Stop preview', icon: Square, onClick: stopPreview },
     { text: rec.favorite ? 'Remove from favorites' : 'Save to favorites', icon: Heart, onClick: () => toggleFavorite(rec) },
     { divider: true },
     { text: 'View license & source', icon: Info, onClick: () => (selectedRecord.value = rec) },
@@ -158,9 +159,7 @@ function AudioRow({ rec, panel }) {
       if (e.key === ' ') { e.preventDefault(); togglePreview(rec); } else if (e.key === 'Enter' || e.key === '+') { e.preventDefault(); r.blocked ? (selectedRecord.value = rec) : add(); }
       else if (e.key === 'Escape') stopPreview(); else if (e.key.toLowerCase() === 'f' && !e.ctrlKey) toggleFavorite(rec); else if (e.key === 'i') selectedRecord.value = rec;
     }}>
-    <button class={`play-btn ${playing ? 'on' : ''}`} tabIndex={-1} aria-label={playing ? 'Stop preview' : 'Preview'} onClick={() => togglePreview(rec)} style={playing && pv.d ? { '--p': (pv.t / pv.d) * 100 + '%' } : null}>
-      {playing && pv.state === 'loading' ? <LoaderCircle size={14} class="spin" /> : playing ? <Pause size={14} /> : <Play size={14} />}
-    </button>
+    <PlayButton active={playing} onClick={() => togglePreview(rec)} />
     <div class="grow lib-meta">
       <div class="ellipsis lib-title" title={rec.title}>{rec.title}</div>
       <div class="lib-sub"><button class="lic-btn" tabIndex={-1} aria-label="License and source" onClick={() => (selectedRecord.value = rec)}><LicenseBadge rec={rec} /></button><small class="muted ellipsis">{[rec.durationMs ? shortTime(rec.durationMs / 1000) : null, rec.creator, rec.sourceName].filter(Boolean).join(' · ')}</small></div>
@@ -177,18 +176,39 @@ async function afterMusic(clipId) {
 }
 function copy(text) { navigator.clipboard.writeText(text).then(() => toast('Credit copied.')).catch(() => toast('Copy failed.', 'error')); }
 
+// Round play/pause button with a progress ring. Only the active button subscribes to the clock.
+function PlayButton({ active, onClick, disabled }) {
+  const pv = preview.value, state = active ? pv.state : 'idle';
+  const frac = active && pv.d ? Math.min(1, previewTime.value / pv.d) : 0;
+  return <button class={`lib-play ${active ? 'on' : ''}`} tabIndex={-1} disabled={disabled} aria-label={state === 'playing' || state === 'loading' ? 'Pause preview' : state === 'paused' ? 'Resume preview' : 'Preview'}
+    onClick={e => { e.stopPropagation(); onClick(); }} style={active ? { '--p': frac * 100 + '%' } : null}>
+    {state === 'loading' ? <LoaderCircle size={14} class="spin" /> : state === 'playing' ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" class="play-glyph" />}
+  </button>;
+}
+
 function PreviewBar() {
   const pv = preview.value; if (!pv.key) return null;
   const all = [...searches.music.value.results, ...searches.sfx.value.results, ...lists.value.audio.favorites, ...lists.value.audio.recents];
-  const rec = all.find(x => x.key === pv.key);
+  const title = all.find(x => x.key === pv.key)?.title || pv.title || 'Preview'; const t = previewTime.value;
+  const seekAt = e => { const r = e.currentTarget.getBoundingClientRect(); seekPreview((e.clientX - r.left) / r.width); };
+  const scrub = e => { if (e.button !== 0) return; const el = e.currentTarget; el.setPointerCapture(e.pointerId); seekAt(e); const mv = ev => seekAt({ currentTarget: el, clientX: ev.clientX }); const up = () => { el.removeEventListener('pointermove', mv); el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', up); }; el.addEventListener('pointermove', mv); el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up); };
+  const playingNow = pv.state === 'playing' || pv.state === 'loading';
   return <div class="preview-bar" role="region" aria-label="Preview">
-    <button class="icon-btn sm" aria-label="Stop preview" onClick={stopPreview}><Pause size={14} /></button>
-    <div class="grow"><div class="ellipsis"><b>{rec?.title || 'Preview'}</b></div>
-      <div class="pv-track" role="slider" aria-label="Preview position" aria-valuemin={0} aria-valuemax={Math.round(pv.d)} aria-valuenow={Math.round(pv.t)} tabIndex={0} onClick={e => { const r = e.currentTarget.getBoundingClientRect(); seekPreview((e.clientX - r.left) / r.width); }}><i style={{ width: (pv.d ? pv.t / pv.d * 100 : 0) + '%' }} /></div></div>
-    <span class="mono muted">{shortTime(pv.t)}{pv.d ? ' / ' + shortTime(pv.d) : ''}</span>
-    <input type="range" class="pv-vol" min="0" max="1" step="0.05" aria-label="Preview volume" value={prefs.value.libraryPreviewVolume ?? 0.8} onInput={e => setPreviewVolume(+e.target.value)} onChange={e => savePrefs({ libraryPreviewVolume: +e.target.value })} />
+    <div class="pv-row">
+      <button class="icon-btn sm pv-toggle" aria-label={playingNow ? 'Pause preview' : 'Resume preview'} onClick={() => togglePreview({ key: pv.key })}>{playingNow ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}</button>
+      <b class="grow ellipsis" title={title}>{title}</b>
+      <span class="mono muted pv-time">{clock(t)}{pv.d ? ' / ' + clock(pv.d) : ''}</span>
+      <button class="icon-btn sm" aria-label="Stop preview" data-tip="Stop" onClick={stopPreview}><X size={14} /></button>
+    </div>
+    <div class="pv-row">
+      <div class="pv-track grow" role="slider" aria-label="Preview position" aria-valuemin={0} aria-valuemax={Math.round(pv.d)} aria-valuenow={Math.round(t)} tabIndex={0} onPointerDown={scrub}
+        onKeyDown={e => { if (!pv.d) return; if (e.key === 'ArrowRight') seekPreview((t + 5) / pv.d); if (e.key === 'ArrowLeft') seekPreview((t - 5) / pv.d); }}><i style={{ width: (pv.d ? Math.min(1, t / pv.d) * 100 : 0) + '%' }} /></div>
+      <Volume2 size={13} class="muted" />
+      <input type="range" class="pv-vol" min="0" max="1" step="0.05" aria-label="Preview volume" data-tip="Preview volume" value={prefs.value.libraryPreviewVolume ?? 0.8} onInput={e => setPreviewVolume(+e.target.value)} onChange={e => savePrefs({ libraryPreviewVolume: +e.target.value })} />
+    </div>
   </div>;
 }
+const clock = s => { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
 
 // License & source drawer: everything needed to judge an item, without leaving FrameCut.
 function Drawer() {
@@ -204,7 +224,7 @@ function Drawer() {
     <p class="muted tiny">Found through {PROVIDERS[rec.provider]?.name}. {PROVIDERS[rec.provider]?.note} {rec.sourcePageUrl && <a href={rec.sourcePageUrl} target="_blank" rel="noreferrer">Open the original page</a>}</p>
     <div class="row">
       <button class="btn sm" onClick={() => toggleFavorite(rec)}><Heart size={13} fill={rec.favorite ? 'currentColor' : 'none'} />{rec.favorite ? 'Saved' : 'Save'}</button>
-      {rec.kind !== 'sticker' && <button class="btn sm" onClick={() => togglePreview(rec)}>{preview.value.key === rec.key ? <Pause size={13} /> : <Play size={13} />}Preview</button>}
+      {rec.kind !== 'sticker' && <button class="btn sm" onClick={() => togglePreview(rec)}>{preview.value.key === rec.key && preview.value.state !== 'paused' ? <><Pause size={13} />Pause</> : <><Play size={13} />Preview</>}</button>}
       <div class="grow" />
       {r.blocked ? (r.badge === 'Non-commercial' ? <button class="btn sm" onClick={() => setUsageMode('personal')}>This is a personal video</button> : <span class="muted small">Can’t be used in video</span>)
         : <button class="btn sm primary" disabled={busy} onClick={() => useRecord(rec).then(id => { if (id && rec.kind === 'music') afterMusic(id); if (id) close(); })}>{busy ? <LoaderCircle size={13} class="spin" /> : <Plus size={13} />}Use in project</button>}
@@ -213,11 +233,11 @@ function Drawer() {
 }
 
 function MyAudio() {
-  const p = project.value; const [q, setQ] = useState(''); const [playing, setPlaying] = useState(null); const el = useRef(null);
+  const p = project.value; const [q, setQ] = useState('');
   const all = [...media.value.values()].filter(a => a.audio && a.role !== 'sticker' && (p.mediaIds.includes(a.id) || a.role === 'library-audio') && a.name.toLowerCase().includes(q.toLowerCase()));
   all.sort((a, b) => (p.mediaIds.includes(b.id) - p.mediaIds.includes(a.id)) || String(b.imported).localeCompare(String(a.imported)));
-  const play = a => { if (!el.current) el.current = new Audio(); const x = el.current; if (playing === a.id) { x.pause(); setPlaying(null); return; } stopPreview(); player.current?.pause(); x.src = a.url; x.play().catch(() => {}); x.onended = () => setPlaying(null); setPlaying(a.id); };
-  useEffect(() => () => el.current?.pause(), []);
+  const keyOf = a => 'mine:' + a.id;
+  const play = a => !a.missing && togglePreview({ key: keyOf(a), url: a.url, title: (a.source?.title || a.name).replace(/\.[^.]+$/, ''), durationMs: (a.duration || 0) * 1000 });
   const kindOf = a => (a.source?.kind === 'sfx' ? 'sfx' : a.source?.kind === 'music' ? 'music' : a.duration < 20 ? 'sfx' : 'music');
   const add = a => (a.missing ? relinkOne(a) : a.kind === 'audio' ? insertAudio(a, kindOf(a)) : insertAudio(a, 'sfx'));
   return <>
@@ -229,7 +249,7 @@ function MyAudio() {
         return <div key={a.id} class={`audio-row lib-row ${a.missing ? 'blocked' : ''}`} role="option" tabIndex={0} draggable={!a.missing} onDragStart={e => dragAsset(e, a, kindOf(a))} onDblClick={() => add(a)}
           onKeyDown={e => { if (e.key === ' ') { e.preventDefault(); play(a); } if (e.key === 'Enter') add(a); }}
           onContextMenu={e => openMenu(e, [{ text: 'Add at playhead', icon: Plus, onClick: () => add(a) }, src && { text: 'Copy credit', icon: Copy, onClick: () => copy(creditLine(src)) }, src?.sourcePageUrl && { text: 'Open source page', icon: ExternalLink, onClick: () => window.open(src.sourcePageUrl, '_blank') }, native && !a.missing && { text: 'Reveal file', icon: FolderOpen, onClick: () => native.showInFolder(a.folder + '\\' + a.fileName) }, a.missing && { text: 'Relink…', icon: Link2, onClick: () => relinkOne(a) }])}>
-          <button class={`play-btn ${playing === a.id ? 'on' : ''}`} tabIndex={-1} aria-label="Preview" disabled={a.missing} onClick={() => play(a)}>{playing === a.id ? <Pause size={14} /> : <Play size={14} />}</button>
+          <PlayButton active={preview.value.key === keyOf(a)} disabled={a.missing} onClick={() => play(a)} />
           <div class="grow lib-meta"><div class="ellipsis lib-title">{(src?.title || a.name).replace(/\.[^.]+$/, '')}</div><div class="lib-sub">{src ? <LicenseBadge rec={src} compact /> : null}<small class="muted ellipsis">{a.missing ? 'File missing — relink to use' : [shortTime(a.duration), a.recording ? 'Recording' : src ? src.sourceName || 'Openverse' : a.kind === 'audio' ? 'Your file' : 'From video', p.mediaIds.includes(a.id) ? 'In project' : 'Ready offline'].filter(Boolean).join(' · ')}</small></div></div>
           <button class="icon-btn sm add" tabIndex={-1} data-tip="Add at playhead" aria-label="Add at playhead" onClick={() => add(a)}>{a.missing ? <Link2 size={15} /> : <Plus size={16} />}</button>
         </div>;

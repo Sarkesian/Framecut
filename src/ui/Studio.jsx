@@ -24,6 +24,7 @@ const ICONS = { headphones: Headphones, usb: Usb, monitor: Monitor, speaker: Spe
 let capture = null, headphoneHinted = false;
 const recState = signal('idle'); // idle | count | rec | saving
 setRecordingCheck(() => recState.value !== 'idle');
+export const isRecording = () => recState.value !== 'idle';
 const meter = signal({ peakDb: -Infinity, rmsDb: -Infinity, clip: false });
 const lastRecording = signal(null); // clip id
 const markers = signal([]);

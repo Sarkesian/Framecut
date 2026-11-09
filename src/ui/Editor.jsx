@@ -1,7 +1,7 @@
 // Editor workspace: asset browser | preview | inspector over a multitrack timeline.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { ArrowLeft, Undo2, Redo2, Download, Check, LoaderCircle, TriangleAlert, Keyboard, Settings, ChevronDown } from 'lucide-preact';
-import { project, saveState, history, undo, redo, closeProject, commit, toast, player, time, selection, saveNow, jobs } from '../lib/state.js';
+import { project, saveState, history, undo, redo, commit, toast, player, time, selection, saveNow, jobs } from '../lib/state.js';
 import { native } from '../lib/api.js';
 import { openMenu, useDraft } from './kit.jsx';
 import { Logo } from './Logo.jsx';
@@ -17,6 +17,7 @@ import { studioOpen, focusMode, StudioPanel, FocusScript } from './Studio.jsx';
 import { WaveEditor } from './WaveEditor.jsx';
 import { applySavedOutput } from '../audio/devices.js';
 import { beginDrag } from '../lib/drag.js';
+import { leaveProject } from './exitGuard.jsx';
 
 function usePanelSize(key, initial, min, max) {
   const [size, setSize] = useState(() => { try { return Math.min(max, Math.max(min, +localStorage.getItem('fc:' + key) || initial)); } catch { return initial; } });
@@ -41,8 +42,8 @@ export function Editor() {
   const [left, setLeft] = usePanelSize('left', 340, 260, 560), [right, setRight] = usePanelSize('right', 330, 280, 520), [bottom, setBottom] = usePanelSize('timeline', 330, 180, 700);
   useEffect(() => installShortcuts(), []);
   useEffect(() => { native?.setTitleColors?.({ color: '#0b0c10', symbolColor: '#c9ccd6' }); const beforeUnload = () => { saveNow(); }; window.addEventListener('beforeunload', beforeUnload); return () => window.removeEventListener('beforeunload', beforeUnload); }, []);
-  if (!p) return null;
   useEffect(() => { setTimeout(() => applySavedOutput().catch(() => {}), 500); }, []);
+  if (!p) return null;
   const studio = studioOpen.value, focus = studio && focusMode.value;
   return <div class={`editor ${focus ? 'focus' : ''}`} style={{ '--left': (studio ? Math.max(left, 360) : left) + 'px', '--right': right + 'px', '--bottom': bottom + 'px' }}>
     <TopBar />
@@ -69,7 +70,7 @@ function TopBar() {
   const [name, setName] = useDraft(p.name);
   const rename = e => { const v = (e?.target?.value ?? name).trim() || 'Untitled project'; if (v !== p.name) commit('Rename project', d => { d.name = v; }); else setName(p.name); };
   return <header class="titlebar editor-bar">
-    <button class="icon-btn" data-tip="Back to projects" onClick={closeProject}><ArrowLeft size={17} /></button>
+    <button class="icon-btn" data-tip="Back to projects" onClick={leaveProject}><ArrowLeft size={17} /></button>
     <Logo size={20} />
     <nav class="menubar">{Object.entries(menus()).map(([label, items]) => <button key={label} class="menubar-item" onClick={e => openMenu(e, items(), { align: 'below' })}>{label}</button>)}</nav>
     <div class="grow drag" />
