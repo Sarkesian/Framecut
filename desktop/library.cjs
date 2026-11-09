@@ -5,6 +5,7 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
 const { run, ffmpeg, probeMedia, detectEncoders } = require('./tools.cjs');
+const { toStored, fromStored } = require('./paths.cjs');
 
 const PLAYABLE_V = new Set(['h264', 'vp8', 'vp9', 'av1', 'hevc', 'mjpeg', 'png', 'gif', 'webp', 'bmp']);
 const PLAYABLE_A = new Set(['aac', 'mp3', 'opus', 'vorbis', 'flac', 'pcm_s16le', 'pcm_s24le', 'pcm_f32le', 'pcm_u8', 'pcm_s32le', 'alac']);
@@ -12,7 +13,7 @@ const PLAYABLE_EXT = new Set(['.mp4', '.m4v', '.mov', '.webm', '.mkv', '.mp3', '
 const MEDIA_EXT = /\.(mp4|m4v|mov|avi|mkv|webm|flv|wmv|mpg|mpeg|ts|mts|m2ts|3gp|mxf|mp3|wav|aac|ogg|oga|opus|flac|m4a|wma|aif|aiff|jpg|jpeg|png|gif|bmp|webp|svg|tif|tiff)$/i;
 
 // Provenance shown to the UI: who made it, where it came from and under which license (no internal URLs).
-const SOURCE_FIELDS = ['provider', 'sourceId', 'kind', 'title', 'creator', 'creatorUrl', 'sourcePageUrl', 'sourceName', 'license', 'licenseVersion', 'licenseUrl', 'attribution', 'holder', 'rights', 'importedAt', 'metadataCheckedAt', 'licenseEvidenceUrl', 'glyph', 'durationMs'];
+const SOURCE_FIELDS = ['provider', 'sourceId', 'kind', 'title', 'creator', 'creatorUrl', 'sourcePageUrl', 'sourceName', 'license', 'licenseVersion', 'licenseUrl', 'attribution', 'holder', 'rights', 'importedAt', 'metadataCheckedAt', 'licenseEvidenceUrl', 'licenseRecord', 'glyph', 'durationMs'];
 const publicSource = s => Object.fromEntries(SOURCE_FIELDS.filter(k => s[k] !== undefined && s[k] !== null).map(k => [k, s[k]]));
 
 class Library {
@@ -25,7 +26,7 @@ class Library {
   async init() {
     for (const d of Object.values(this.dirs)) await fsp.mkdir(d, { recursive: true });
     try {
-      for (const a of JSON.parse(await fsp.readFile(this.indexPath, 'utf8'))) {
+      for (const a of fromStored(JSON.parse(await fsp.readFile(this.indexPath, 'utf8')), this.dataDir)) {
         if (!a.kind) a.kind = a.video ? 'video' : 'audio'; // v1 assets
         a.missing = !fs.existsSync(a.path); this.assets.set(a.id, a);
       }
@@ -33,7 +34,7 @@ class Library {
     for (const a of this.assets.values()) if (!a.missing) this.ensureDerivatives(a);
   }
   persist() { clearTimeout(this.saveTimer); this.saveTimer = setTimeout(() => this.flush().catch(() => {}), 200); }
-  async flush() { const tmp = this.indexPath + '.tmp'; await fsp.writeFile(tmp, JSON.stringify([...this.assets.values()].map(a => ({ ...a, missing: undefined })), null, 1)); await fsp.rename(tmp, this.indexPath); }
+  async flush() { const tmp = this.indexPath + '.tmp'; await fsp.writeFile(tmp, JSON.stringify(toStored([...this.assets.values()].map(a => ({ ...a, missing: undefined })), this.dataDir), null, 1)); await fsp.rename(tmp, this.indexPath); }
   get(id) { return this.assets.get(id); }
   public(a) {
     if (!a) return null;

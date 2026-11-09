@@ -3,7 +3,7 @@
 // playback, Escape mid-drag), magnetic timeline snapping (frame-exact, zoom-independent, Alt bypass, toggle,
 // one undo per trim), live text editing (inspector and in-viewer), viewer snapping/alignment/nudging/locking,
 // multi-select keyframe editing, Ctrl+drag duplicate, zoom around the cursor and gap highlighting.
-const { _electron: electron } = require('playwright');
+const { launchApp } = require('./launch.cjs');
 const path = require('node:path'), fs = require('node:fs/promises'), os = require('node:os');
 const assert = require('node:assert/strict');
 const { run, ffmpeg } = require('../desktop/tools.cjs');
@@ -17,7 +17,7 @@ const near = (a, b, eps, msg) => assert.ok(Math.abs(a - b) <= eps, `${msg}: ${a}
     const clip = path.join(temp, 'A.mp4'), clip2 = path.join(temp, 'B.mp4');
     await run(ffmpeg, ['-y', '-f', 'lavfi', '-i', 'testsrc2=s=1280x720:r=30', '-f', 'lavfi', '-i', 'sine=frequency=330:sample_rate=48000', '-t', '8', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', clip]);
     await run(ffmpeg, ['-y', '-f', 'lavfi', '-i', 'mandelbrot=s=1280x720:r=30', '-t', '5', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', clip2]);
-    app = await electron.launch({ args: [path.resolve('.')], env: { ...process.env, FRAMECUT_TEST: '1', FRAMECUT_TEST_DIR: temp } });
+    app = await launchApp({ ...process.env, FRAMECUT_TEST: '1', FRAMECUT_TEST_DIR: temp });
     page = await app.firstWindow();
     page.on('pageerror', e => errors.push('pageerror: ' + e.message));
     page.on('console', m => { if (m.type() === 'error') errors.push('console: ' + m.text()); });

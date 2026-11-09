@@ -1,7 +1,7 @@
 // Ctrl+Z is universal: after every kind of action, done through the real UI and with focus left wherever
 // the UI leaves it (search boxes, dropdowns, buttons, open menus), Ctrl+Z restores the project exactly,
 // and Ctrl+Y brings the change back.
-const { _electron: electron } = require('playwright');
+const { launchApp } = require('./launch.cjs');
 const path = require('node:path'), fs = require('node:fs/promises'), os = require('node:os');
 const assert = require('node:assert/strict');
 const { run, ffmpeg } = require('../desktop/tools.cjs');
@@ -15,7 +15,7 @@ const shots = path.resolve('test-output');
     await run(ffmpeg, ['-y', '-f', 'lavfi', '-i', 'color=c=0x805040:s=1280x720:r=30:d=4', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', b]);
     await run(ffmpeg, ['-y', '-f', 'lavfi', '-i', 'sine=frequency=330:sample_rate=48000', '-t', '3', song]);
     const env = { ...process.env, FRAMECUT_TEST_DIR: temp }; delete env.FRAMECUT_TEST;
-    app = await electron.launch({ args: [path.resolve('.')], env });
+    app = await launchApp(env);
     page = await app.firstWindow();
     page.on('pageerror', e => errors.push('pageerror: ' + e.message)); page.on('console', m => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
     await page.setViewportSize({ width: 1600, height: 960 });

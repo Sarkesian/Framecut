@@ -6,13 +6,35 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const { createHash } = require('node:crypto');
 const { Readable } = require('node:stream');
+const https = require('node:https');
+
+// Some library hosts (ccMixter) take far longer than fetch's fixed 10 s to finish the TLS handshake.
+// Requests to those hosts go through node:https with a longer handshake allowance and kept-alive
+// sockets, so only the first request pays the cost. Same checks and redirect rules apply.
+// (Also used for hosts whose answers exceed the default header size.)
+const SLOW_TLS_HOSTS = new Set(['ccmixter.org']);
+const slowAgent = new https.Agent({ keepAlive: true, maxSockets: 4, timeout: 45000 });
+function slowFetch(url, { method = 'GET', headers = {}, body, signal } = {}) {
+  return new Promise((resolve, reject) => {
+    // ccMixter search answers can carry headers larger than Node's 16 KB default.
+    const req = https.request(url, { method, headers, agent: slowAgent, signal, timeout: 45000, maxHeaderSize: 256 * 1024 }, res => {
+      const h = new Headers(); for (const [k, v] of Object.entries(res.headers)) if (v != null) h.set(k, Array.isArray(v) ? v.join(', ') : String(v));
+      const empty = [204, 304].includes(res.statusCode) || method === 'HEAD';
+      if (empty) res.resume();
+      resolve(new Response(empty ? null : Readable.toWeb(res), { status: res.statusCode, headers: h }));
+    });
+    req.on('timeout', () => req.destroy(Object.assign(Error('The server took too long to answer.'), { code: 'timeout' })));
+    req.on('error', reject);
+    req.end(body == null ? undefined : typeof body === 'string' || Buffer.isBuffer(body) ? body : String(body));
+  });
+}
 
 const PRIVATE = [/^127\./, /^10\./, /^192\.168\./, /^172\.(1[6-9]|2\d|3[01])\./, /^169\.254\./, /^0\./, /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./, /^::1$/, /^f[cd]/i, /^fe80/i, /^::ffff:(127|10|192\.168|169\.254)\./i, /^::$/];
 const isPrivate = ip => PRIVATE.some(r => r.test(ip));
 const UA = 'FrameCutStudio/1.0 (local desktop video editor)';
 
 class SafeHttp {
-  constructor({ allowLocal = false, userAgent = UA } = {}) { this.allowLocal = allowLocal; this.ua = userAgent; }
+  constructor({ allowLocal = false, userAgent = UA, slowHosts = SLOW_TLS_HOSTS } = {}) { this.allowLocal = allowLocal; this.ua = userAgent; this.slowHosts = slowHosts; }
   async check(u) {
     const url = new URL(u);
     if (this.allowLocal && url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname)) return url;
@@ -30,7 +52,7 @@ class SafeHttp {
     try {
       for (let hop = 0; hop < 6; hop++) {
         let res;
-        try { res = await fetch(url, { method, headers: { 'User-Agent': this.ua, ...headers }, body, redirect: 'manual', signal: ctl.signal }); }
+        try { const go = this.slowHosts.has(url.hostname) ? slowFetch : fetch; res = await go(url, { method, headers: { 'User-Agent': this.ua, ...headers }, body, redirect: 'manual', signal: ctl.signal }); }
         catch (e) { if (ctl.signal.aborted) throw ctl.signal.reason?.code ? ctl.signal.reason : Object.assign(Error('Cancelled'), { cancelled: true }); throw Object.assign(Error('Could not reach the media service. Check your internet connection.'), { code: 'offline', cause: e }); }
         if (res.status >= 300 && res.status < 400 && res.headers.get('location')) { res.body?.cancel().catch(() => {}); url = await this.check(new URL(res.headers.get('location'), url).href); method = 'GET'; body = undefined; continue; }
         if (!res.ok) { const text = await res.text().catch(() => ''); throw Object.assign(Error(`The media service answered ${res.status}.`), { status: res.status, retryAfter: res.headers.get('retry-after'), code: res.status === 404 || res.status === 410 ? 'gone' : res.status === 429 ? 'quota' : 'http', body: text.slice(0, 300) }); }

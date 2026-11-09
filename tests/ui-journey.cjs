@@ -1,6 +1,6 @@
 // End-to-end journey in the real desktop app: create → import → arrange → edit → style → export → reopen,
 // plus a pixel comparison between the live preview and the exported file.
-const { _electron: electron } = require('playwright');
+const { launchApp } = require('./launch.cjs');
 const path = require('node:path'), fs = require('node:fs/promises'), os = require('node:os');
 const assert = require('node:assert/strict');
 const { run, ffmpeg, ffprobe } = require('../desktop/tools.cjs');
@@ -14,7 +14,7 @@ const step = n => console.log('· ' + n);
     await run(ffmpeg, ['-y', '-f', 'lavfi', '-i', 'testsrc2=s=1280x720:r=30', '-f', 'lavfi', '-i', 'sine=frequency=330:sample_rate=48000', '-t', '6', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', clip]);
     await run(ffmpeg, ['-y', '-f', 'lavfi', '-i', 'mandelbrot=s=1280x720:r=30', '-t', '5', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', clip2]);
     await run(ffmpeg, ['-y', '-f', 'lavfi', '-i', 'sine=frequency=220:sample_rate=48000', '-t', '10', song]);
-    app = await electron.launch({ args: [path.resolve('.')], env: { ...process.env, FRAMECUT_TEST: '1', FRAMECUT_TEST_DIR: temp } });
+    app = await launchApp({ ...process.env, FRAMECUT_TEST: '1', FRAMECUT_TEST_DIR: temp });
     page = await app.firstWindow();
     page.on('pageerror', e => errors.push('pageerror: ' + e.message));
     page.on('requestfailed', r => r.failure()?.errorText !== 'net::ERR_ABORTED' && errors.push('requestfailed: ' + r.method() + ' ' + new URL(r.url()).pathname + ' ' + r.failure()?.errorText));

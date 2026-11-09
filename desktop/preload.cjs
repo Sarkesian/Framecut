@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('framecut', {
   openPath: p => ipcRenderer.invoke('open-path', p),
   getStorage: () => ipcRenderer.invoke('get-storage'),
   setStorage: s => ipcRenderer.invoke('set-storage', s),
+  openDataFolder: () => ipcRenderer.invoke('open-data-folder'),
   relaunch: () => ipcRenderer.invoke('relaunch'),
   setTitleColors: c => ipcRenderer.invoke('set-title-colors', c),
   toggleFullscreen: () => ipcRenderer.invoke('toggle-fullscreen'),

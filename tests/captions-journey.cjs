@@ -3,7 +3,7 @@
 // captions → accuracy/timing vs ground truth → Word Pop style → fix a word (timing kept) → change the
 // font for all captions → save/reopen → export → exported frames match the preview while words pop.
 // Needs the speech engine; set FRAMECUT_SPEECH_PYTHON / FRAMECUT_SPEECH_HF to an installed environment.
-const { _electron: electron } = require('playwright');
+const { launchApp } = require('./launch.cjs');
 const path = require('node:path'), fs = require('node:fs/promises'), os = require('node:os');
 const assert = require('node:assert/strict');
 const { run, ffmpeg, ffprobe } = require('../desktop/tools.cjs');
@@ -22,7 +22,7 @@ const norm = s => s.toLowerCase().replace(/[^a-z0-9' ]+/g, ' ').trim();
     await run(ffmpeg, ['-y', '-v', 'error', '-i', path.join(BENCH, 'cases', '06_synth_electronic.wav'), '-t', String(voice.duration + rapid.duration), '-af', 'volume=-3dB', music]);
     const truth = [...voice.words, ...rapid.words.map(w => ({ ...w, start: w.start + voice.duration }))];
     const env = { ...process.env, FRAMECUT_TEST_DIR: temp }; delete env.FRAMECUT_TEST;
-    app = await electron.launch({ args: [path.resolve('.')], env }); page = await app.firstWindow();
+    app = await launchApp(env); page = await app.firstWindow();
     page.on('pageerror', e => errors.push('pageerror: ' + e.message)); page.on('console', m => { if (m.type() === 'error' && !/favicon/.test(m.text())) errors.push('console: ' + m.text()); });
     await page.setViewportSize({ width: 1600, height: 960 });
     await page.getByText('New project').first().waitFor();

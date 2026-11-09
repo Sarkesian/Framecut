@@ -7,7 +7,7 @@ const { normalizeProject, newProject, projectDuration, uid } = require('../share
 
 const SAFE_ID = /^[a-z0-9-]{8,64}$/i;
 class Projects {
-  constructor({ dataDir }) { this.root = path.join(dataDir, 'projects'); this.dataDir = dataDir; this.lastBackup = new Map(); }
+  constructor({ dataDir, projectsDir }) { this.root = projectsDir || path.join(dataDir, 'projects'); this.dataDir = dataDir; this.lastBackup = new Map(); }
   async init() {
     await fsp.mkdir(path.join(this.root, '.trash'), { recursive: true });
     // Migrate the single project from FrameCut 1.x.

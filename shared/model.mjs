@@ -84,6 +84,8 @@ export function normalizeProject(raw) {
   p.tracks = Array.isArray(p.tracks) && p.tracks.length ? p.tracks : base.tracks;
   if (!p.tracks.some(t => t.main)) { const v = p.tracks.find(t => t.kind === 'video'); if (v) v.main = true; else p.tracks.splice(Math.max(0, p.tracks.findIndex(t => t.kind === 'audio')), 0, { id: 'main', kind: 'video', name: 'Main', main: true }); }
   p.mediaIds = Array.isArray(p.mediaIds) ? p.mediaIds : []; p.markers = Array.isArray(p.markers) ? p.markers : []; p.favorites = Array.isArray(p.favorites) ? p.favorites : [];
+  // Library license / attribution records (see rights.mjs) travel with the project.
+  p.attributions = p.attributions && typeof p.attributions === 'object' && !Array.isArray(p.attributions) ? p.attributions : {};
   const trackIds = new Set(p.tracks.map(t => t.id));
   p.clips = (Array.isArray(p.clips) ? p.clips : []).filter(c => c && c.kind && trackIds.has(c.trackId)).map(c => {
     const full = deepMerge(newClip(c.kind), c);
