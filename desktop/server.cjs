@@ -14,6 +14,7 @@ const { Studio } = require('./studio.cjs');
 const { Recorder } = require('./recorder.cjs');
 const { NativeAudio } = require('./native-audio.cjs');
 const { Creative } = require('./creative.cjs');
+const { Speech } = require('./speech.cjs');
 const { audioFx: fxOf, audioChain } = require('../shared/audio.mjs');
 const { num } = require('../shared/model.mjs');
 
@@ -33,6 +34,7 @@ async function startServer({ dataDir = path.join(__dirname, '..', '.workspace'),
   const recorder = new Recorder({ dir: path.join(dataDir, 'media', 'recordings'), library }); await recorder.init();
   const nativeAudio = new NativeAudio({ dir: path.join(dataDir, 'media', 'recordings'), library }); await nativeAudio.init();
   const creative = new Creative({ dataDir, cacheDir, library, jobs, secrets, ...creativeOptions }); await creative.init();
+  const speech = new Speech({ dataDir, cacheDir, jobs, prefs: getPrefs, library });
   let provider = { baseUrl: prefs.ai?.baseUrl || '', key: '', model: prefs.ai?.model || '', speechModel: prefs.ai?.speechModel || 'whisper-1' };
 
   const app = express();
@@ -96,6 +98,12 @@ async function startServer({ dataDir = path.join(__dirname, '..', '.workspace'),
   app.get('/media/:id', sendAsset('path'));
   app.get('/proxy/:id', sendAsset('proxy'));
   app.use('/cache', express.static(cacheDir, { dotfiles: 'deny', maxAge: '1d' }));
+
+  // ---------- Captions: local speech engine ----------
+  app.get('/api/captions/engine', wrap(async (req, res) => res.json(await speech.status(req.query.refresh === '1'))));
+  app.post('/api/captions/engine/install', wrap(async (_req, res) => jobReply(res, speech.install())));
+  app.post('/api/captions/transcribe', wrap(async (req, res) => { const b = req.body; jobReply(res, speech.transcribe({ project: b.project, clipIds: (b.clipIds || []).map(String), from: +b.from || 0, to: +b.to, language: String(b.language || ''), quality: b.quality === 'fast' ? 'fast' : 'best', lyrics: b.lyrics !== false, vocabulary: String(b.vocabulary || '').slice(0, 2000) })); }));
+  app.post('/api/captions/align', wrap(async (req, res) => { const b = req.body; jobReply(res, speech.align({ project: b.project, clipIds: (b.clipIds || []).map(String), from: +b.from, to: +b.to, text: String(b.text || '').slice(0, 20000), language: b.language })); }));
 
   // ---------- Creative Library (music, sound effects, stickers) ----------
   app.get('/api/creative/status', (_req, res) => res.json(creative.status()));
@@ -267,7 +275,7 @@ async function startServer({ dataDir = path.join(__dirname, '..', '.workspace'),
 
   const server = await new Promise(resolve => { const s = app.listen(port, '127.0.0.1', () => resolve(s)); });
   const url = 'http://127.0.0.1:' + server.address().port;
-  return { url, library, projects, jobs, studio, creative, async close() { await nativeAudio.stopAll(); for (const j of jobs.jobs.values()) jobs.cancel(j.id); await library.flush().catch(() => {}); await creative.flush().catch(() => {}); server.close(); } };
+  return { url, library, projects, jobs, studio, creative, speech, async close() { await nativeAudio.stopAll(); for (const j of jobs.jobs.values()) jobs.cancel(j.id); await library.flush().catch(() => {}); await creative.flush().catch(() => {}); speech.stop(); server.close(); } };
 }
 if (require.main === module) startServer({ port: +process.env.PORT || 0 }).then(s => console.log('FRAMECUT_URL=' + s.url));
 module.exports = { startServer, run, ffmpeg, ffprobe, num };

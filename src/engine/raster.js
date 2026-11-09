@@ -131,10 +131,29 @@ export function rasterSync(clip, W, H, variant = null, media = null) {
   return key ? cache.get(key) || null : null;
 }
 
-// Rasters for export: PNG data URLs at export size, including word-highlight variants.
-export async function exportRasters(project, W, H, media) {
+// Rasters for export: PNG data URLs at export size, including word-highlight variants. Caption layers
+// are rasterized through the shared caption engine, keyed by plan layer id (same as the preview).
+export async function exportRasters(project, W, H, media, { captionPresets = [] } = {}) {
   const out = {};
+  const { buildPlan } = await import('../../shared/plan.mjs');
+  const { renderCaptionBase, renderCaptionWord, ensureFont } = await import('./captionRaster.js');
+  const capInfo = new Map();
+  const plan = buildPlan(project, { W, H, media, captionPresets, sizes: (id, info) => {
+    if (!info?.eff) return null;
+    capInfo.set(id, info);
+    const r = info.role === 'base' ? renderCaptionBase(info.clip, info.eff, W, H) : renderCaptionWord(info.clip, info.eff, info.word, W, H, info.role);
+    return r ? { w: r.w, h: r.h, boxes: r.boxes, words: r.words } : null;
+  } });
+  for (const info of capInfo.values()) await ensureFont(info.eff.style);
+  capInfo.clear(); buildPlan(project, { W, H, media, captionPresets, sizes: (id, info) => { if (info?.eff) capInfo.set(id, info); return info?.eff ? (info.role === 'base' ? renderCaptionBase(info.clip, info.eff, W, H) : renderCaptionWord(info.clip, info.eff, info.word, W, H, info.role)) : null; } });
+  for (const [id, info] of capInfo) {
+    const r = info.role === 'base' ? renderCaptionBase(info.clip, info.eff, W, H) : renderCaptionWord(info.clip, info.eff, info.word, W, H, info.role); if (!r) continue;
+    out[id] = { w: r.w, h: r.h, boxes: r.boxes, words: r.words, png: r.canvas.toDataURL('image/png'), variants: {} };
+  }
+  void plan;
+  const capTracks = new Set(project.tracks.filter(t => t.captions).map(t => t.id));
   for (const c of project.clips) {
+    if (c.kind === 'text' && (c.caption || capTracks.has(c.trackId))) continue;
     const a = c.mediaId && media(c.mediaId);
     if (!(c.kind === 'text' || (c.kind === 'sticker' && !isMediaSticker(c)) || ((c.kind === 'image' || isMediaSticker(c)) && a?.svg))) continue;
     const r = await rasterFor(c, W, H, media);

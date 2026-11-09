@@ -3,7 +3,7 @@ const path = require('node:path');
 const { buildPlan } = require('../shared/plan.mjs');
 const { dimensions, normalizeProject, stickerMedia } = require('../shared/model.mjs');
 const { fx, filterDef } = require('../shared/catalog.mjs');
-const { fmtNum: f } = require('../shared/expr.mjs');
+const { fmtNum: f, evaluate } = require('../shared/expr.mjs');
 const { keyExpr } = require('../shared/audio.mjs');
 
 const tempo = speed => { const parts = []; let s = speed; while (s > 2) { parts.push('atempo=2'); s /= 2; } while (s < 0.5) { parts.push('atempo=0.5'); s *= 2; } parts.push('atempo=' + f(s)); return parts.join(','); };
@@ -49,7 +49,7 @@ function renderPlan(raw, { assets, rasters = {}, luts = {}, processedAudio = {},
   // Captions are rendered only when burning in.
   if (settings.subtitles && settings.subtitles !== 'burn') for (const t of project.tracks) if (t.captions) t.hidden = true;
   const media = id => assets.get(id);
-  const sizes = id => rasters[id] ? { w: rasters[id].w, h: rasters[id].h } : null;
+  const sizes = id => rasters[id] ? { w: rasters[id].w, h: rasters[id].h, boxes: rasters[id].boxes, words: rasters[id].words } : null;
   const plan = buildPlan(project, { W, H, media, sizes, fps });
   for (const c of project.clips) if ((c.kind === 'video' || c.kind === 'image' || c.kind === 'audio' || stickerMedia(c)) && !media(c.mediaId)) throw Error(`“${c.name || 'A clip'}” is missing its media file. Relink it, then export again.`);
   if (!plan.duration) throw Error('Your timeline is empty. Add a clip before exporting.');
@@ -91,7 +91,8 @@ function renderPlan(raw, { assets, rasters = {}, luts = {}, processedAudio = {},
           const file = v?.key ? r.variants?.[v.key] || r.file : r.file;
           const wvs = v ? Math.max(vs, v.from) : vs, wve = v ? Math.min(ve, v.to) : ve; if (wve - wvs <= 0.001) continue;
           const i = addInput(['-loop', '1', '-framerate', String(fps), '-t', f(wve - wvs + 0.1), '-i', file]);
-          emit(L, i, wvs, wve, [`setpts=PTS-STARTPTS`, `scale=${even(L.baseW)}:${even(L.baseH)}`]);
+          // When the layer scales over time, size it once from the full-resolution PNG (sharp at the peak).
+          emit(L, i, wvs, wve, L.motion.s ? ['setpts=PTS-STARTPTS', 'format=rgba'] : [`setpts=PTS-STARTPTS`, `scale=${even(L.baseW)}:${even(L.baseH)}`]);
         }
         continue;
       }
@@ -149,6 +150,12 @@ function renderPlan(raw, { assets, rasters = {}, luts = {}, processedAudio = {},
       for (const s of L.steps) post.push(`fade=t=in:st=${f(s.at)}:d=${f(1 / fps)}:alpha=1`);
       const m = L.motion;
       if (m.s) post.push(`scale=w='max(2,trunc(${f(L.sw)}*(${m.s})/2)*2)':h='max(2,trunc(${f(L.sh)}*(${m.s})/2)*2)':eval=frame`);
+      // Animated blur (caption blur reveal): sigma stepped per frame with sendcmd, same values as the preview.
+      if (L.blurExpr) {
+        const name = 'gblur@b' + Math.random().toString(36).slice(2, 7), cmds = [];
+        for (let t = vs; t < ve; t += 1 / fps) { const v = evaluate(L.blurExpr, { t }) * H / 1080; cmds.push(`${f(t)} ${name} sigma ${f(Math.max(0, v))}`); if (v <= 0.01) break; }
+        post.push(`sendcmd=c='${cmds.join(';')}'`, `${name}=sigma=0`);
+      }
       const rot = (L.rot0 || 0) !== 0 || m.r;
       if (rot) post.push(`rotate=a='(${f(L.rot0 || 0)}${m.r ? '+' + m.r : ''})*PI/180':c=none:ow='hypot(iw,ih)':oh='hypot(iw,ih)'`);
       const out = `[v${n}_${Math.random().toString(36).slice(2, 7)}]`;

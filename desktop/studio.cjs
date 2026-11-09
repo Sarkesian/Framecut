@@ -196,7 +196,7 @@ class Studio {
         for (const [id, r] of Object.entries(rasters)) {
           const save = async (dataUrl, name) => { const m = /^data:image\/png;base64,(.+)$/.exec(dataUrl || ''); if (!m) throw Error('Text could not be prepared.'); const file = path.join(dir, name); await fsp.writeFile(file, Buffer.from(m[1], 'base64')); return file; };
           const safe = id.replace(/[^a-z0-9-]/gi, '');
-          rasterFiles[id] = { w: r.w, h: r.h, file: await save(r.png, `r-${safe}.png`), variants: {} };
+          rasterFiles[id] = { w: r.w, h: r.h, boxes: r.boxes, words: r.words, file: await save(r.png, `r-${safe}.png`), variants: {} };
           for (const [k, png] of Object.entries(r.variants || {})) rasterFiles[id].variants[k] = await save(png, `r-${safe}-${k.replace(/[^a-z0-9]/gi, '')}.png`);
         }
         const assets = new Map();

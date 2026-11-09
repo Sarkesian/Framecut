@@ -154,6 +154,9 @@ export class Compositor {
       const blur = (c.effects || []).find(e => e.id === 'blur' && e.amount > 0);
       let tex = src.tex, useCrop = crop;
       if (blur) { tex = this.blurTex(src.tex, crop, dw, dh, fx.blurSigma(blur.amount, H) * k, 'lb'); useCrop = [0, 0, 1, 1]; }
+      // Animated blur (caption blur reveal): sigma in px at 1080p, the same numbers the export uses.
+      const dyn = L.blurExpr ? evaluate(L.blurExpr, { t }) * H / 1080 : 0;
+      if (dyn > 0.25) { tex = this.blurTex(tex, useCrop, dw * st.s, dh * st.s, dyn * k, 'cb'); useCrop = [0, 0, 1, 1]; }
       gl.enable(gl.BLEND); gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
       this.drawLayer(L, { tex, crop: useCrop, displayW: dw, displayH: dh, target: cur, geom: { cx: (L.cx + st.dx) * k, cy: (L.cy + st.dy) * k, hw: dw * st.s / 2, hh: dh * st.s / 2, rot: st.r * Math.PI / 180 }, alpha: st.alpha, t, k, H, glitch });
     }

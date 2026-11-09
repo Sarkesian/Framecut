@@ -1,6 +1,7 @@
 // Application state (Preact signals), editing history and autosave.
 import { signal, computed, batch, effect } from '@preact/signals';
 import { normalizeProject, packMain, projectDuration } from '../../shared/model.mjs';
+import { reconcileWords } from '../../shared/captions.mjs';
 import { api } from './api.js';
 import { ui, setUi } from './uiprefs.js';
 
@@ -47,6 +48,7 @@ export function commit(label, fn, { key = null, select, window: win = 1200 } = {
   const draft = structuredClone(prev);
   const result = fn(draft); if (result === false) return;
   packMain(draft);
+  for (const c of draft.clips) if (c.caption && c.words?.length) reconcileWords(c); // text edits anywhere keep word timing
   const now = Date.now(), g = gesture.active ? gesture.id : null;
   const merge = !!key && coalesce.key === key && (g !== null || coalesce.g !== null ? g === coalesce.g : now - coalesce.at < win);
   coalesce = { key, at: now, g };

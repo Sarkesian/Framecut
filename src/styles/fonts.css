@@ -1,0 +1,8 @@
+/* Bundled caption fonts (SIL Open Font License 1.1, see src/assets/fonts/OFL-*.txt). Used by the
+   caption rasterizer, so captions look identical on every computer, in preview and in export. */
+@font-face { font-family: 'Inter'; src: url('../assets/fonts/Inter-Variable.ttf') format('truetype'); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'Montserrat'; src: url('../assets/fonts/Montserrat-Variable.ttf') format('truetype'); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'Poppins'; src: url('../assets/fonts/Poppins-SemiBold.ttf') format('truetype'); font-weight: 600; font-style: normal; font-display: block; }
+@font-face { font-family: 'Poppins'; src: url('../assets/fonts/Poppins-Bold.ttf') format('truetype'); font-weight: 700 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'Anton'; src: url('../assets/fonts/Anton-Regular.ttf') format('truetype'); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: 'Playfair Display'; src: url('../assets/fonts/PlayfairDisplay-Italic-Variable.ttf') format('truetype'); font-weight: 400 900; font-style: italic; font-display: block; }

@@ -6,6 +6,8 @@ import './styles/editor.css';
 import './styles/timeline.css';
 import './styles/studio.css';
 import './styles/library.css';
+import './styles/fonts.css';
+import './styles/captions.css';
 import { route, prefs, health, fonts, userLuts, refreshMedia, openProject, media, jobs, toast } from './lib/state.js';
 import { api } from './lib/api.js';
 import { installTooltips, TooltipHost, MenuHost, DialogHost, ToastHost } from './ui/kit.jsx';
@@ -14,12 +16,15 @@ import { Editor } from './ui/Editor.jsx';
 import * as stateMod from './lib/state.js';
 import * as editMod from './lib/edit.js';
 import * as studioMod from './ui/Studio.jsx';
+import * as whisperMod from './lib/whisper.js';
+import * as captionsMod from './lib/captions.js';
+import * as rasterMod from './engine/raster.js';
 import * as dragMod from './lib/drag.js';
 import * as keysMod from './lib/keyedit.js';
 import * as viewportMod from './lib/viewport.js';
 import * as uiMod from './lib/uiprefs.js';
 // Automation hooks used by the end-to-end tests.
-window.__fc = { state: stateMod, edit: editMod, studio: studioMod, api, drag: dragMod, keys: keysMod, viewport: viewportMod, ui: uiMod };
+window.__fc = { state: stateMod, edit: editMod, studio: studioMod, api, drag: dragMod, keys: keysMod, viewport: viewportMod, ui: uiMod, whisper: whisperMod, captions: captionsMod, raster: rasterMod };
 
 function App() {
   useEffect(() => {

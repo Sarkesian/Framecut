@@ -1,5 +1,6 @@
 // FrameCut project model (format version 2), defaults, migration and timeline helpers.
 import { TEXT_STYLE, CAPTION_STYLE } from './catalog.mjs';
+import { migrateCaptions } from './captions.mjs';
 
 export const PROJECT_VERSION = 2;
 export const RATIOS = {
@@ -91,6 +92,7 @@ export function normalizeProject(raw) {
     return full;
   });
   for (const c of p.clips) if (c.mediaId && !p.mediaIds.includes(c.mediaId)) p.mediaIds.push(c.mediaId);
+  migrateCaptions(p);
   return p;
 }
 

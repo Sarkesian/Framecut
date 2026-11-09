@@ -9,6 +9,7 @@ import { signal } from '@preact/signals';
 // Bumped whenever a text/sticker raster finishes, so on-canvas handles can re-measure the layer.
 export const rasterReady = signal(0);
 import { rasterSync, rasterFor } from './raster.js';
+import { renderCaptionBase, renderCaptionWord, ensureFont } from './captionRaster.js';
 
 export class Player {
   constructor({ canvas, getProject, getMedia, onTime, onPlaying, onError }) {
@@ -27,7 +28,7 @@ export class Player {
     const p = this.getProject(); if (!p) return null;
     const [W, H] = dimensions(p.settings.ratio, p.settings.resolution);
     const media = id => this.getMedia(id);
-    this.plan = buildPlan(p, { W, H, media, sizes: id => { const c = p.clips.find(x => x.id === id); const r = c && this.raster(c, W, H); return r ? { w: r.w, h: r.h } : null; } });
+    this.plan = buildPlan(p, { W, H, media, captionPresets: this.captionPresets?.() || [], sizes: (id, info) => { if (info?.eff) { const r = this.capRaster(info, W, H); return r ? { w: r.w, h: r.h, boxes: r.boxes, words: r.words } : null; } const c = p.clips.find(x => x.id === id); const r = c && this.raster(c, W, H); return r ? { w: r.w, h: r.h } : null; } });
     this.plan.bg = p.settings.background?.type === 'color' ? p.settings.background.color : '#000000';
     for (const c of p.clips) if (c.filter?.id) this.loadLut(c.filter.id);
     return this.plan;
@@ -38,6 +39,16 @@ export class Player {
     const key = c.id + JSON.stringify(c.sticker || c.mediaId);
     if (!this.pendingRasters.has(key)) { this.pendingRasters.add(key); rasterFor(c, W, H, id => this.getMedia(id)).then(() => { this.pendingRasters.delete(key); this.svgDone ||= new Map(); this.invalidate(); rasterReady.value++; }).catch(() => {}); }
     return null;
+  }
+  // Caption rasters (base image or one word); fonts load first, so the first draw may come a frame later.
+  capRaster(info, W, H) {
+    const fontKey = JSON.stringify([info.eff.style.font, info.eff.style.weight, info.eff.style.italic]);
+    if (!this.fontsReady?.has(fontKey)) {
+      this.fontsReady ||= new Set(); this.fontsPending ||= new Set();
+      if (!this.fontsPending.has(fontKey)) { this.fontsPending.add(fontKey); ensureFont(info.eff.style).then(() => { this.fontsReady.add(fontKey); this.invalidate(); rasterReady.value++; }); }
+      return null;
+    }
+    return info.role === 'base' ? renderCaptionBase(info.clip, info.eff, W, H) : renderCaptionWord(info.clip, info.eff, info.word, W, H, info.role);
   }
   async loadLut(id) {
     if (this.comp.luts.has(id) || this.lutsLoading.has(id)) return; this.lutsLoading.add(id);
@@ -183,6 +194,7 @@ export class Player {
     const [W, H] = [plan.W, plan.H];
     this.comp.render({
       plan, t, bg: plan.bg, source: L => {
+        if (L.type === 'raster' && L.cap) { const r = this.capRaster({ clip: L.clip, eff: L.cap.eff, role: L.cap.role, word: L.cap.word }, W, H); return r ? this.comp.source('r:' + r.key, r.canvas, r.key) : null; }
         if (L.type === 'raster') {
           const v = L.variants?.findIndex(x => t >= x.from && t < x.to);
           const r = this.raster(L.clip, W, H, v >= 0 ? v : null); if (!r) return null;

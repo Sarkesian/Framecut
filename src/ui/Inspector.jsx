@@ -13,6 +13,7 @@ import { RATIOS, RESOLUTIONS, FRAME_RATES, clipEnd, transitionPartner, maxTransi
 import { shortTime } from '../lib/format.js';
 import { userLuts } from '../lib/state.js';
 import { AudioPanel } from './AudioPanel.jsx';
+import { CaptionInspector } from './Captions.jsx';
 import { signal } from '@preact/signals';
 import { removeBackground, matteStatus, MATTE_MODEL } from '../lib/matte.js';
 import { confirm, Progress } from './kit.jsx';
@@ -28,13 +29,14 @@ export function Inspector() {
   const c = primary.value; const n = selection.value.length;
   const [tab, setTab] = useState({});
   if (!c) return <ProjectPanel />;
-  const tabs = TABS[c.kind] || ['Basic']; const active = tabs.includes(tab[c.kind]) ? tab[c.kind] : tabs[0];
+  const isCaption = c.kind === 'text' && (c.caption || project.value.tracks.find(t => t.id === c.trackId)?.captions);
+  const tabs = isCaption ? ['Caption', 'Basic'] : TABS[c.kind] || ['Basic']; const active = tabs.includes(tab[c.kind]) ? tab[c.kind] : tabs[0];
   const [label, Icon] = KIND[c.kind] || ['Clip', Film];
   return <div class="inspector">
     <div class="insp-head"><span class={`kind-dot k-${c.kind}`}><Icon size={13} /></span><div class="grow ellipsis"><b class="ellipsis">{c.caption ? 'Caption' : c.name || label}</b><small class="muted">{label} · {shortTime(c.duration)}{n > 1 ? ` · ${n} selected` : ''}</small></div></div>
     <div class="insp-tabs" role="tablist">{tabs.map(t => <button key={t} role="tab" aria-selected={active === t} class={active === t ? 'on' : ''} onClick={() => setTab({ ...tab, [c.kind]: t })}>{t}</button>)}</div>
     <div class="insp-scroll">{
-      active === 'Basic' ? <BasicPanel c={c} /> : active === 'Color' ? <ColorPanel c={c} /> : active === 'Effects' ? <EffectsPanel c={c} /> : active === 'Animation' ? <AnimPanel c={c} />
+      active === 'Caption' ? <CaptionInspector c={c} /> : active === 'Basic' ? <BasicPanel c={c} /> : active === 'Color' ? <ColorPanel c={c} /> : active === 'Effects' ? <EffectsPanel c={c} /> : active === 'Animation' ? <AnimPanel c={c} />
         : active === 'Speed' ? <SpeedPanel c={c} /> : active === 'Audio' ? <AudioPanel c={c} /> : active === 'Text' ? <TextPanel c={c} /> : null}<SourceSection c={c} /></div>
   </div>;
 }

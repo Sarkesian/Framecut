@@ -16,6 +16,7 @@ import { transcribe, groupWords } from '../lib/whisper.js';
 import { freeTrack } from '../lib/edit.js';
 import { openStudio } from './Studio.jsx';
 import { AudioLibrary, StickerLibrary } from './Library.jsx';
+import { CaptionsPanel } from './Captions.jsx';
 
 const TABS = [['media', 'Media', Film], ['audio', 'Audio', Music], ['text', 'Text', Type], ['stickers', 'Stickers', Smile], ['effects', 'Effects', Sparkles], ['transitions', 'Transitions', Blend], ['filters', 'Filters', Palette], ['captions', 'Captions', Captions], ['templates', 'Templates', LayoutTemplate]];
 export const dragPayload = (e, data) => { e.dataTransfer.setData('application/x-framecut', JSON.stringify(data)); e.dataTransfer.effectAllowed = 'copy'; window.__fcDrag = data; };
@@ -24,7 +25,7 @@ export function AssetPanel() {
   const tab = libraryTab.value;
   return <div class="assets">
     <nav class="asset-rail" aria-label="Asset categories">{TABS.map(([id, label, Icon]) => <button key={id} class={`rail-btn ${tab === id ? 'on' : ''}`} onClick={() => (libraryTab.value = id)} aria-pressed={tab === id}><Icon size={18} /><span>{label}</span></button>)}</nav>
-    <div class="asset-content">{{ media: <MediaTab />, audio: <AudioLibrary />, text: <TextTab />, stickers: <StickerLibrary />, effects: <EffectsTab />, transitions: <TransitionsTab />, filters: <FiltersTab />, captions: <CaptionsTab />, templates: <TemplatesTab /> }[tab]}</div>
+    <div class="asset-content">{{ media: <MediaTab />, audio: <AudioLibrary />, text: <TextTab />, stickers: <StickerLibrary />, effects: <EffectsTab />, transitions: <TransitionsTab />, filters: <FiltersTab />, captions: <CaptionsPanel />, templates: <TemplatesTab /> }[tab]}</div>
   </div>;
 }
 const Head = ({ title, children }) => <div class="asset-head"><h2>{title}</h2><div class="grow" />{children}</div>;
@@ -152,77 +153,7 @@ function TransitionsTab() {
 }
 
 // ---------------- Captions ----------------
-function CaptionsTab() {
-  const p = project.value;
-  const capTrack = p.tracks.find(t => t.captions);
-  const caps = capTrack ? p.clips.filter(c => c.trackId === capTrack.id).sort((a, b) => a.start - b.start) : [];
-  const [job, setJob] = useState(null), [lang, setLang] = useState(''), [scope, setScope] = useState('all');
-  const abort = useRef(null);
-  const sources = () => {
-    const sel = p.clips.filter(c => selection.value.includes(c.id) && (c.kind === 'video' || c.kind === 'audio') && asset(c.mediaId)?.audio);
-    if (scope === 'selected') return sel;
-    const tr = id => p.tracks.find(t => t.id === id);
-    return p.clips.filter(c => (c.kind === 'video' || c.kind === 'audio') && !c.muted && !tr(c.trackId)?.muted && asset(c.mediaId)?.audio && (c.kind === 'audio' || !c.detachedAudio));
-  };
-  const generate = async () => {
-    const list = sources(); if (!list.length) return toast(scope === 'selected' ? 'Select a clip with speech first.' : 'Add a video or audio clip with speech first.', 'warn');
-    const ctl = new AbortController(); abort.current = ctl;
-    try {
-      const all = [];
-      for (let i = 0; i < list.length; i++) {
-        const c = list[i];
-        setJob({ i, n: list.length, msg: 'Preparing…', p: null });
-        const r = await transcribe({ mediaId: c.mediaId, from: c.in, to: c.in + c.duration * (c.speed || 1), model: prefs.value.captionModel || 'base', language: lang || undefined, signal: ctl.signal, onProgress: d => setJob({ i, n: list.length, msg: d.message, p: d.progress ?? null }) });
-        // map source time → timeline time
-        for (const w of r.words) all.push({ start: c.start + (w.start - c.in) / (c.speed || 1), end: c.start + (w.end - c.in) / (c.speed || 1), text: w.text });
-      }
-      all.sort((a, b) => a.start - b.start);
-      if (!all.length) { toast('No speech was found.', 'warn'); return; }
-      const lines = groupWords(all).map(l => ({ ...l, words: l.words.map(w => ({ start: w.start - l.start, end: w.end - l.start, text: w.text })) }));
-      const lo = Math.min(...list.map(c => c.start)), hi = Math.max(...list.map(clipEnd));
-      const preset = CAPTION_PRESETS.find(x => x.id === p.captionPreset);
-      insertCaptions(lines, { replaceRange: [lo, hi], style: preset?.style });
-      toast(`${lines.length} captions added. Click any caption to edit its text.`);
-    } catch (e) { if (!e.cancelled) toast('Captions could not be generated: ' + e.message, 'error'); }
-    finally { setJob(null); abort.current = null; }
-  };
-  const importSubs = async () => {
-    const f = await pickFile({ title: 'Import subtitles', extensions: ['srt', 'vtt', 'ass', 'ssa'] }); if (!f) return;
-    const text = f.file ? await f.file.text() : await (await fetch('/api/read-text?path=' + encodeURIComponent(f.path))).text().catch(() => '');
-    const segs = parseSubtitles(text); if (!segs.length) return toast('No timed captions were found in that file.', 'error');
-    insertCaptions(segs); toast(`${segs.length} captions imported.`);
-  };
-  const exportSrt = () => {
-    if (!caps.length) return;
-    const ts = s => { const ms = Math.round(s * 1000); const p2 = (n, l = 2) => String(n).padStart(l, '0'); return `${p2(Math.floor(ms / 3600000))}:${p2(Math.floor(ms / 60000) % 60)}:${p2(Math.floor(ms / 1000) % 60)},${p2(ms % 1000, 3)}`; };
-    const blob = new Blob([caps.map((c, i) => `${i + 1}\n${ts(c.start)} --> ${ts(clipEnd(c))}\n${c.text}\n`).join('\n')], { type: 'text/plain' });
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = p.name + '.srt'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-  };
-  const applyPreset = pr => commit('Caption style', d => { d.captionPreset = pr.id; for (const c of d.clips) if (capTrack && c.trackId === capTrack.id) c.style = { ...CAPTION_STYLE, ...pr.style }; });
-  return <div class="tab-body">
-    <Head title="Captions" />
-    <div class="caption-gen">
-      <div class="row"><Wand2 size={17} class="accentc" /><b class="grow">Auto captions</b><span class="chip">On this computer</span></div>
-      <p class="muted">Whisper listens to your clips and writes timed, editable captions.</p>
-      <div class="field-row"><Select value={scope} options={[['all', 'All clips with sound'], ['selected', 'Selected clips only']]} onChange={setScope} /><Select value={lang} options={[['', 'Detect language'], ['english', 'English'], ['spanish', 'Spanish'], ['french', 'French'], ['german', 'German'], ['italian', 'Italian'], ['portuguese', 'Portuguese'], ['japanese', 'Japanese'], ['korean', 'Korean'], ['chinese', 'Chinese'], ['russian', 'Russian'], ['hindi', 'Hindi'], ['arabic', 'Arabic']]} onChange={setLang} /></div>
-      {job ? <div class="col"><div class="row"><span class="grow ellipsis">{job.msg}{job.n > 1 ? ` · clip ${job.i + 1} of ${job.n}` : ''}</span><button class="btn sm" onClick={() => abort.current?.abort()}>Cancel</button></div><Progress value={job.p ?? 0} indeterminate={job.p === null} /></div>
-        : <button class="btn primary block" onClick={generate}><Captions size={15} />Generate captions</button>}
-    </div>
-    <div class="row" style={{ margin: '12px 0' }}><button class="btn sm grow" onClick={importSubs}><FileText size={13} />Import .srt / .vtt</button><button class="btn sm grow" disabled={!caps.length} onClick={exportSrt}><Download size={13} />Save .srt</button></div>
-    <h4 class="group-title">Style</h4>
-    <div class="tile-grid three">{CAPTION_PRESETS.map(pr => <button key={pr.id} class={`tile text-tile ${p.captionPreset === pr.id ? 'on' : ''}`} onClick={() => applyPreset(pr)}><TextPreview style={{ ...CAPTION_STYLE, ...pr.style, highlight: false, color: pr.style.highlight ? pr.style.highlightColor : (pr.style.color || '#fff') }} text="Hello" /><span>{pr.name}</span></button>)}</div>
-    <h4 class="group-title row">Captions <span class="muted">{caps.length || ''}</span>{caps.length > 0 && <button class="btn ghost sm" style={{ marginLeft: 'auto' }} onClick={async () => { if (await confirm({ title: 'Remove all captions?', text: 'You can undo this.', ok: 'Remove', danger: true })) commit('Remove captions', d => { d.clips = d.clips.filter(c => c.trackId !== capTrack.id); }); }}>Clear</button>}</h4>
-    {!caps.length ? <p class="muted">No captions yet.</p> : <div class="caption-list">{caps.map(c => <CaptionRow key={c.id} c={c} />)}</div>}
-  </div>;
-}
-function CaptionRow({ c }) {
-  const [text, setText] = useDraft(c.text);
-  const active = time.value >= c.start && time.value < clipEnd(c);
-  return <div class={`caption-row ${active ? 'on' : ''} ${selection.value.includes(c.id) ? 'sel' : ''}`} onClick={() => { player.current?.seek(c.start + 0.001); selection.value = [c.id]; }}>
-    <span class="mono muted">{shortTime(c.start)}</span>
-    <textarea class="cap-text" rows={1} value={text} onInput={e => setText(e.target.value)} onBlur={e => { const v = e.target.value; if (v !== c.text) commit('Edit caption', p => { const x = p.clips.find(k => k.id === c.id); x.text = v; const n = v.split(/\s+/).filter(Boolean).length; if (x.words && x.words.length !== n) x.words = null; x.name = v.slice(0, 40); }); }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.target.blur(); } }} />
-  </div>;
-}
+// Captions moved to Captions.jsx (shared caption engine). The subtitle parser below is still used there.
 export function parseSubtitles(text) {
   const src = String(text).replace(/^﻿/, '').replace(/\r/g, '');
   const sec = s => { const a = s.trim().replace(',', '.').split(':').map(Number); return a.reduce((v, n) => v * 60 + n, 0); };

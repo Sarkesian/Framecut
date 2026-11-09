@@ -3,6 +3,7 @@
 import { substitute, EASE, evaluate, fmtNum } from './expr.mjs';
 import { transitionDef, animDef, effectDef, fx } from './catalog.mjs';
 import { clipEnd, srcOut, isVisual, transitionPartner, stickerMedia } from './model.mjs';
+import { resolveCaption, captionMotion, wordOverlays } from './captions.mjs';
 
 // Library stickers start at this fraction of the canvas height (longest side), before the clip's scale.
 export const STICKER_BOX = 0.36;
@@ -21,7 +22,9 @@ export const hasAudioFx = c => needsProcessing(c);
 // Short stable key for the processed-audio cache.
 export function audioFxKey(c) { const str = fxKey(c); let h1 = 0x811c9dc5, h2 = 0; for (let i = 0; i < str.length; i++) { h1 = Math.imul(h1 ^ str.charCodeAt(i), 16777619) >>> 0; h2 = (h2 * 31 + str.charCodeAt(i)) >>> 0; } return h1.toString(36) + h2.toString(36); }
 
-export function buildPlan(project, { W, H, media = () => null, sizes = () => null, fps = project.settings.fps } = {}) {
+export function buildPlan(project, { W, H, media = () => null, sizes = () => null, fps = project.settings.fps, captionPresets = [] } = {}) {
+  const capTracks = new Set(project.tracks.filter(t => t.captions).map(t => t.id));
+  const isCaption = c => c.kind === 'text' && (c.caption || capTracks.has(c.trackId));
   const layers = [], audio = [];
   const tracks = project.tracks;
   const visualTracks = tracks.filter(t => t.kind !== 'audio').slice().reverse(); // bottom → top
@@ -94,6 +97,37 @@ export function buildPlan(project, { W, H, media = () => null, sizes = () => nul
     s: m.s.length ? m.s.map(s => `(${s})`).join('*') : null,
     r: m.r.length ? m.r.join('+') : null,
   });
+  // Captions (shared caption engine): a stable base image per group plus per-word overlays that follow
+  // the base motion. Rasters are looked up by layer id: <clip> for the base, <clip>:<role><word> for words.
+  const captionLayers = (c, track) => {
+    const eff = resolveCaption(project, c, { presets: captionPresets }), st = eff.style, tr = c.transform || {};
+    const info = sizes(c.id, { clip: c, eff, role: 'base' }) || { w: W * 0.4, h: H * 0.08, boxes: [] };
+    const k0 = Math.max(0.01, tr.scale ?? 1), start = c.start, end = clipEnd(c);
+    const cx = W / 2 + ((st.x || 0) + (tr.x || 0)) * W, cy = H / 2 + ((st.y || 0) + (tr.y || 0)) * H;
+    const mo = captionMotion(eff.anim, start, end, { W, H });
+    const sExpr = mo.s.length ? mo.s.map(s => `(${s})`).join('*') : null;
+    const motion = { x: mo.x.length ? `${f(W)}*(${mo.x.join('+')})` : null, y: mo.y.length ? `${f(H)}*(${mo.y.join('+')})` : null, s: sExpr, r: null };
+    const common = { clip: c, trackId: track.id, rot0: tr.rotation || 0, opacity: tr.opacity ?? 1, flipH: false, flipV: false, steps: [], cap: { eff } };
+    const out = [];
+    const baseL = { ...common, id: c.id, type: 'raster', vs: start, ve: end, baseW: info.w * k0, baseH: info.h * k0, cx, cy, motion, fades: mo.fades, cap: { eff, role: 'base' } };
+    if (mo.blur) baseL.blurExpr = mo.blur;
+    if (!mo.hidden) out.push(baseL);
+    const abs = (c.words || []).map(w => ({ ...w, start: start + w.start, end: start + w.end }));
+    if (abs.length && abs.length === (info.words ?? abs.length)) for (const ov of wordOverlays(eff.anim, abs, start, end)) {
+      const b = info.boxes?.[ov.i]; if (!b) continue;
+      const id = `${c.id}:${ov.role}${ov.i}`, ws = sizes(id, { clip: c, eff, role: ov.role, word: ov.i }) || { w: b.w, h: b.h };
+      const bx = b.x * k0, by = b.y * k0;
+      // Follow the base: offset scales with the base, plus the word's own motion.
+      const xs = [motion.x, sExpr && bx ? `${f(bx)}*((${sExpr})-1)` : null].filter(Boolean), ys = [motion.y, sExpr && by ? `${f(by)}*((${sExpr})-1)` : null, ov.y ? `${f(H)}*(${ov.y})` : null].filter(Boolean);
+      // Never let a popping word overlap its neighbours: cap its growth to the gap around it.
+      let os = ov.s; const peak = Math.max(1, eff.anim.emph?.peak ?? 1);
+      if (os && peak > 1 && b.gapL !== undefined) { const smax = 1 + 1.35 * Math.min(b.gapL, b.gapR) / Math.max(1, b.w); if (smax < peak) os = `1+((${os})-1)*${f(Math.max(0, (smax - 1) / (peak - 1)))}`; }
+      const ss = [sExpr, os].filter(Boolean);
+      const fades = mo.fades.filter(fd => fd.dir === 'out' || ov.role !== 'reveal').concat(ov.fade ? [{ dir: 'in', st: ov.from, d: ov.fade }] : []);
+      out.push({ ...common, id, type: 'raster', vs: ov.from, ve: ov.to, baseW: ws.w * k0, baseH: ws.h * k0, cx: cx + bx, cy: cy + by, motion: { x: xs.length ? xs.join('+') : null, y: ys.length ? ys.join('+') : null, s: ss.length ? ss.map(s => `(${s})`).join('*') : null, r: null }, fades, blurExpr: ov.role === 'reveal' ? null : baseL.blurExpr, cap: { eff, role: ov.role, word: ov.i } });
+    }
+    return out;
+  };
   const mediaLayer = (c, track) => {
     const m = M(c.id), a = media(c.mediaId) || {};
     const L = { id: c.id, type: isRaster(c) ? 'raster' : c.kind === 'adjust' ? 'adjust' : 'media', clip: c, trackId: track.id, vs: m.vs, ve: m.ve, ...geometry(c), motion: exprOf(m), fades: m.fades, steps: m.steps };
@@ -110,6 +144,7 @@ export function buildPlan(project, { W, H, media = () => null, sizes = () => nul
       layers.push({ id: c.id + ':bg', type: 'bgblur', clip: c, trackId: track.id, vs: m.vs, ve: m.ve, mediaId: c.mediaId, image: c.kind === 'image', srcDuration: a.duration || 0, blur: fx.blurSigma(Math.min(1, (bg.blur || 24) / 60), H) * 1.6, fades: [], steps: [], motion: { x: null, y: null, s: null, r: null } });
     }
     for (const c of clips) {
+      if (isCaption(c)) { layers.push(...captionLayers(c, track)); continue; }
       layers.push(mediaLayer(c, track));
       for (const d of dips) if (d.after === c.id) layers.push({ id: c.id + ':dip', type: 'dip', clip: c, trackId: track.id, vs: d.st, ve: d.st + d.d, color: d.color, fades: [{ dir: 'in', st: d.st, d: d.d / 2 }, { dir: 'out', st: d.st + d.d / 2, d: d.d / 2 }], steps: [], motion: { x: null, y: null, s: null, r: null } });
     }
