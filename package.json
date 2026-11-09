@@ -14,7 +14,8 @@
     "package": "npm run build && electron-builder --win portable --x64",
     "build:native": "node scripts/build-native.cjs",
     "build:icons": "electron scripts/build-icons.cjs",
-    "test:native": "npm run build && node tests/native-journey.cjs"
+    "test:native": "npm run build && node tests/native-journey.cjs",
+    "test:captions": "npm run build && node tests/captions-journey.cjs"
   },
   "dependencies": {
     "@preact/signals": "^2.11.4",

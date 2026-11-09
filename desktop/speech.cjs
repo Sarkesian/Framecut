@@ -86,7 +86,7 @@ class Speech {
     };
     const proc = { kill: () => {} }; this.proc = proc;
     server.once('listening', () => {
-      const child = spawn(python, ['-I', path.join(__dirname, 'speech', 'worker.py'), '--port', String(port())], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, HF_HOME: hfHome, PYTHONIOENCODING: 'utf-8', HF_HUB_DISABLE_SYMLINKS_WARNING: '1', TRANSFORMERS_VERBOSITY: 'error' } });
+      const child = spawn(python, ['-I', path.join(__dirname, 'speech', 'worker.py').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`), '--port', String(port())], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, HF_HOME: hfHome, PYTHONIOENCODING: 'utf-8', HF_HUB_DISABLE_SYMLINKS_WARNING: '1', TRANSFORMERS_VERBOSITY: 'error' } });
       proc.kill = () => child.kill(); proc.child = child;
       child.stderr.on('data', d => { this.err = (this.err + d).slice(-8000); });
       child.on('exit', code => onExit(code));
