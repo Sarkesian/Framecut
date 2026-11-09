@@ -12,7 +12,7 @@ const PLAYABLE_EXT = new Set(['.mp4', '.m4v', '.mov', '.webm', '.mkv', '.mp3', '
 const MEDIA_EXT = /\.(mp4|m4v|mov|avi|mkv|webm|flv|wmv|mpg|mpeg|ts|mts|m2ts|3gp|mxf|mp3|wav|aac|ogg|oga|opus|flac|m4a|wma|aif|aiff|jpg|jpeg|png|gif|bmp|webp|svg|tif|tiff)$/i;
 
 // Provenance shown to the UI: who made it, where it came from and under which license (no internal URLs).
-const SOURCE_FIELDS = ['provider', 'sourceId', 'kind', 'title', 'creator', 'creatorUrl', 'sourcePageUrl', 'sourceName', 'license', 'licenseVersion', 'licenseUrl', 'attribution', 'holder', 'rights', 'importedAt', 'metadataCheckedAt', 'licenseEvidenceUrl', 'glyph', 'durationMs'];
+const SOURCE_FIELDS = ['provider', 'sourceId', 'kind', 'title', 'creator', 'creatorUrl', 'sourcePageUrl', 'sourceName', 'license', 'licenseVersion', 'licenseUrl', 'attribution', 'holder', 'rights', 'importedAt', 'metadataCheckedAt', 'licenseEvidenceUrl', 'licenseRecord', 'glyph', 'durationMs'];
 const publicSource = s => Object.fromEntries(SOURCE_FIELDS.filter(k => s[k] !== undefined && s[k] !== null).map(k => [k, s[k]]));
 
 class Library {

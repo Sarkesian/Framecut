@@ -83,7 +83,7 @@ test('Openverse adapter: search, rate limits, license re-check, bad downloads an
     const tone = path.join(dir, 'tone.mp3'); await run(ffmpeg, ['-y', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=44100', '-t', '2', '-c:a', 'libmp3lame', '-b:a', '96k', tone]);
     const toneBytes = await fs.readFile(tone);
     let base = ''; const hits = { search: 0 }; let limited = false; const licenses = { a: 'by', b: 'by', c: 'cc0', d: 'cc0', e: 'by' };
-    const item = id => ({ id: `0000000${id}-0000-0000-0000-000000000000`.slice(-36).replace(/^0+/, m => '0'.repeat(m.length)), title: `Track ${id}.wav`, url: `${base}/file/${id}`, creator: 'Tester', creator_url: 'https://example.org/t', foreign_landing_url: `https://example.org/track/${id}`, license: licenses[id], license_version: '4.0', license_url: 'https://creativecommons.org/licenses/by/4.0/', source: 'freesound', provider: 'freesound', duration: 2000, filetype: 'mp3', tags: [{ name: 'whoosh' }], attribution: `"Track ${id}" by Tester is licensed under CC BY 4.0.` });
+    const item = id => ({ id: `0000000${id}-0000-0000-0000-000000000000`.slice(-36).replace(/^0+/, m => '0'.repeat(m.length)), title: `Track ${id}.wav`, url: `${base}/file/${id}`, creator: 'Tester', creator_url: 'https://example.org/t', foreign_landing_url: `https://example.org/track/${id}`, license: licenses[id], license_version: licenses[id] === 'cc0' ? '1.0' : '4.0', license_url: licenses[id] === 'cc0' ? 'https://creativecommons.org/publicdomain/zero/1.0/' : `https://creativecommons.org/licenses/${licenses[id]}/4.0/`, source: 'freesound', provider: 'freesound', duration: 2000, filetype: 'mp3', tags: [{ name: 'whoosh' }], attribution: licenses[id] === 'cc0' ? `"Track ${id}" by Tester is marked with CC0 1.0.` : `"Track ${id}" by Tester is licensed under CC ${licenses[id].toUpperCase()} 4.0.` });
     const ids = ['a', 'b', 'c', 'd', 'e']; const uuid = id => item(id).id;
     srv = http.createServer((req, res) => {
       const u = new URL(req.url, base);
@@ -105,14 +105,14 @@ test('Openverse adapter: search, rate limits, license re-check, bad downloads an
     await new Promise(r => srv.listen(0, '127.0.0.1', r)); base = `http://127.0.0.1:${srv.address().port}`;
     s = await startServer({ dataDir: path.join(dir, 'data'), creative: { http: new SafeHttp({ allowLocal: true }), openverseBase: base + '/v1' } });
     const call = api(s.url);
-    const r1 = await call('/api/creative/search?provider=openverse&kind=sfx&q=whoosh');
+    const r1 = await call('/api/creative/search?provider=openverse&kind=sfx&include=credit&q=whoosh');
     assert.equal(r1.items.length, 5, 'malformed, mature and duplicate results are dropped');
     assert.equal(r1.items[0].title, 'Track a', 'file extension stripped from titles');
     assert.ok(!('downloadUrl' in r1.items[0]), 'download URLs stay on the service');
-    await call('/api/creative/search?provider=openverse&kind=sfx&q=whoosh'); assert.equal(hits.search, 1, 'repeated searches are served from cache');
+    await call('/api/creative/search?provider=openverse&kind=sfx&include=credit&q=whoosh'); assert.equal(hits.search, 1, 'repeated searches are served from cache');
     limited = true;
-    await assert.rejects(call('/api/creative/search?provider=openverse&kind=sfx&q=other'), e => e.code === 'quota' && e.retryAfter === 42);
-    await assert.rejects(call('/api/creative/search?provider=openverse&kind=sfx&q=third'), e => e.code === 'quota', 'client backs off without calling again');
+    await assert.rejects(call('/api/creative/search?provider=openverse&kind=sfx&include=credit&q=other'), e => e.code === 'quota' && e.retryAfter === 42);
+    await assert.rejects(call('/api/creative/search?provider=openverse&kind=sfx&include=credit&q=third'), e => e.code === 'quota', 'client backs off without calling again');
     assert.equal(hits.search, 2);
     s.creative.providers.openverse.blockedUntil = 0; limited = false; // the back-off window has been shown to work; continue
     // Import: license is re-checked from the detail endpoint; a changed license blocks the import.
@@ -133,7 +133,7 @@ test('Openverse adapter: search, rate limits, license re-check, bad downloads an
     const again = await call('/api/creative/import', { provider: 'openverse', id: uuid('a'), kind: 'sfx' }); assert.equal(again.reused, true); assert.equal(again.asset.id, a.id);
     j = await waitJob(call, (await call('/api/creative/import', { provider: 'openverse', id: uuid('c'), kind: 'sfx' })).job);
     assert.equal(j.result.asset.id, a.id, 'identical content is deduplicated by hash');
-    const r2 = await call('/api/creative/search?provider=openverse&kind=sfx&q=whoosh'); assert.equal(r2.items.find(x => x.sourceId === uuid('a')).imported, a.id);
+    const r2 = await call('/api/creative/search?provider=openverse&kind=sfx&include=credit&q=whoosh'); assert.equal(r2.items.find(x => x.sourceId === uuid('a')).imported, a.id);
     // Favorites and recents persist across restarts; the downloaded file keeps working offline.
     await call('/api/creative/favorite', { record: r2.items[0], on: true });
     await s.close(); srv.close(); srv = null;

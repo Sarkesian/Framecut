@@ -1,6 +1,7 @@
 // Microsoft Fluent Emoji Animated (MIT). Search runs over a bundled metadata index; each animated
 // APNG is fetched individually from GitHub's LFS media host, pinned to the indexed commit.
 const index = require('../../shared/fluent-index.json');
+const { verifyLicense, assessRights } = require('../../shared/rights.mjs');
 
 const MEDIA = `https://media.githubusercontent.com/media/microsoft/fluentui-emoji-animated/${index.commit}/assets/`;
 const PAGE = 'https://github.com/microsoft/fluentui-emoji-animated/tree/main/assets/';
@@ -27,6 +28,7 @@ class Fluent {
       license: 'mit', licenseVersion: null, licenseUrl: index.licenseUrl, holder: index.holder, attribution: null,
       localStorageAllowed: true, exportAllowed: true, licenseEvidenceUrl: index.licenseUrl, metadataCheckedAt: index.built,
     };
+    rec.licenseCheck = verifyLicense(rec, { checkedAt: index.built, method: 'bundled-index' }); rec.tier = assessRights({ provider: 'fluent', license: 'mit', kind: 'sticker' }).tier;
     Object.defineProperty(rec, 'downloadUrl', { value: MEDIA + x.file.split('/').map(encodeURIComponent).join('/'), enumerable: false });
     return rec;
   }
