@@ -80,3 +80,12 @@ test('Old projects: captions migrate into the shared style without changing thei
   assert.equal(p.clips[0].words.length, 2, 'words kept');
   const again = normalizeProject(p); assert.deepEqual(again.captions, p.captions, 'migration runs once');
 });
+
+test('Word pop overlap is a setting: allowed overlap reaches the full peak', () => {
+  const p = newProject(); p.tracks.unshift({ id: 'cap', kind: 'text', name: 'Captions', captions: true });
+  p.captions = { version: 2, preset: 'word-pop', overrides: { anim: { emph: { allowOverlap: true } } } };
+  p.clips.push(newClip('text', { trackId: 'cap', caption: true, start: 1, duration: 2, text: 'EXTRAORDINARY a', words: words('EXTRAORDINARY a', 0) }));
+  const sizes = (id, i) => i.role === 'base' ? { w: 700, h: 100, words: 2, boxes: [{ x: -100, y: 0, w: 500, h: 80, gapL: 40, gapR: 20 }, { x: 200, y: 0, w: 40, h: 80, gapL: 20, gapR: 40 }] } : { w: 520, h: 100 };
+  const big = buildPlan(p, { W: 1920, H: 1080, sizes }).layers.find(l => l.id.endsWith(':emph0'));
+  assert.ok(Math.abs(evaluate(big.motion.s, { t: big.vs + 0.1 }) - 1.2) < 1e-6, 'full peak when overlap is allowed');
+});

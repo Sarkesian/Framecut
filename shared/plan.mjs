@@ -121,7 +121,7 @@ export function buildPlan(project, { W, H, media = () => null, sizes = () => nul
       const xs = [motion.x, sExpr && bx ? `${f(bx)}*((${sExpr})-1)` : null].filter(Boolean), ys = [motion.y, sExpr && by ? `${f(by)}*((${sExpr})-1)` : null, ov.y ? `${f(H)}*(${ov.y})` : null].filter(Boolean);
       // Never let a popping word overlap its neighbours: cap its growth to the gap around it.
       let os = ov.s; const peak = Math.max(1, eff.anim.emph?.peak ?? 1);
-      if (os && peak > 1 && b.gapL !== undefined) { const smax = 1 + 1.35 * Math.min(b.gapL, b.gapR) / Math.max(1, b.w); if (smax < peak) os = `1+((${os})-1)*${f(Math.max(0, (smax - 1) / (peak - 1)))}`; }
+      if (os && peak > 1 && b.gapL !== undefined && !eff.anim.emph?.allowOverlap) { const smax = 1 + 1.35 * Math.min(b.gapL, b.gapR) / Math.max(1, b.w); if (smax < peak) os = `1+((${os})-1)*${f(Math.max(0, (smax - 1) / (peak - 1)))}`; }
       const ss = [sExpr, os].filter(Boolean);
       const fades = mo.fades.filter(fd => fd.dir === 'out' || ov.role !== 'reveal').concat(ov.fade ? [{ dir: 'in', st: ov.from, d: ov.fade }] : []);
       out.push({ ...common, id, type: 'raster', vs: ov.from, ve: ov.to, baseW: ws.w * k0, baseH: ws.h * k0, cx: cx + bx, cy: cy + by, motion: { x: xs.length ? xs.join('+') : null, y: ys.length ? ys.join('+') : null, s: ss.length ? ss.map(s => `(${s})`).join('*') : null, r: null }, fades, blurExpr: ov.role === 'reveal' ? null : baseL.blurExpr, cap: { eff, role: ov.role, word: ov.i } });

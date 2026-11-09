@@ -18,7 +18,7 @@ export const CAPTION_BASE = {
   layout: { grouping: 'auto', maxLines: 2, maxWords: 0, maxChars: 0, minDuration: 0.6, gapHold: 0.35 },
   anim: {
     in: { type: 'fade', dur: 0.16, delay: 0, strength: 0.5, ease: 'out', dir: 'up' },
-    emph: { type: 'none', dur: 0.12, strength: 0.5, from: 1, peak: 1.18, settle: 1, bounce: 0.45, persist: false, minHold: 0.12 },
+    emph: { type: 'none', dur: 0.12, strength: 0.5, from: 1, peak: 1.18, settle: 1, bounce: 0.45, persist: false, minHold: 0.12, allowOverlap: false },
     out: { type: 'fade', dur: 0.12, strength: 0.5, ease: 'in', dir: 'down' },
   },
 };
@@ -37,12 +37,12 @@ export const ENTRANCES = [
 export const EMPHASES = [
   { id: 'none', name: 'None', params: [] },
   { id: 'highlight', name: 'Word highlight', params: ['activeColor', 'persist'] },
-  { id: 'pop', name: 'Word pop', params: ['from', 'peak', 'settle', 'dur', 'bounce', 'activeColor'] },
-  { id: 'pulse', name: 'Scale pulse', params: ['peak', 'dur', 'bounce'] },
+  { id: 'pop', name: 'Word pop', params: ['from', 'peak', 'settle', 'dur', 'bounce', 'overlap', 'activeColor'] },
+  { id: 'pulse', name: 'Scale pulse', params: ['peak', 'dur', 'bounce', 'overlap'] },
   { id: 'color', name: 'Color change', params: ['activeColor', 'persist'] },
   { id: 'bounce', name: 'Bounce', params: ['strength', 'bounce', 'activeColor'] },
   { id: 'underline', name: 'Underline', params: ['activeColor', 'persist'] },
-  { id: 'background', name: 'Background highlight', params: ['activeBg', 'activeBgOpacity', 'activeColor', 'peak'] },
+  { id: 'background', name: 'Background highlight', params: ['activeBg', 'activeBgOpacity', 'activeColor', 'peak', 'overlap'] },
   { id: 'lift', name: 'Subtle lift', params: ['strength'] },
 ];
 export const EXITS = [

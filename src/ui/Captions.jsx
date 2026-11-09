@@ -276,6 +276,7 @@ function Params({ def, spec = {}, section, style }) {
     from: () => <Slider key="from" label="Initial size" value={spec.from ?? 0.92} min={0.5} max={1.2} step={0.01} fmt={v => Math.round(v * 100) + '%'} onChange={set('from')} />,
     peak: () => <Slider key="peak" label="Peak size" value={spec.peak ?? 1.2} min={1} max={1.6} step={0.01} fmt={v => Math.round(v * 100) + '%'} onChange={set('peak')} />,
     settle: () => <Slider key="settle" label="Final size" value={spec.settle ?? 1} min={0.9} max={1.3} step={0.01} fmt={v => Math.round(v * 100) + '%'} onChange={set('settle')} />,
+    overlap: () => <Toggle key="overlap" label="Let popping words overlap their neighbours" on={!!spec.allowOverlap} onChange={set('allowOverlap')} hint="Off: long words pop a little less so they never touch the next word. On: every word reaches the full peak size for a bolder look." />,
     persist: () => <Toggle key="persist" label="Keep words lit after they’re spoken" on={!!spec.persist} onChange={set('persist')} />,
     activeColor: () => style ? <Color key="ac" label="Spoken word color" value={style.activeColor} onChange={v => setCap('style', 'activeColor', v, { label: 'Highlight color' })} swatches={false} /> : null,
     activeBg: () => style ? <Color key="ab" label="Word box color" value={style.activeBg} onChange={v => setCap('style', 'activeBg', v, { label: 'Word box' })} swatches={false} /> : null,
