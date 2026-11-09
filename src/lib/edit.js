@@ -109,10 +109,31 @@ export function applyEffect(id) {
   if (!targets.length) { if (def.clipOnly) return toast('Select a clip to add camera shake.', 'warn'); return addAdjustment({ name: def.name, effects: [{ id, ...params }] }); }
   commit('Add ' + def.name, p => { for (const c of p.clips) if (targets.some(t => t.id === c.id)) { c.effects = (c.effects || []).filter(e => e.id !== id); c.effects.push({ id, ...params }); } });
 }
+// Filter layers (adjustment clips that only carry a filter) covering time t.
+export const filterLayersAt = (p, t) => p.clips.filter(c => c.kind === 'adjust' && c.filter?.id && !(c.effects || []).length && c.start <= t + 1e-3 && clipEnd(c) > t);
 export function applyFilter(id, name) {
   const targets = selectedClips().filter(c => c.kind !== 'audio' && c.kind !== 'text');
-  if (!targets.length) return addAdjustment({ name: name + ' filter', filter: { id, intensity: 1 } });
+  if (!targets.length) {
+    // Trying one filter after another swaps the filter layer under the playhead instead of piling up a new layer per click.
+    const layer = filterLayersAt(project.value, time.value).at(-1);
+    if (!layer) return addAdjustment({ name: name + ' filter', filter: { id, intensity: 1 } });
+    return commit('Apply ' + name, p => { const c = p.clips.find(x => x.id === layer.id); c.filter = { id, intensity: c.filter?.intensity ?? 1 }; c.name = name + ' filter'; }, { select: [layer.id] });
+  }
   commit('Apply ' + name, p => { for (const c of p.clips) if (targets.some(t => t.id === c.id)) c.filter = { id, intensity: c.filter?.intensity ?? 1 }; });
+}
+// Takes the filter off the selected clips. A filter layer is removed altogether (an empty layer does nothing),
+// and with nothing selected every filter layer under the playhead goes, so no earlier one shows through.
+export function removeFilter() {
+  const p0 = project.value, sel = selectedClips().filter(c => c.kind !== 'audio' && c.kind !== 'text' && c.filter?.id);
+  const ids = (sel.length ? sel : filterLayersAt(p0, time.value)).map(c => c.id); if (!ids.length) return;
+  commit('Remove filter', p => {
+    const gone = new Set();
+    for (const c of p.clips) if (ids.includes(c.id)) { if (c.kind === 'adjust' && !(c.effects || []).length) gone.add(c.id); else c.filter = { id: null, intensity: 1 }; }
+    if (!gone.size) return;
+    const tracks = new Set(p.clips.filter(c => gone.has(c.id)).map(c => c.trackId));
+    p.clips = p.clips.filter(c => !gone.has(c.id));
+    p.tracks = p.tracks.filter(t => !(t.kind === 'effect' && tracks.has(t.id) && !p.clips.some(c => c.trackId === t.id)));
+  });
 }
 // Transition at the start of `clipId`, or at the cut nearest the playhead on the main track.
 export function applyTransition(id, clipId) {

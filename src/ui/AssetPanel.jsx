@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { Film, Music, Type, Smile, Sparkles, Blend, Palette, Captions, LayoutTemplate, Plus, Upload, Search, Star, TriangleAlert, FolderOpen, Trash2, Mic, Square, Play, Pause, Image as ImageIcon, Link2, Gauge, Layers, LoaderCircle, Wand2, FileText, Download, Languages, X, RotateCcw, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, SlidersHorizontal } from 'lucide-preact';
 import { libraryTab, project, media, asset, commit, toast, time, player, selection, primary, prefs, userLuts, fonts, rememberMedia, transitionSel, importing, trackImport, lookPick, commitTentative, dropTentative, tentativeKey } from '../lib/state.js';
 import { api, native, importFiles, pickFile, waitJob } from '../lib/api.js';
-import { addAssets, addText, addSticker, applyEffect, applyFilter, applyTransition, insertCaptions, trackOf } from '../lib/edit.js';
+import { addAssets, addText, addSticker, applyEffect, applyFilter, removeFilter, filterLayersAt, applyTransition, insertCaptions, trackOf } from '../lib/edit.js';
 import { openMenu, Empty, Segmented, Select, Progress, confirm, useDraft } from './kit.jsx';
 import { importMedia } from './commands.jsx';
 import { TEXT_PRESETS, CAPTION_PRESETS, EMOJI, SHAPE_STICKERS, EFFECTS, TRANSITIONS, TRANSITION_FAMILIES, FILTERS, CAPTION_STYLE, TEXT_STYLE } from '../../shared/catalog.mjs';
@@ -167,15 +167,18 @@ function EffectsTab() {
 }
 function FiltersTab() {
   const [prev, setPrev] = useState({}); const src = useSourceThumb(); const sel = primary.value;
+  // What a click changes and what Remove takes off: the selected clip, or else the filter layer under the playhead.
+  const onClip = sel && !['audio', 'text'].includes(sel.kind), layer = onClip ? null : filterLayersAt(project.value, time.value).at(-1);
+  const current = onClip ? sel.filter?.id : layer?.filter?.id;
   useEffect(() => { filterPreviews(src).then(setPrev); }, [src]);
   const groups = [...new Set(FILTERS.map(f => f.group))];
   const importLut = async () => { const f = await pickFile({ title: 'Import LUT', extensions: ['cube'] }); if (!f?.path) return; try { await api('/api/luts/import', { paths: [f.path] }); userLuts.value = await api('/api/luts'); toast('LUT imported. Find it under My LUTs.'); } catch (e) { toast(e.message, 'error'); } };
   return <div class="tab-body">
     <Head title="Filters">{native && <button class="btn sm" onClick={importLut}><Upload size={13} />Import LUT</button>}</Head>
     <p class="muted hint">{sel && !['audio', 'text'].includes(sel.kind) ? <>Click to apply to <b>{sel.name || 'the selected clip'}</b>. Adjust strength in the inspector.</> : 'Click to add a filter layer at the playhead, or select a clip first.'}</p>
-    {sel?.filter?.id && <button class="btn sm" style={{ marginBottom: 10 }} onClick={() => commit('Remove filter', p => { const c = p.clips.find(x => x.id === sel.id); c.filter = { id: null, intensity: 1 }; })}><X size={13} />Remove filter from clip</button>}
-    {userLuts.value.length > 0 && <><h4 class="group-title">My LUTs</h4><div class="tile-grid">{userLuts.value.map(l => <button key={l.id} class={`tile fx-tile ${sel?.filter?.id === l.id ? 'on' : ''}`} onClick={() => applyFilter(l.id, l.name)} draggable onDragStart={e => dragPayload(e, { type: 'filter', id: l.id, name: l.name })}><div class="ph lut"><Palette size={18} /></div><span>{l.name}</span></button>)}</div></>}
-    {groups.map(g => <div key={g}><h4 class="group-title">{g}</h4><div class="tile-grid">{FILTERS.filter(f => f.group === g).map(f => <button key={f.id} class={`tile fx-tile ${sel?.filter?.id === f.id ? 'on' : ''}`} draggable onDragStart={e => dragPayload(e, { type: 'filter', id: f.id, name: f.name })} onClick={() => applyFilter(f.id, f.name)}>{prev[f.id] ? <img src={prev[f.id]} alt="" draggable={false} /> : <div class="ph" />}<span>{f.name}</span></button>)}</div></div>)}
+    {current && <button class="btn sm" style={{ marginBottom: 10 }} onClick={removeFilter}><X size={13} />{onClip && sel.kind !== 'adjust' ? 'Remove filter from clip' : 'Remove filter'}</button>}
+    {userLuts.value.length > 0 && <><h4 class="group-title">My LUTs</h4><div class="tile-grid">{userLuts.value.map(l => <button key={l.id} class={`tile fx-tile ${current === l.id ? 'on' : ''}`} onClick={() => applyFilter(l.id, l.name)} draggable onDragStart={e => dragPayload(e, { type: 'filter', id: l.id, name: l.name })}><div class="ph lut"><Palette size={18} /></div><span>{l.name}</span></button>)}</div></>}
+    {groups.map(g => <div key={g}><h4 class="group-title">{g}</h4><div class="tile-grid">{FILTERS.filter(f => f.group === g).map(f => <button key={f.id} class={`tile fx-tile ${current === f.id ? 'on' : ''}`} draggable onDragStart={e => dragPayload(e, { type: 'filter', id: f.id, name: f.name })} onClick={() => applyFilter(f.id, f.name)}>{prev[f.id] ? <img src={prev[f.id]} alt="" draggable={false} /> : <div class="ph" />}<span>{f.name}</span></button>)}</div></div>)}
   </div>;
 }
 
