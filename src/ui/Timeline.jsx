@@ -1,10 +1,10 @@
 // Multitrack timeline: tracks, clips (filmstrips, waveforms), playhead, snapping, trimming, dragging and drops.
 import { LiveTakeRow } from './LiveTake.jsx';
-import { useEffect, useRef, useState, useMemo } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef, useState, useMemo } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { Slice, FoldHorizontal, GalleryHorizontalEnd, ChevronDown, CopyPlus, Link2Off } from 'lucide-preact';
 import { Scissors, Trash2, Copy, Undo2, Redo2, Magnet, ZoomIn, ZoomOut, Maximize, Eye, EyeOff, Lock, LockOpen, Volume2, VolumeX, Plus, Film, Music, Type, Layers, Snowflake, Unlink, Link2, Pencil, ArrowLeftRight, ArrowLeftToLine, ArrowRightToLine, Diamond, Gauge, Blend, Captions, Sparkles, Mic, MoreHorizontal } from 'lucide-preact';
-import { project, selection, time, zoom, media, asset, player, history, undo, redo, commit, toast, drag, playing, duration, libraryTab, transitionSel, rememberMedia, trackImport, tentativeIds } from '../lib/state.js';
+import { project, selection, time, zoom, media, asset, player, history, undo, redo, commit, toast, drag, playing, duration, libraryTab, transitionSel, rememberMedia, trackImport, tentativeIds, refreshMedia } from '../lib/state.js';
 import { closeAllGaps, bladeCut } from '../lib/edit.js';
 import { splitAt, deleteClips, duplicateClips, copyClips, cutClips, pasteClips, placeClips, trimClips, trimLimits, setTrack, removeTrack, addTrack, closeGaps, closeGap, trackGaps, detachAudio, addAssets, addText, addSticker, applyEffect, applyFilter, applyTransition, selectTransition, removeTransition, trackOf, overlaps, freeTrack, updateClip, partnerOf, unlinkClip, insertTrack, pruneTracks, moveTrack, appendToText } from '../lib/edit.js';
 import { beginDrag } from '../lib/drag.js';
@@ -16,13 +16,14 @@ import { timecode } from '../lib/format.js';
 import { clipEnd, trackKindFor, mainTrack, transitionPartner, maxTransition, newClip, uid, clampTrackIndex } from '../../shared/model.mjs';
 import { transitionDef, effectDef, filterDef, transitionWindow } from '../../shared/catalog.mjs';
 import { openMenu, prompt } from './kit.jsx';
-import { importFiles } from '../lib/api.js';
+import { importFiles, api, waitJob } from '../lib/api.js';
 import { fitTimeline, zoomAround, run } from './commands.jsx';
 import { addTextTemplate } from './AssetPanel.jsx';
 import { openStudio } from './Studio.jsx';
 import { TEXT_TEMPLATES } from '../../shared/templates.mjs';
 import { shortTime } from '../lib/format.js';
 import { keyGain } from '../../shared/audio.mjs';
+import { timelinePreviewClip, filmstripTiles } from '../../shared/timeline-preview.mjs';
 
 const HEADER_W = 168, RULER_H = 26;
 const H = { video: 58, main: 66, audio: 52, text: 32, effect: 30 };
@@ -235,6 +236,7 @@ function Envelope({ c, w, z, sel }) {
 function keyGainAt(k, t) { if (t <= k[0].t) return k[0].v; if (t >= k.at(-1).t) return k.at(-1).v; for (let i = 1; i < k.length; i++) if (t <= k[i].t) { const a = k[i - 1], b = k[i]; return a.v + (b.v - a.v) * (t - a.t) / Math.max(1e-6, b.t - a.t); } return 1; }
 function Clip({ c, t, z }) {
   const sel = selection.value.includes(c.id); const d = drag.value;
+  const visual = timelinePreviewClip(c, d, !!t.main);
   let start = c.start, dur = c.duration, shiftY = 0;
   if (d && d.ids.includes(c.id)) {
     if (d.mode === 'move') { start = Math.max(0, c.start + d.dt); shiftY = d.dyId === c.id ? d.dy || 0 : 0; }
@@ -252,9 +254,9 @@ function Clip({ c, t, z }) {
   return <div class={`clip k-${c.kind} ${tentativeIds.value.includes(c.id) ? 'tentative' : ''} ${c.caption ? 'caption' : ''} ${sel ? 'sel' : ''} ${a?.missing ? 'missing' : ''} ${c.muted ? 'muted' : ''} ${d?.ids.includes(c.id) ? 'dragging' : ''} ${d?.copy && d.ids.includes(c.id) ? 'copying' : ''} ${c.locked ? 'locked' : ''} ${snapSide}`}
     style={{ transform: `translate(${left}px, ${shiftY}px)`, width: w }} data-clip={c.id}
     onPointerDown={e => clipDown(e, c, t, z)} onPointerMove={e => { if (ui.value.blade) bladeLine.value = bladeTimeAt(e, z); }} onPointerLeave={() => { if (ui.value.blade) { bladeLine.value = null; snapLine.value = null; bladePrev = null; } }} onContextMenu={e => clipMenu(e, c, t, bladeTimeAt(e, z))} onDblClick={() => { if (c.kind === 'text') setTimeout(() => document.querySelector('.insp-text textarea')?.focus(), 30); }}>
-    {(c.kind === 'video' || c.kind === 'image') && a && <Filmstrip c={c} a={a} start={start} w={w} z={z} h={trackH(t) - 18} />}
-    {(c.kind === 'audio' || (c.kind === 'video' && t.main)) && a?.audio && !c.muted && <Wave c={c} a={a} start={start} w={w} z={z} tall={c.kind === 'audio'} h={trackH(t)} />}
-    {hasSound(c) && !c.muted && (sel || c.volumeKeys?.length > 0) && <Envelope c={c} w={w} z={z} sel={sel} />}
+    {(c.kind === 'video' || c.kind === 'image') && a && <Filmstrip c={visual} a={a} start={start} w={w} z={z} h={trackH(t) - 6 - 17} />}
+    {(c.kind === 'audio' || (c.kind === 'video' && t.main)) && a?.audio && !c.muted && <Wave c={visual} a={a} start={start} w={w} z={z} tall={c.kind === 'audio'} h={trackH(t)} />}
+    {hasSound(c) && !c.muted && (sel || c.volumeKeys?.length > 0) && <Envelope c={visual} w={w} z={z} sel={sel} />}
     <div class="clip-label">
       {c.speed && c.speed !== 1 && <span class="badge"><Gauge size={10} />{+c.speed.toFixed(2)}×</span>}
       {c.locked && <Lock size={10} />}
@@ -267,7 +269,7 @@ function Clip({ c, t, z }) {
       {w > 90 && c.kind !== 'text' && <span class="dur">{shortTime(dur)}</span>}
     </div>
     {c.keyframes && keyTimes(c).map(k => { const on = isKeySelected(c.id, k), kd = keyDrag.value; const kt = on && kd ? Math.min(c.duration, Math.max(0, k + kd.dt)) : k; return <span key={'k' + k} class={`clip-key ${on ? 'sel' : ''}`} style={{ left: kt * z }} data-tip="Keyframe · click to jump, Shift+click to multi-select, drag to move" onPointerDown={e => keyDown(e, c, k, z)} onContextMenu={e => { e.stopPropagation(); keyMenu(e, c, k); }} />; })}
-    {c.markers?.map((m, i) => <span key={i} class="clip-marker" style={{ left: ((m.t - (c.in || 0)) / (c.speed || 1)) * z }} data-tip={m.label || 'Mistake marker'} />)}
+    {c.markers?.map((m, i) => <span key={i} class="clip-marker" style={{ left: ((m.t - (visual.in || 0)) / (c.speed || 1)) * z }} data-tip={m.label || 'Mistake marker'} />)}
     {partner && !c.transition && <button class="tr-mark" style={{ left: -9 }} data-tip="Add a transition" onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); applyTransition('dissolve', c.id); }}><Blend size={10} /></button>}
     {partner && c.transition && <TransitionBlock c={c} start={start} z={z} p={p} />}
     {!trackOf(p, c.trackId)?.locked && !c.locked && <><span class="edge l" onPointerDown={e => edgeDown(e, c, 'start', z)} /><span class="edge r" onPointerDown={e => edgeDown(e, c, 'end', z)} /></>}
@@ -289,34 +291,45 @@ function TransitionBlock({ c, start, z, p }) {
 
 // Filmstrip: only the tiles inside the visible window are drawn.
 function Filmstrip({ c, a, start, w, z, h }) {
+  const { left, width } = scroll.value; const x0 = Math.max(0, left - start * z), x1 = Math.min(w, left + width - HEADER_W - start * z);
+  const visible = x1 > x0;
+  useEffect(() => {
+    if (a.kind !== 'video' || a.strip?.version === 2 || !visible) return;
+    api(`/api/media/${a.id}/filmstrip`, {}).then(async r => { if (r.job) await waitJob(r.job); await refreshMedia(); }).catch(() => {});
+  }, [a.id, a.strip?.version, visible]);
   if (a.kind === 'image') return <div class="strip" style={{ backgroundImage: a.thumb ? `url(${a.thumb})` : (a.svg ? `url(${a.url})` : 'none'), backgroundSize: 'auto 100%', backgroundRepeat: 'repeat-x' }} />;
   const s = a.strip; if (!s) return <div class="strip loading" />;
-  const tileW = Math.max(24, h * 16 / 9);
-  const { left, width } = scroll.value; const x0 = Math.max(0, left - HEADER_W - start * z), x1 = Math.min(w, left + width - start * z);
-  const tiles = [];
-  for (let i = Math.floor(x0 / tileW); i * tileW < x1; i++) {
-    const src = c.in + ((i + 0.5) * tileW / z) * (c.speed || 1); const idx = Math.min(s.count - 1, Math.max(0, Math.floor(src / s.interval)));
-    tiles.push(<i key={i} style={{ left: i * tileW, width: tileW, backgroundImage: `url(${s.url})`, backgroundSize: `${s.count * tileW}px 100%`, backgroundPosition: `${-idx * tileW}px 0` }} />);
-  }
+  const tiles = filmstripTiles(c, s, { zoom: z, height: h, from: x0, to: x1 }).map(tile => <i key={tile.id} data-source-time={tile.sourceTime} data-frame-index={tile.index} style={{ left: tile.left, width: tile.width, backgroundImage: `url(${s.url})`, backgroundSize: `${s.count * tile.width}px 100%`, backgroundPosition: `${-tile.index * tile.width}px 0` }} />);
   return <div class="strip">{tiles}</div>;
 }
 const peakCache = new Map();
 function usePeaks(url) {
-  const [peaks, setPeaks] = useState(() => peakCache.get(url) || null);
-  useEffect(() => { if (!url || peakCache.has(url)) { setPeaks(peakCache.get(url) || null); return; } fetch(url).then(r => r.arrayBuffer()).then(b => { const pk = new Uint8Array(b); peakCache.set(url, pk); setPeaks(pk); }).catch(() => {}); }, [url]);
-  return peaks;
+  const [result, setResult] = useState(() => ({ url, peaks: peakCache.get(url) || null }));
+  useEffect(() => {
+    let current = true;
+    if (!url || peakCache.has(url)) { setResult({ url, peaks: peakCache.get(url) || null }); return; }
+    fetch(url).then(r => { if (!r.ok) throw Error('Waveform unavailable'); return r.arrayBuffer(); }).then(b => {
+      const peaks = new Uint8Array(b); peakCache.set(url, peaks);
+      if (peakCache.size > 128) peakCache.delete(peakCache.keys().next().value);
+      if (current) setResult({ url, peaks });
+    }).catch(() => {});
+    return () => { current = false; };
+  }, [url]);
+  return result.url === url ? result.peaks : peakCache.get(url) || null;
 }
 function Wave({ c, a, start, w, z, tall, h }) {
   const peaks = usePeaks(a.wave); const ref = useRef();
-  const { left, width } = scroll.value; const x0 = Math.max(0, Math.floor(left - HEADER_W - start * z)), x1 = Math.min(w, Math.ceil(left + width - start * z)); const vw = Math.max(0, x1 - x0);
-  useEffect(() => {
-    const cv = ref.current; if (!cv || !peaks || !vw) return; const dpr = window.devicePixelRatio || 1;
+  const { left, width } = scroll.value; const x0 = Math.max(0, Math.floor(left - start * z)), x1 = Math.min(w, Math.ceil(left + width - HEADER_W - start * z)); const vw = Math.max(0, x1 - x0);
+  useLayoutEffect(() => {
+    const cv = ref.current; if (!cv) return;
+    if (!peaks || !vw) { cv.width = 0; return; }
+    const dpr = window.devicePixelRatio || 1;
     // The canvas's own CSS box (below the label for audio clips), so the drawing never spills outside the clip.
     const hh = cv.clientHeight; if (!hh) return; cv.width = Math.ceil(vw * dpr); cv.height = Math.ceil(hh * dpr); const g = cv.getContext('2d'); g.scale(dpr, dpr);
     g.fillStyle = tall ? 'rgba(180,255,220,.75)' : 'rgba(200,220,255,.45)'; const mid = tall ? hh / 2 : hh - 2;
     for (let x = 0; x < vw; x++) {
       const tl = (x0 + x) / z, src0 = c.in + tl * (c.speed || 1), src1 = c.in + (tl + 1 / z) * (c.speed || 1);
-      let m = 0; for (let i = Math.floor(src0 * 100); i <= Math.floor(src1 * 100) && i < peaks.length; i++) if (peaks[i] > m) m = peaks[i];
+      let m = 0; for (let i = Math.max(0, Math.floor(src0 * 100)); i < Math.ceil(src1 * 100) && i < peaks.length; i++) if (peaks[i] > m) m = peaks[i];
       const gain = Math.min(2, (c.volume ?? 1) * keyGain(c.volumeKeys, tl) * keyGain(c.duckKeys, tl));
       const v = Math.min(1, m / 255 * gain) * (tall ? hh * 0.46 : hh * 0.5);
       if (tall) g.fillRect(x, mid - v, 1, Math.max(1, v * 2)); else g.fillRect(x, mid - v, 1, v);

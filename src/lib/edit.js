@@ -1,5 +1,6 @@
 // Editing commands. Each runs inside commit(), so everything is undoable and autosaved.
 import { shiftKeys } from '../../shared/keys.mjs';
+import { sliceGainKeys } from '../../shared/timeline-preview.mjs';
 import { spanTo } from '../../shared/snap.mjs';
 import { newClip, uid, clipEnd, srcOut, trackClips, mainTrack, transitionPartner, maxTransition, hasMedia, trackKindFor, clipSpeed, clampTrackIndex } from '../../shared/model.mjs';
 import { CAPTION_STYLE, TEXT_STYLE, effectDef } from '../../shared/catalog.mjs';
@@ -318,7 +319,8 @@ export function trimClips(list, { ripple = false, key = null, label = 'Trim' } =
         if (hasMedia(c)) c.in = Math.max(0, c.in + d * speed);
         if (c.keyframes) shiftKeys(c, d, end - ns);
         if (c.words) c.words = c.words.map(w => ({ ...w, start: w.start - d, end: w.end - d })).filter(w => w.end > 0);
-        if (c.volumeKeys) { c.volumeKeys = c.volumeKeys.map(k => ({ ...k, t: k.t - d })).filter(k => k.t >= 0 && k.t <= end - ns); if (!c.volumeKeys.length) delete c.volumeKeys; }
+        if (c.volumeKeys) c.volumeKeys = sliceGainKeys(c.volumeKeys, d, end - ns);
+        if (c.duckKeys) c.duckKeys = sliceGainKeys(c.duckKeys, d, end - ns);
         if (ripple && !trackOf(p, c.trackId)?.main) {
           // Ripple: the clip keeps its position and later clips close up (or make room).
           c.duration = end - ns;

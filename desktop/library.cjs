@@ -23,6 +23,7 @@ class Library {
     this.indexPath = path.join(dataDir, 'media.json'); this.assets = new Map();
     this.dirs = { media: path.join(dataDir, 'media'), thumbs: path.join(cacheDir, 'thumbs'), strips: path.join(cacheDir, 'filmstrips'), waves: path.join(cacheDir, 'waveforms'), proxies: path.join(cacheDir, 'proxies'), derived: path.join(dataDir, 'media', 'derived'), audio: path.join(cacheDir, 'audio') };
     this.saveTimer = null;
+    this.filmstripJobs = new Map();
   }
   async init() {
     for (const d of Object.values(this.dirs)) await fsp.mkdir(d, { recursive: true });
@@ -47,7 +48,7 @@ class Library {
       id: a.id, name: a.name, kind: a.kind, duration: a.duration, width: a.width, height: a.height, fps: a.fps, video: a.video, audio: a.audio, alpha: !!a.alpha, svg: !!a.svg,
       bytes: a.bytes, imported: a.imported, fileName: path.basename(a.path), recording: a.recording || null, missing: !!a.missing, derivedFrom: a.derivedFrom || null, derivedKind: a.derivedKind || null, folder: path.dirname(a.path),
       url: `/media/${a.id}?v=${v}`, proxyUrl: a.proxy ? `/proxy/${a.id}?v=${v}` : null, thumb: a.thumb ? `/cache/thumbs/${path.basename(a.thumb)}?v=${v}` : null,
-      strip: a.strip ? { url: `/cache/filmstrips/${path.basename(a.strip.file)}?v=${v}`, count: a.strip.count, w: a.strip.w, h: a.strip.h, interval: a.strip.interval } : null,
+      strip: a.strip ? { url: `/cache/filmstrips/${path.basename(a.strip.file)}?v=${v}`, count: a.strip.count, w: a.strip.w, h: a.strip.h, interval: a.strip.interval, version: a.strip.version || 1, sampleStart: a.strip.sampleStart } : null,
       wave: a.wave ? `/cache/waveforms/${path.basename(a.wave)}?v=${v}` : null, needsProxy: !!a.needsProxy, proxyPending: !!a.needsProxy && !a.proxy,
       role: a.role || null, animated: !!a.animated, source: a.source ? publicSource(a.source) : null,
     };
@@ -102,14 +103,14 @@ class Library {
       });
     }
     if (a.kind === 'video') {
-      const count = Math.max(6, Math.min(80, Math.ceil(a.duration / 1.5))), interval = a.duration / count;
-      const file = path.join(this.dirs.strips, k + '.jpg');
-      if (fs.existsSync(file)) a.strip = { file, count, w: 160, h: 90, interval };
-      else this.jobs.add({ type: 'filmstrip', label: 'Building filmstrip · ' + a.name, lane: 'light', hidden: true, meta: { mediaId: a.id } }, async ({ signal }) => {
-        const fast = a.duration > 40 ? ['-skip_frame', 'nokey'] : [];
-        await run(ffmpeg, ['-y', '-v', 'error', ...fast, '-i', a.path, '-an', '-vf', `fps=${(count / a.duration).toFixed(6)},scale=160:90:force_original_aspect_ratio=increase,crop=160:90,tile=${count}x1`, '-frames:v', '1', '-q:v', '5', file], { signal });
-        a.strip = { file, count, w: 160, h: 90, interval }; a.version = (a.version || 0) + 1; this.persist();
-      });
+      const exact = this.filmstripSpec(a), legacy = path.join(this.dirs.strips, k + '.jpg');
+      if (fs.existsSync(exact.file)) a.strip = exact;
+      else if (fs.existsSync(legacy)) {
+        // Upgrade old caches only when this source is visible, not every video
+        // in every saved project at application startup.
+        const count = Math.max(6, Math.min(80, Math.ceil(a.duration / 1.5)));
+        a.strip = { file: legacy, count, w: 160, h: 90, interval: a.duration / count };
+      } else this.ensureFilmstrip(a);
     }
     if (a.audio) {
       const file = path.join(this.dirs.waves, k + '.peaks');
@@ -132,6 +133,44 @@ class Library {
       if (fs.existsSync(file)) a.proxy = file;
       else this.makeProxy(a, file);
     }
+  }
+  filmstripSpec(a) {
+    const count = Math.max(6, Math.min(80, Math.ceil(a.duration / .5)));
+    return { file: path.join(this.dirs.strips, this.key(a, '|exact-strip-v2') + '.jpg'), count, w: 160, h: 90, interval: a.duration / count, sampleStart: 0, version: 2 };
+  }
+  ensureFilmstrip(a) {
+    if (a.kind !== 'video' || a.missing) return null;
+    const spec = this.filmstripSpec(a);
+    if (fs.existsSync(spec.file)) { a.strip = spec; return null; }
+    if (this.filmstripJobs.has(spec.file)) return this.filmstripJobs.get(spec.file);
+    const job = this.jobs.add({ type: 'filmstrip', label: 'Building filmstrip · ' + a.name, lane: 'light', hidden: true, meta: { mediaId: a.id } }, async ({ signal, progress }) => {
+      const temp = await fsp.mkdtemp(path.join(this.dirs.strips, '.frames-'));
+      const output = path.join(temp, 'atlas.jpg');
+      const fit = 'scale=160:90:force_original_aspect_ratio=decrease,pad=160:90:(ow-iw)/2:(oh-ih)/2,setsar=1';
+      try {
+        if (a.duration <= 120) {
+          // round=up samples at t=0, interval, 2*interval... rather than the
+          // old half-interval phase. Decode once; only output the bounded atlas.
+          await run(ffmpeg, ['-y', '-v', 'error', '-threads', '2', '-i', a.path, '-an', '-vf', `fps=${(1 / spec.interval).toFixed(10)}:start_time=0:round=up,${fit},tpad=stop_mode=clone:stop_duration=${spec.interval.toFixed(8)},tile=${spec.count}x1`, '-frames:v', '1', '-q:v', '4', output], { signal });
+        } else {
+          // Accurate indexed seeks avoid decoding an entire long recording.
+          // One decoder at a time, at most 80 frames, independently of dragging.
+          for (let i = 0; i < spec.count; i++) {
+            await run(ffmpeg, ['-y', '-v', 'error', '-threads', '2', '-ss', (i * spec.interval).toFixed(8), '-i', a.path, '-an', '-frames:v', '1', '-vf', fit, '-q:v', '3', path.join(temp, `${String(i).padStart(3, '0')}.jpg`)], { signal });
+            progress((i + 1) / spec.count, 'Reading source frames');
+          }
+          await run(ffmpeg, ['-y', '-v', 'error', '-framerate', '1', '-i', path.join(temp, '%03d.jpg'), '-vf', `tile=${spec.count}x1`, '-frames:v', '1', '-q:v', '4', output], { signal });
+        }
+        await fsp.rename(output, spec.file);
+        a.strip = spec; a.version = (a.version || 0) + 1; this.persist();
+      } finally {
+        if (path.resolve(temp).startsWith(path.resolve(this.dirs.strips) + path.sep)) await fsp.rm(temp, { recursive: true, force: true });
+        this.filmstripJobs.delete(spec.file);
+      }
+    });
+    this.filmstripJobs.set(spec.file, job);
+    job.promise.finally(() => this.filmstripJobs.delete(spec.file)).catch(() => {});
+    return job;
   }
   makeProxy(a, file) {
     return this.jobs.add({ type: 'proxy', label: 'Optimizing for smooth playback · ' + a.name, lane: 'heavy', meta: { mediaId: a.id } }, async ({ signal, progress }) => {

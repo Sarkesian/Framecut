@@ -71,6 +71,10 @@ async function startServer({ dataDir = path.join(__dirname, '..', '.workspace'),
 
   // ---------- Media ----------
   app.get('/api/media', (_req, res) => res.json(library.list()));
+  app.post('/api/media/:id/filmstrip', wrap(async (req, res) => {
+    const a = library.get(req.params.id); if (!a) return res.status(404).json({ error: 'Media not found.' });
+    const job = library.ensureFilmstrip(a); res.json({ job: job?.id || null });
+  }));
   app.post('/api/media/import', wrap(async (req, res) => {
     const files = await library.expand((req.body.paths || []).map(String));
     const assets = [], errors = [];
