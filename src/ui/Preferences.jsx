@@ -21,7 +21,7 @@ function Preferences() {
 }
 // Creative Library: sources, optional Openverse credentials (kept in the Windows credential store).
 function LibraryPrefs() {
-  const [id, setId] = useState(''), [secret, setSecret] = useState(''), [busy, setBusy] = useState(false);
+  const [id, setId] = useState(''), [secret, setSecret] = useState(''), [mintKey, setMintKey] = useState(''), [busy, setBusy] = useState(false);
   useEffect(() => { loadStatus(); }, []);
   const st = libStatus.value; const ov = st?.openverse || {};
   const save = async clear => {
@@ -31,8 +31,9 @@ function LibraryPrefs() {
   };
   return <>
     <h3>Sources</h3>
-    <div class="col">{(st?.providers || []).filter(p => p.id !== 'local').map(p => <div key={p.id} class="row" style={{ alignItems: 'flex-start' }}>
-      {p.enabled ? <Check size={15} class="accentc" style={{ marginTop: 2 }} /> : <Ban size={15} class="muted" style={{ marginTop: 2 }} />}
+    <p class="muted">Choose which libraries take part in discovery. Downloaded files remain available offline.</p>
+    <div class="col">{(st?.providers || []).filter(p => p.id !== 'local' && p.enabled).map(p => <div key={p.id} class="row" style={{ alignItems: 'flex-start' }}>
+      <Toggle label={p.name} on={p.active} onChange={v => savePrefs({ librarySources: { ...prefs.value.librarySources, [p.id]: v } }).then(loadStatus)} />
       <div class="grow"><b>{p.name}</b> <span class="muted">· {p.kinds.map(k => ({ music: 'music', sfx: 'sound effects', sticker: 'stickers' })[k]).join(', ')}</span><br /><small class="muted">{p.enabled ? p.note : 'Not enabled — ' + p.reason}</small></div>
     </div>)}</div>
     <h3>Openverse access</h3>
@@ -40,6 +41,11 @@ function LibraryPrefs() {
     <div class="row"><KeyRound size={15} class="muted" /><span>{ov.credentials ? 'Credentials saved' : 'Using anonymous access'}{ov.blockedFor ? ` · paused for ${ov.blockedFor}s` : ''}</span>{ov.credentials && <button class="btn sm ghost" disabled={busy} onClick={() => save(true)}>Remove</button>}</div>
     <div class="field-row"><div class="field"><label>Client ID</label><input class="input mono" value={id} onInput={e => setId(e.target.value)} autocomplete="off" spellcheck={false} /></div><div class="field"><label>Client secret</label><input class="input mono" type="password" value={secret} onInput={e => setSecret(e.target.value)} autocomplete="off" /></div></div>
     <button class="btn sm" disabled={busy || !id || !secret} onClick={() => save(false)}>Save credentials</button>
+    <h3>SFXMint access</h3>
+    <p class="muted">MP3 listening is free. Anonymous API access allows 20 lookups and 5 selected downloads per UTC day. An optional free key raises this to 100 lookups and 20 downloads per day (300 downloads per month). WAV files and paid packs are not used.</p>
+    <div class="row"><KeyRound size={15} class="muted" /><span>{st?.sfxmint?.configured ? 'Key saved' : 'Using anonymous access'}{st?.sfxmint?.blockedFor ? ` · paused for ${st.sfxmint.blockedFor}s` : ''}</span></div>
+    <div class="field"><label>Optional SFXMint API key</label><input class="input mono" type="password" value={mintKey} onInput={e => setMintKey(e.target.value)} autocomplete="off" /></div>
+    <div class="row">{[false, ...(st?.sfxmint?.configured ? [true] : [])].map(clear => <button class="btn sm" disabled={busy || (!clear && !mintKey)} onClick={async () => { setBusy(true); try { const r = await api('/api/creative/credentials/sfxmint', clear ? {} : { key: mintKey }, 'PUT'); setMintKey(''); await loadStatus(); toast(clear ? 'SFXMint key removed.' : r.persistent ? 'Key saved securely.' : 'Key saved for this session only.'); } catch (e) { toast(e.message, 'error'); } finally { setBusy(false); } }}>{clear ? 'Remove key' : 'Save key'}</button>)}</div>
     <h3>Where library files go</h3>
     <p class="muted">Music, sounds and stickers you add are saved once in your FrameCut data folder (Storage tab) under <span class="mono">media\library</span>, with their source and license, so projects reopen offline. Previews use a temporary cache capped at 250 MB.</p>
   </>;

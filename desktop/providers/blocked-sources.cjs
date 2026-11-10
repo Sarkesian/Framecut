@@ -7,6 +7,8 @@ function isWikimediaRecord(r = {}) {
   });
 }
 function assertSourceAllowed(r) {
+  if (r?.provider === 'assetpolish') throw Object.assign(Error('AssetPolish has been removed from the online sticker library.'), { code: 'unavailable' });
   if (isWikimediaRecord(r)) throw Object.assign(Error('Wikimedia has been removed from FrameCut’s online library. Files already saved in your projects still work.'), { code: 'unavailable' });
 }
-module.exports = { isWikimediaRecord, assertSourceAllowed };
+const isRemovedRecord = r => r?.provider === 'assetpolish' || isWikimediaRecord(r);
+module.exports = { isWikimediaRecord, isRemovedRecord, assertSourceAllowed };

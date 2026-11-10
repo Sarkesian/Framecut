@@ -144,6 +144,9 @@ export function installShortcuts() {
     if (HISTORY_KEYS.has(name0)) { if (historyKey(e, name0, map.get(name0))) return; return; }
     if (document.querySelector('.backdrop, .menu')) return;
     const t = e.target; const typing = t.closest?.('input, textarea, select, [contenteditable]') && !(t.type === 'range');
+    // Focused library widgets own their navigation / activation keys. Capture-phase
+    // timeline shortcuts must not swallow their bubbling keyboard handlers.
+    if (!e.ctrlKey && !e.metaKey && !e.altKey && t.closest?.('.browse-rail, .lib-row, .st-card, .audio-nav') && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'Enter', ' ', '+', 'f', 'i'].includes(e.key)) return;
     if (typing) { if ((e.ctrlKey || e.metaKey) && ['s', 'e'].includes(e.key.toLowerCase())) { e.preventDefault(); t.blur(); } else return; }
     if (!e.ctrlKey && !e.altKey && studioKeys(e)) { e.preventDefault(); e.stopPropagation(); return; }
     const name = keyName(e); const a = map.get(name.toUpperCase()) || (e.key === '?' ? byId.shortcuts : null);

@@ -2,8 +2,8 @@
 // then click, press Enter or drag to put an asset on the timeline. Every result shows its source
 // and license; anything that cannot be used for this project says why instead of failing silently.
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { Music, AudioLines, FolderOpen, Search, X, Play, Pause, Square, Plus, Heart, LoaderCircle, Upload, WifiOff, TriangleAlert, Clock, Info, ExternalLink, Copy, Check, Sparkles, Shapes, Smile, Ban, Mic, Link2, Rows3, LayoutGrid, Volume2, Hourglass } from 'lucide-preact';
-import { project, media, asset, toast, prefs, savePrefs, time, player } from '../lib/state.js';
+import { Music, AudioLines, FolderOpen, Search, X, Play, Pause, Square, Plus, Heart, LoaderCircle, Upload, WifiOff, TriangleAlert, Clock, Info, ExternalLink, Copy, Check, Sparkles, Shapes, Smile, Ban, Mic, Link2, Rows3, LayoutGrid, Volume2, Hourglass, ChevronRight, SlidersHorizontal, Maximize2, Minimize2, Headphones } from 'lucide-preact';
+import { project, media, asset, toast, prefs, savePrefs, time, player, audioExpanded } from '../lib/state.js';
 import { native, api } from '../lib/api.js';
 import { addSticker } from '../lib/edit.js';
 import { openMenu, Segmented, Select, Progress, Toggle } from './kit.jsx';
@@ -12,6 +12,7 @@ import { openStudio } from './Studio.jsx';
 import { relinkOne } from './AssetPanel.jsx';
 import { EMOJI, SHAPE_STICKERS } from '../../shared/catalog.mjs';
 import { creditLine, PROVIDERS } from '../../shared/rights.mjs';
+import { AUDIO_DISCOVERY } from '../../shared/audio-library.mjs';
 import { svgUrl } from '../engine/raster.js';
 import { shortTime } from '../lib/format.js';
 import {
@@ -24,10 +25,10 @@ const SFX_IDEAS = ['Whoosh', 'Click', 'Pop', 'Swoosh', 'Applause', 'Footsteps', 
 const STICKER_IDEAS = ['Star', 'Heart', 'Arrow', 'Speech bubble', 'Crown', 'Trophy', 'Rocket', 'Lightning', 'Fire', 'Music note', 'Sun', 'Flower', 'Cat', 'Dog', 'Bird', 'Tree', 'Check mark', 'Question mark'];
 // Source filter per panel. Whole providers (ccMixter, SFX Kit) or Openverse's own sources.
 const SOURCES = {
-  music: [['', 'All sources'], ['ccmixter', 'ccMixter'], ['freesound', 'Freesound']],
-  sfx: [['', 'All sources'], ['sfxkit', 'SFX Kit'], ['freesound', 'Freesound']],
+  music: [['', 'All music sources'], ['ccmixter', 'ccMixter'], ['openverse', 'Openverse'], ['archive', 'Internet Archive']],
+  sfx: [['', 'All sound sources'], ['sfxkit', 'SFX Kit'], ['sfxmint', 'SFXMint'], ['openverse', 'Openverse']],
 };
-const SOURCE_NAMES = { openverse: 'Openverse', ccmixter: 'ccMixter', sfxkit: 'SFX Kit', fluent: 'Fluent Emoji', pixabay: 'Pixabay', assetpolish: 'AssetPolish' };
+const SOURCE_NAMES = { openverse: 'Openverse', ccmixter: 'ccMixter', archive: 'Internet Archive', sfxmint: 'SFXMint', sfxkit: 'SFX Kit', fluent: 'Fluent Emoji', pixabay: 'Pixabay' };
 const reduced = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 const scrollMemory = new Map();
 
@@ -114,53 +115,118 @@ function Skeleton({ rows = 6, grid }) { return <div class={grid ? 'sticker-grid'
 // ---------------------------------------------------------------- AUDIO
 export function AudioLibrary() {
   useLibraryBoot();
-  const tab = audioTab.value; const ref = useScrollMemory('audio-' + tab);
+  const tab = audioTab.value, ref = useScrollMemory('audio-' + tab);
   useEffect(() => () => stopPreview(), []);
-  return <div class="tab-body lib" ref={ref}>
-    <div class="asset-head"><h2>Audio</h2><div class="grow" /><button class="btn sm" onClick={() => importMedia()} data-tip="Import your own music or sound files"><Upload size={14} />Import</button></div>
-    <div class="lib-tabs"><Segmented label="Audio library" value={tab} options={[['music', 'Music'], ['sfx', 'Sound FX'], ['mine', 'My audio']]} onChange={v => { stopPreview(); audioTab.value = v; }} /></div>
-    {tab === 'mine' ? <MyAudio /> : <OnlineAudio key={tab} panel={tab} />}
-    <PreviewBar />
-    <Drawer />
+  const navigate = next => {
+    audioTab.value = next;
+    if (next === 'sfx' && !searches.sfx.value.visited) search('sfx', { source: '', category: '', q: '', visited: true }, { now: true });
+  };
+  return <div class="tab-body lib audio-hub" ref={ref}>
+    <div class="asset-head"><h2>Audio</h2><div class="grow" />
+      <button class="icon-btn sm" aria-label={audioExpanded.value ? 'Compact audio library' : 'Expand audio library'} data-tip={audioExpanded.value ? 'Compact library' : 'More room to browse'} onClick={() => (audioExpanded.value = !audioExpanded.value)}>{audioExpanded.value ? <Minimize2 size={14} /> : <Maximize2 size={14} />}</button>
+      <button class="btn sm" onClick={() => importMedia()} data-tip="Import your own music or sound files"><Upload size={14} />Import</button>
+    </div>
+    <nav class="lib-tabs audio-nav" aria-label="Audio library">{[['discover', 'Discover'], ['music', 'Music'], ['sfx', 'Sound FX'], ['favorites', 'Favorites'], ['recent', 'Recent'], ['mine', 'My audio']].map(([id, label]) => <button key={id} class={tab === id ? 'on' : ''} aria-pressed={tab === id} onClick={() => navigate(id)}>{label}</button>)}</nav>
+    {tab === 'discover' ? <AudioDiscover /> : tab === 'mine' ? <MyAudio /> : tab === 'favorites' || tab === 'recent' ? <SavedAudio recent={tab === 'recent'} /> : <OnlineAudio key={tab} panel={tab} />}
+    <PreviewBar /><Drawer />
   </div>;
 }
 
-function OnlineAudio({ panel }) {
-  const s = searches[panel].value; const listRef = useRef(); const p = prefs.value;
-  const ideas = panel === 'music' ? MUSIC_IDEAS : SFX_IDEAS;
-  const L = lists.value.audio; const fav = L.favorites.filter(x => x.kind === panel), rec = L.recents.filter(x => x.kind === panel);
-  const focusFirst = () => listRef.current?.querySelector('.lib-row')?.focus();
-  const more = useRef();
-  useEffect(() => { warmSources(panel); }, [panel]);
-  useEffect(() => { const el = more.current; if (!el) return; const io = new IntersectionObserver(es => { if (es[0].isIntersecting && searches[panel].value.status === 'ok' && searches[panel].value.page < searches[panel].value.pages) search(panel, {}, { more: true }); }, { rootMargin: '200px' }); io.observe(el); return () => io.disconnect(); }, [panel, s.status, s.page]);
+function browseMusic(item) {
+  const patch = { q: '', source: '', category: '', length: '', browseQuery: item[2], browseTitle: item[1] };
+  try { localStorage.setItem('fc:audio-last-lens', JSON.stringify(patch)); } catch {}
+  audioTab.value = 'music'; search('music', patch, { now: true });
+}
+function BrowseRail({ label, className, children }) {
+  const ref = useRef(), [edges, setEdges] = useState([false, false]);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const update = () => setEdges([el.scrollLeft > 1, el.scrollLeft + el.clientWidth < el.scrollWidth - 2]);
+    const observer = new ResizeObserver(update); observer.observe(el);
+    el.addEventListener('scroll', update, { passive: true }); update();
+    return () => { observer.disconnect(); el.removeEventListener('scroll', update); };
+  }, [children.length]);
+  const move = direction => ref.current.scrollBy({ left: direction * ref.current.clientWidth * .8, behavior: reduced() ? 'instant' : 'smooth' });
+  return <div class="browse-rail-wrap">
+    {(edges[0] || edges[1]) && <div class="browse-rail-controls"><button class="icon-btn sm" aria-label={'Previous ' + label} disabled={!edges[0]} onClick={() => move(-1)}><ChevronRight size={14} style={{ transform: 'rotate(180deg)' }} /></button><button class="icon-btn sm" aria-label={'Next ' + label} disabled={!edges[1]} onClick={() => move(1)}><ChevronRight size={14} /></button></div>}
+    <div ref={ref} class={className + ' browse-rail'} aria-label={label} tabIndex={0} onKeyDown={e => { if (e.target !== e.currentTarget) return; if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); move(e.key === 'ArrowLeft' ? -1 : 1); } if (e.key === 'Home' || e.key === 'End') { e.preventDefault(); ref.current.scrollTo({ left: e.key === 'Home' ? 0 : ref.current.scrollWidth }); } }}>{children}</div>
+  </div>;
+}
+function DiscoveryRail({ title, items, group }) {
+  return <section class="audio-discovery-section"><h3>{title}</h3><BrowseRail className="audio-category-rail" label={title}>{items.map((item, i) => <button key={item[0]} class={`audio-category mood-${group}`} style={{ '--category-hue': (i * 41 + (group === 'mood' ? 20 : 160)) % 360 }} onClick={() => browseMusic(item)} data-tip={'Explore music matching “' + item[2] + '”'}><span class="audio-category-art"><Music size={23} strokeWidth={1.6} /><i /><i /></span><b>{item[1]}</b><span>Explore <ChevronRight size={11} /></span></button>)}</BrowseRail></section>;
+}
+function AudioDiscover() {
+  const s = searches.music.value, fx = searches.sfx.value;
+  useEffect(() => {
+    if (searches.music.value.status === 'idle') {
+      let last = {}; try { last = JSON.parse(localStorage.getItem('fc:audio-last-lens') || '{}'); } catch {}
+      search('music', { q: '', browseQuery: last.browseQuery || 'ambient', browseTitle: last.browseTitle || 'Ambient & atmospheric' }, { now: true });
+    }
+    if (searches.sfx.value.status === 'idle') search('sfx', { q: '', source: 'sfxkit', category: '' }, { now: true });
+  }, []);
   return <>
-    <SearchField panel={panel} placeholder={panel === 'music' ? 'Search free music — mood, genre, instrument' : 'Search sound effects — whoosh, click, rain…'} onArrowDown={focusFirst} />
-    <div class="lib-filters">
-      <Select label="Length" value={s.length} options={panel === 'music' ? [['', 'Any length'], ['clip', 'Under 1 min'], ['song', 'Over 1 min']] : [['', 'Any length'], ['short', 'Under 10 s'], ['medium', '10–60 s'], ['long', 'Over 1 min']]} onChange={v => search(panel, { length: v }, { now: true })} />
-      <Select label="Source" value={s.source} options={SOURCES[panel]} onChange={v => search(panel, { source: v, ...(v && v !== 'sfxkit' ? { category: '' } : {}) }, { now: true })} />
-      <UsageSwitch />
-    </div>
-    {panel === 'music' && <div class="lib-mix" role="group" aria-label="When adding music">
-      <button class={`fchip ${p.libraryBalance ? 'on' : ''}`} aria-pressed={!!p.libraryBalance} onClick={() => savePrefs({ libraryBalance: !p.libraryBalance })} data-tip="Sets new music's volume to sit under speech. Your recordings are never changed."><Volume2 size={12} />Auto balance</button>
-      <button class={`fchip ${p.libraryDuck ? 'on' : ''}`} aria-pressed={!!p.libraryDuck} onClick={() => savePrefs({ libraryDuck: !p.libraryDuck })} data-tip="Music dips automatically while someone speaks on a voice track (Audio Studio ducking)."><Mic size={12} />Duck under voice</button>
-    </div>}
-    <ActiveCategory s={s} panel={panel} provider="sfxkit" />
-    {!s.q.trim() && !s.category ? <div class="lib-idle">
-      <Chips label="Ideas" items={ideas} onPick={q => search(panel, { q }, { now: true })} />
-      <Chips label="Recent searches" icon={Clock} items={recentSearches(panel)} onPick={q => search(panel, { q }, { now: true })} />
-      {panel === 'sfx' && <CategoryChips panel="sfx" provider="sfxkit" title="Sound effect categories" />}
-      {fav.length > 0 && <><h4 class="group-title">Favorites</h4><AudioList items={fav} panel={panel} /></>}
-      {rec.length > 0 && <><h4 class="group-title">Recently used</h4><AudioList items={rec} panel={panel} /></>}
-      {!fav.length && !rec.length && <p class="muted hint lib-intro">{panel === 'music' ? 'Free music you can use without credit: CC0 tracks from ccMixter, plus public-domain and CC0 recordings from Freesound (via Openverse).' : 'Free sound effects you can use without credit: the 320-sound SFX Kit made for video editing, plus CC0 sounds from Freesound (via Openverse).'} Every result is license-checked before it’s added.</p>}
-    </div>
-      : s.status === 'loading' ? <Skeleton />
-        : s.status === 'error' || s.status === 'empty' ? <StateCard s={s} panel={panel} onRetry={() => search(panel, {}, { now: true })} />
-          : <>
-            <ResultCount s={s} panel={panel} />
-            <div ref={listRef}><AudioList items={s.results} panel={panel} /></div>
-            <div ref={more} class="lib-more">{s.status === 'more' ? <LoaderCircle size={16} class="spin" /> : s.page < s.pages ? <button class="btn sm ghost" onClick={() => search(panel, {}, { more: true })}>Load more</button> : s.results.length > 8 ? <span class="muted">That’s everything.</span> : null}</div>
-          </>}
+    <SearchField panel="music" placeholder="Search music, artists, moods…" />
+    <div class="audio-welcome"><span class="audio-eyebrow">YOUR NEXT VIDEO STARTS HERE</span><h3>Find its sound.</h3><p>Music, little details, big moments.</p><span class="audio-library-note"><Check size={11} />CC0 audio · source details kept with every download</span><button class="audio-comedy-link" onClick={() => browseMusic(AUDIO_DISCOVERY.moods[0])}><Smile size={14} />Goofy & funny music<ChevronRight size={12} /></button></div>
+    <DiscoveryRail title="Browse by mood" items={AUDIO_DISCOVERY.moods} group="mood" />
+    <section class="audio-discovery-section"><div class="audio-section-head"><div><h3>{s.q ? 'Search results' : s.browseTitle || 'Music to start with'}</h3><small class="muted">{s.q ? 'Across your enabled music sources' : 'A starting point for your edit'}</small></div><button class="icon-btn sm" aria-label="View all music" onClick={() => (audioTab.value = 'music')}><ChevronRight size={17} /></button></div>
+      <AudioResults s={s} panel="music" limit={6} compact />
+    </section>
+    <DiscoveryRail title="Browse by genre" items={AUDIO_DISCOVERY.genres} group="genre" />
+    <DiscoveryRail title="Made for your video" items={AUDIO_DISCOVERY.purposes} group="purpose" />
+    <section class="audio-discovery-section"><div class="audio-section-head"><div><h3>The finishing touches</h3><small class="muted">Sound effects for cuts, movement & accents</small></div><button class="icon-btn sm" aria-label="Browse sound effects" onClick={() => { audioTab.value = 'sfx'; search('sfx', { q: '', source: '', category: '', visited: true }, { now: true }); }}><ChevronRight size={17} /></button></div><AudioResults s={fx} panel="sfx" limit={4} compact /></section>
+    <button class="audio-studio-link" onClick={openStudio}><Headphones size={17} /><span><b>Make it sound like you.</b><small>Record, clean up, balance & duck in Audio Studio</small></span><ChevronRight size={15} /></button>
   </>;
+}
+function MusicMixOptions() {
+  const p = prefs.value;
+  return <div class="lib-mix" role="group" aria-label="When adding music">
+    <button class={`fchip ${p.libraryBalance ? 'on' : ''}`} aria-pressed={!!p.libraryBalance} onClick={() => savePrefs({ libraryBalance: !p.libraryBalance })} data-tip="Measure new music and set its level. Recordings are never changed."><Volume2 size={12} />Auto balance</button>
+    <button class={`fchip ${p.libraryDuck ? 'on' : ''}`} aria-pressed={!!p.libraryDuck} onClick={() => savePrefs({ libraryDuck: !p.libraryDuck })} data-tip="Lower new music during detected speech on voice tracks."><Mic size={12} />Duck under voice</button>
+  </div>;
+}
+function AudioResults({ s, panel, limit, compact }) {
+  if (s.status === 'loading' || (s.status === 'idle' && !s.q)) return <Skeleton rows={compact ? 3 : 6} />;
+  if (s.status === 'idle') return <p class="muted audio-empty-hint">Type at least two letters, or choose a collection below.</p>;
+  if (s.status === 'error' || s.status === 'empty') return <>{s.partial?.length > 0 && <div class="audio-source-notice" role="status">Some sources are still loading or unavailable. <button onClick={() => search(panel, {}, { now: true })}>Retry</button></div>}<StateCard s={s} panel={panel} onRetry={() => search(panel, {}, { now: true })} />{s.page < s.pages && <MoreButton s={s} panel={panel} />}</>;
+  let items = [...s.results];
+  if (s.sort === 'title') items.sort((a, b) => a.title.localeCompare(b.title));
+  if (s.sort === 'short') items.sort((a, b) => (a.durationMs || Infinity) - (b.durationMs || Infinity));
+  if (s.sort === 'long') items.sort((a, b) => (b.durationMs || 0) - (a.durationMs || 0));
+  if (limit) items = items.slice(0, limit);
+  return <>
+    {!compact && <div class="audio-result-summary" aria-live="polite"><span>{s.results.length} {panel === 'music' ? 'tracks' : 'sounds'} shown</span><span>{[...new Set(s.results.map(r => r.sourceName || SOURCE_NAMES[r.provider]))].filter(Boolean).join(' · ')}</span></div>}
+    {s.partial?.length > 0 && <div class="audio-source-notice" role="status">{s.partial.map(p => `${SOURCE_NAMES[p.provider] || p.provider} ${p.code === 'slow' ? 'is still loading' : p.code === 'quota' ? 'has reached its access limit' : 'is unavailable'}`).join(' · ')}<button onClick={() => search(panel, {}, { now: true })}>Retry</button></div>}
+    <AudioList items={items} panel={panel} />
+    {!compact && <MoreButton s={s} panel={panel} />}
+  </>;
+}
+function OnlineAudio({ panel }) {
+  const s = searches[panel].value, p = prefs.value, [filters, setFilters] = useState(false);
+  const listRef = useRef();
+  useEffect(() => {
+    if (searches[panel].value.status === 'idle') search(panel, {}, { now: true });
+    if (panel === 'sfx') { loadCategories('sfxkit'); if (prefs.value.librarySources?.sfxmint !== false) loadCategories('sfxmint'); }
+  }, [panel]);
+  const fxCategories = panel === 'sfx' ? [...(categories.value.sfxkit || []).map(c => ({ ...c, provider: 'sfxkit' })), ...(categories.value.sfxmint || []).map(c => ({ ...c, provider: 'sfxmint' }))].filter(c => p.librarySources?.[c.provider] !== false) : [];
+  const activeFilters = [s.length, s.source].filter(Boolean).length;
+  const sourceOptions = SOURCES[panel].filter(([id]) => !id || (p.librarySources?.[id] ?? libStatus.value?.providers?.find(x => x.id === id)?.active ?? id !== 'archive'));
+  return <>
+    <SearchField panel={panel} placeholder={panel === 'music' ? 'Search music, artists, moods…' : 'Search sound effects — whoosh, click, rain…'} onArrowDown={() => listRef.current?.querySelector('.lib-row')?.focus()} />
+    <div class="audio-section-head audio-browse-title"><div><h3>{s.q ? 'Search results' : s.category ? fxCategories.find(c => c.id === s.category && c.provider === s.source)?.name || 'Sound collection' : panel === 'music' ? s.browseTitle || 'Ambient & atmospheric' : 'Sound effects'}</h3><small class="muted">{panel === 'music' ? s.q ? 'Find a track for your video' : 'Discovery search: ' + (s.browseQuery || 'ambient') : 'Transitions, accents & environments'}</small></div><button class={`btn sm ghost ${filters ? 'on' : ''}`} aria-expanded={filters} onClick={() => setFilters(!filters)}><SlidersHorizontal size={13} />Filters{activeFilters ? ` (${activeFilters})` : ''}</button></div>
+    {filters && <div class="audio-filter-panel"><div class="lib-filters"><Select label="Source" value={s.source} options={sourceOptions} onChange={v => search(panel, { source: v, category: '' }, { now: true })} /><Select label="Length" value={s.length} options={panel === 'music' ? [['', 'Any length'], ['clip', 'Under 1 min'], ['song', 'Over 1 min']] : [['', 'Any length'], ['short', 'Under 10 s'], ['medium', '10–60 s'], ['long', 'Over 1 min']]} onChange={v => search(panel, { length: v }, { now: true })} /><Select label="Sort shown tracks" value={s.sort} options={[['relevance', 'Provider order'], ['title', 'Title A–Z'], ['short', 'Shortest first'], ['long', 'Longest first']]} onChange={v => (searches[panel].value = { ...searches[panel].value, sort: v })} /></div><p class="muted tiny">Only CC0 audio with source license metadata is shown.</p><details class="audio-project-use"><summary>Project use</summary><UsageSwitch /><small class="muted">For license checks on older assets already in this project.</small></details></div>}
+    {panel === 'music' && <MusicMixOptions />}
+    {panel === 'sfx' && <Chips label="Goofy & silly sounds" icon={Smile} items={['Boing', 'Cartoon', 'Pop', 'Squeak', 'Laugh', 'Slide whistle']} onPick={q => search('sfx', { q, source: '', category: '' }, { now: true })} />}
+    {!s.q && panel === 'sfx' && fxCategories.length > 0 && <BrowseRail className="audio-fx-categories" label="Sound effect categories">{fxCategories.map(c => <button key={c.provider + c.id} class={s.source === c.provider && s.category === c.id ? 'on' : ''} onClick={() => search('sfx', { source: c.provider, category: c.id, q: '' }, { now: true })}><AudioLines size={16} /><b>{c.name}</b><small>{SOURCE_NAMES[c.provider]}</small></button>)}</BrowseRail>}
+    {s.q && <Chips label="Recent searches" icon={Clock} items={recentSearches(panel).filter(q => q !== s.q).slice(0, 4)} onPick={q => search(panel, { q }, { now: true })} />}
+    <div ref={listRef}><AudioResults s={s} panel={panel} /></div>
+    {panel === 'music' && !s.q && <DiscoveryRail title="Try another mood" items={AUDIO_DISCOVERY.moods} group="mood" />}
+    {s.source === 'sfxmint' && <p class="muted audio-provider-note">SFXMint offers up to 50 matches per search. Browse another category to explore more. Anonymous access: 20 lookups and 5 selected downloads per UTC day; listening is free. Optional keys are in Preferences › Library.</p>}
+  </>;
+}
+function SavedAudio({ recent }) {
+  const [q, setQ] = useState(''); const all = recent ? lists.value.audio.recents : lists.value.audio.favorites;
+  const items = all.filter(r => [r.title, r.creator, r.sourceName].join(' ').toLowerCase().includes(q.toLowerCase()));
+  return <><div class="search lib-search"><Search size={14} /><input class="input" type="search" aria-label={recent ? 'Filter recently used audio' : 'Filter favorite audio'} placeholder={recent ? 'Filter recently used…' : 'Filter favorites…'} value={q} onInput={e => setQ(e.target.value)} /></div><div class="audio-browse-title"><h3>{recent ? 'Recently used' : 'Your favorites'}</h3><p class="muted">{recent ? 'Sounds you have added to your projects.' : 'The right sound, ready when you need it.'}</p></div>{items.length ? <AudioList items={items} /> : <div class="lib-state">{recent ? <Clock size={22} /> : <Heart size={22} />}<b>{q ? 'No matching saved audio' : recent ? 'Your next sound starts here' : 'Keep the good ones close'}</b><span>{q ? 'Try a different word.' : recent ? 'Audio you add to a timeline will appear here.' : 'Use the heart on any track or sound to save it here.'}</span><button class="btn sm" onClick={() => (audioTab.value = 'discover')}>Explore audio</button></div>}</>;
 }
 
 function AudioList({ items, panel }) {
@@ -309,37 +375,22 @@ export function StickerLibrary() {
 // Discover searches every free sticker source at once: Fluent animated emoji, CC0 illustrations and
 // silhouettes from Openverse, and Pixabay when the creator has added a key.
 function Discover() {
-  const s = searches.stickers.value; const groups = GROUPS; const L = lists.value.sticker;
-  const gridRef = useRef(); const pixabay = libStatus.value?.pixabay?.configured;
-  const cats = categories.value.assetpolish || [];
-  const total = cats.find(c => c.group === 'all')?.count;
-  const topics = cats.filter(c => c.group === 'topic'), collections = cats.filter(c => c.group === 'collection');
-  const browsingAssetPolish = !s.source || s.source === 'assetpolish';
+  const s = searches.stickers.value, gridRef = useRef(), pixabay = libStatus.value?.pixabay?.configured;
   useEffect(() => {
-    loadCategories('assetpolish');
-    if (searches.stickers.value.status === 'idle') search('stickers', {}, { now: true });
+    if (searches.stickers.value.status === 'idle' || searches.stickers.value.source === 'assetpolish') search('stickers', { q: '', source: 'fluent', category: 'Smileys & Emotion', collection: '' }, { now: true });
   }, []);
   return <>
-    <SearchField panel="stickers" placeholder="Search stickers — party, star, arrow, cat…" onArrowDown={() => gridRef.current?.querySelector('.st-card')?.focus()} />
-    <div class="lib-catalog-head"><b>{total != null ? total.toLocaleString() + ' free assets' : 'Free stickers & illustrations'}</b><span class="muted">AssetPolish · CC0{collections.length ? ` · ${collections.length} collections` : ''}</span></div>
-    <div class="lib-filters sticker-filters">
-      <Select label="Sticker source" value={s.source} options={[['', 'All sources'], ['assetpolish', 'AssetPolish'], ['fluent', 'Fluent Emoji'], ['openverse', 'Openverse'], ...(pixabay ? [['pixabay', 'Pixabay']] : [])]} onChange={v => search('stickers', { source: v, category: '', collection: '' }, { now: true })} />
-      {browsingAssetPolish && <>
-        <Select label="Sticker topic" value={s.category} options={[[ '', 'All topics' ], ...topics.map(c => [c.id, `${c.name} (${c.count})`])]} onChange={v => search('stickers', { category: v, source: v ? 'assetpolish' : s.source }, { now: true })} />
-      </>}
-    </div>
-    {browsingAssetPolish && <details class="lib-collections" open={!!s.collection}><summary>{s.collection ? s.collection.replace(/^collection:/, '') : 'Browse collections'}</summary><Select label="Sticker collection" value={s.collection} options={[[ '', 'All collections' ], ...collections.map(c => [c.id, `${c.name} (${c.count})`])]} onChange={v => search('stickers', { collection: v, source: v ? 'assetpolish' : s.source }, { now: true })} /></details>}
-    <div ref={gridRef}>{s.status === 'loading' || s.status === 'idle' ? <Skeleton grid rows={12} /> : s.status === 'empty' || s.status === 'error' ? <StateCard s={s} panel="stickers" onRetry={() => search('stickers', {}, { now: true })} /> : <><ResultCount s={s} panel="stickers" noun="asset" /><StickerGrid items={s.results} /><MoreButton s={s} panel="stickers" /></>}</div>
-    <details class="lib-emoji-browse"><summary>Emoji, shapes & saved stickers</summary>
-      {L.recents.length > 0 && <><h4 class="group-title">Recently used</h4><StickerGrid items={L.recents.slice(0, 12)} /></>}
-      {L.favorites.length > 0 && <><h4 class="group-title">Favorites</h4><StickerGrid items={L.favorites.slice(0, 24)} /></>}
-      <div class="cat-grid">{groups.map(g => <button key={g.id} class="cat-tile" onClick={() => { stickerTab.value = 'animated'; search('fluent', { category: g.id, q: '' }, { now: true }); }}><span class="emo">{g.glyph}</span><span>{g.name}</span></button>)}<button class="cat-tile" onClick={() => (stickerTab.value = 'static')}><Shapes size={22} /><span>Shapes & emoji</span></button></div>
-    </details>
-    <p class="muted hint lib-intro">No credits needed. Motion designs from AssetPolish are offered as still stickers; use Animated for moving emoji. Added stickers are saved locally and work offline.</p>
+    <SearchField panel="stickers" placeholder="Search expressive stickers…" onArrowDown={() => gridRef.current?.querySelector('.st-card')?.focus()} />
+    <div class="lib-catalog-head"><b>Expressive stickers</b><span class="muted">Microsoft Fluent · animated 3D artwork</span></div>
+    {pixabay && <Select label="Sticker source" value={s.source || 'fluent'} options={[[ 'fluent', 'Microsoft Fluent' ], [ 'pixabay', 'Pixabay illustrations' ]]} onChange={v => search('stickers', { source: v, category: '', q: '' }, { now: true })} />}
+    {(!s.source || s.source === 'fluent') && <BrowseRail className="sticker-category-strip" label="Sticker categories"><button class={`fchip ${!s.category ? 'on' : ''}`} onClick={() => search('stickers', { category: '', q: '' }, { now: true })}>All</button>{GROUPS.map(g => <button key={g.id} class={`fchip ${s.category === g.id ? 'on' : ''}`} onClick={() => search('stickers', { category: g.id, q: '' }, { now: true })}>{g.glyph} {g.name}</button>)}</BrowseRail>}
+    <div ref={gridRef}>{s.status === 'loading' || s.status === 'idle' ? <Skeleton grid rows={12} /> : s.status === 'empty' || s.status === 'error' ? <StateCard s={s} panel="stickers" onRetry={() => search('stickers', {}, { now: true })} /> : <><ResultCount s={s} panel="stickers" noun="sticker" /><StickerGrid items={s.results} /><MoreButton s={s} panel="stickers" /></>}</div>
+    <p class="muted hint lib-intro">Hover to see the animation. Click or drag to add. Downloaded stickers stay available offline. Your own PNG, GIF, APNG, WebP, SVG and Lottie imports are welcome too.</p>
   </>;
 }
+
 const GROUPS = [['Smileys & Emotion', '😀'], ['People & Body', '👋'], ['Animals & Nature', '🦊'], ['Food & Drink', '🍕'], ['Activities', '🎉'], ['Travel & Places', '🚀'], ['Objects', '💡'], ['Flags', '🏁']].map(([id, glyph]) => ({ id, name: id.replace(' & ', ' & '), glyph }));
-function MoreButton({ s, panel = 'fluent' }) { return s.page < s.pages ? <div class="lib-more lib-pagination"><span class="muted">Showing {s.results.length.toLocaleString()} of {s.total.toLocaleString()}</span><button class="btn sm ghost" disabled={s.status === 'more'} onClick={() => search(panel, {}, { more: true })}>{s.status === 'more' ? <LoaderCircle size={14} class="spin" /> : null}Show more</button></div> : null; }
+function MoreButton({ s, panel = 'fluent' }) { return s.page < s.pages ? <div class="lib-more lib-pagination"><span class="muted">{['music', 'sfx'].includes(panel) ? `${s.results.length} shown · more available` : `Showing ${s.results.length.toLocaleString()} of ${(s.total || 0).toLocaleString()}`}</span><button class="btn sm ghost" disabled={s.status === 'more'} onClick={() => search(panel, {}, { more: true })}>{s.status === 'more' ? <LoaderCircle size={14} class="spin" /> : null}Show more</button></div> : null; }
 function Animated() {
   const s = searches.fluent.value;
   useEffect(() => { if (!s.category && !s.q) search('fluent', { category: GROUPS[0].id }, { now: true }); }, []);
@@ -382,6 +433,11 @@ function ImageCard({ rec }) {
 }
 function FluentCard({ rec }) {
   const [live, setLive] = useState(false), [loaded, setLoaded] = useState(false);
+  const [still, setStill] = useState(null), [broken, setBroken] = useState(false), imageRef = useRef();
+  useEffect(() => {
+    if (live || !loaded || still || !imageRef.current?.naturalWidth) return;
+    try { const c = document.createElement('canvas'); c.width = c.height = 128; c.getContext('2d').drawImage(imageRef.current, 0, 0, 128, 128); setStill(c.toDataURL('image/png')); } catch {}
+  }, [live, loaded, still]);
   const busy = busyKeys.value.has(rec.key), prog = busyKeys.value.get(rec.key);
   const animate = () => { if (!reduced()) setLive(true); };
   const add = () => useRecord(rec);
@@ -396,8 +452,9 @@ function FluentCard({ rec }) {
   return <div class={`st-card ${busy ? 'busy' : ''}`} role="option" tabIndex={0} aria-label={`${rec.title}, animated sticker${rec.imported ? ', ready offline' : ''}`} data-tip={`${rec.title} · Fluent Emoji · MIT`} draggable
     onDragStart={e => dragRecord(e, rec)} onClick={add} onContextMenu={menu} onPointerEnter={animate} onPointerLeave={() => setLive(false)} onFocus={animate} onBlur={() => setLive(false)}
     onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ' || e.key === '+') { e.preventDefault(); add(); } if (e.key.toLowerCase() === 'f') toggleFavorite(rec); if (e.key === 'i') selectedRecord.value = rec; }}>
-    <span class={`emo ${live && loaded ? 'hide' : ''}`} aria-hidden="true">{rec.glyph || '✨'}</span>
-    {live && <img src={`/api/creative/preview/fluent/${rec.sourceId}`} alt="" draggable={false} class={loaded ? 'on' : ''} onLoad={() => setLoaded(true)} onError={() => setLive(false)} />}
+    <span class={`emo ${loaded ? 'hide' : ''}`} aria-hidden="true">{rec.glyph || '✨'}</span>
+    {!broken && <img ref={imageRef} src={!live && still ? still : `/api/creative/preview/fluent/${rec.sourceId}`} alt="" loading="lazy" draggable={false} class={loaded ? 'on' : ''} onLoad={() => setLoaded(true)} onError={() => { setBroken(true); setLive(false); setLoaded(false); }} />}
+    <span class="st-name">{rec.title}</span>
     {rec.imported && <span class="st-ready" data-tip="Downloaded — works offline"><Check size={10} /></span>}
     {rec.favorite && <Heart size={11} class="st-fav" fill="currentColor" />}
     {busy && <span class="st-busy" style={{ '--p': ((prog ?? 0.1) * 100) + '%' }}><LoaderCircle size={16} class="spin" /></span>}
@@ -415,7 +472,7 @@ function StaticStickers() {
 }
 function MyStickers() {
   const p = project.value;
-  const list = [...media.value.values()].filter(a => a.role === 'sticker').sort((a, b) => (p.mediaIds.includes(b.id) - p.mediaIds.includes(a.id)) || String(b.imported).localeCompare(String(a.imported)));
+  const list = [...media.value.values()].filter(a => a.role === 'sticker' && a.source?.provider !== 'assetpolish').sort((a, b) => (p.mediaIds.includes(b.id) - p.mediaIds.includes(a.id)) || String(b.imported).localeCompare(String(a.imported)));
   return <>
     <button class="dropzone compact" onClick={pickStickerFiles}><Upload size={20} /><b>Import your stickers</b><span>PNG, GIF, APNG, WebP, SVG or Lottie (.json) — or drop files here. Transparency and animation are kept.</span></button>
     {list.length > 0 && <div class="sticker-grid" role="listbox" aria-label="My stickers" onKeyDown={e => navKeys(e, '.st-card')}>{list.map(a => <AssetSticker key={a.id} a={a} />)}</div>}

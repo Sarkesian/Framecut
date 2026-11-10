@@ -1,0 +1,54 @@
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const {Archive}=require('../desktop/providers/archive.cjs');
+const {SfxMint}=require('../desktop/providers/sfxmint.cjs');
+const {MetadataCache}=require('../desktop/providers/metadata.cjs');
+const {musicEvidence,AUDIO_DISCOVERY}=require('../shared/audio-library.mjs');
+const cc0='https://creativecommons.org/publicdomain/zero/1.0/';
+test('Audio relevance distinguishes musical evidence from spoken recordings; comedy is discoverable',()=>{
+ assert.ok(musicEvidence({title:'Funny piano melody',tags:['comedy']}).length);
+ assert.deepEqual(musicEvidence({title:'quirky electronic bubbling sound',tags:['boil']}),[]);
+ assert.deepEqual(musicEvidence({title:'Piano interview',tags:['music']}),[]);
+ assert.deepEqual(musicEvidence({title:'Station noises'}),[]);
+ assert.ok(AUDIO_DISCOVERY.moods.some(x=>x[0]==='funny'));
+});
+test('Archive selects one playable derivative per original and refuses conflicting licenses',()=>{
+ const p=new Archive({http:{}});
+ const data={metadata:{mediatype:'audio',creator:'Composer',title:'Piano music',licenseurl:cc0},files:[
+  {name:'Piano.wav',source:'original',length:'01:05',size:'10000'},
+  {name:'Piano.mp3',source:'derivative',original:'Piano.wav',length:'01:05',size:'5000',sha1:'a'.repeat(40)},
+  {name:'Tiny.mp3',source:'original',length:3,size:100},
+  {name:'Private.mp3',source:'original',length:65,size:500,private:'true'}]};
+ let rows=p.records(data,'album'); assert.equal(rows.length,1); assert.equal(rows[0].filetype,'mp3');assert.equal(rows[0].durationMs,65000); assert.equal(rows[0].expectedSha1,'a'.repeat(40));
+ data.files[1].licenseurl='https://creativecommons.org/licenses/by/4.0/';
+ rows=p.records(data,'album'); assert.equal(rows.length,1); assert.equal(rows[0].filetype,'wav');
+ data.metadata.licenseurl=[cc0,'https://creativecommons.org/licenses/by/4.0/'];assert.deepEqual(p.records(data,'album'),[]);
+});
+test('Archive pages do not skip eligible records after filtering a source batch',async()=>{
+ const p=new Archive({http:{}}); p.call=async path=>path.startsWith('/advanced')?{response:{start:0,numFound:3,docs:[{identifier:'a'},{identifier:'b'},{identifier:'c'}]}}:{id:path.split('/').pop()};
+ p.records=(d)=>[{sourceId:d.id+'1',durationMs:60000},{sourceId:d.id+'2',durationMs:60000}];
+ const a=await p.search({q:'piano',page:1,pageSize:3}),b=await p.search({q:'piano',page:2,pageSize:3});
+ assert.deepEqual([...a.items,...b.items].map(r=>r.sourceId),['a1','a2','b1','b2','c1','c2']);
+});
+test('SFXMint requires MP3 integrity and signal evidence, deduplicates set alternates, honors quota',async()=>{
+ let hits=0,key=''; const row={slug:'silly-pop',title:'Silly pop',license:'CC0',mp3_url:'https://sfxmint.com/dl/silly-pop.mp3',duration_ms:2000,format_metadata:{mp3:{duration_ms:500,sha256:'a'.repeat(64),decodable:true,signal_ok:true}}};
+ const p=new SfxMint({http:{json:async path=>{hits++; if(path.includes('/sets/'))return {sounds:{pop:{...row,alternates:[row]}}};throw Object.assign(Error('limit'),{status:429,retryAfter:120,body:'{"message":"Daily allowance reached"}'});}},credentials:()=>({key})});
+ assert.equal(p.normalize(row,'https://sfxmint.com/api/v1/search').durationMs,500);
+ assert.equal(p.normalize({...row,format_metadata:{mp3:{...row.format_metadata.mp3,signal_ok:false}}},''),null);
+ const set=await p.search({category:'set:funny'}); assert.equal(set.items.length,1);assert.equal(set.pages,1);
+ await assert.rejects(p.call('/search?q=pop'),/Daily allowance/);await assert.rejects(p.call('/search?q=boing'),/Daily allowance/);assert.equal(hits,2,'quota stops different searches too');
+ key='sfx_live_new_key';await assert.rejects(p.call('/search?q=pop'),/Daily allowance/);assert.equal(hits,3,'credential change has a separate allowance');
+});
+test('Archive retries the same catalog page and item after a temporary outage',async()=>{
+ const p=new Archive({http:{}});let failSearch=true,failItem=true;const pages=[];
+ p.call=async path=>{if(path.startsWith('/advanced')){pages.push(new URL('https://archive.org'+path).searchParams.get('page'));if(failSearch){failSearch=false;throw Error('offline');}return{response:{start:0,numFound:1,docs:[{identifier:'a'}]}};}if(failItem){failItem=false;throw Error('offline');}return{};};
+ p.records=()=>[{sourceId:'a',durationMs:60000}];
+ await assert.rejects(p.search({q:'piano'}),/offline/);await assert.rejects(p.search({q:'piano'}),/offline/);
+ const r=await p.search({q:'piano'});assert.deepEqual(pages,['1','1']);assert.equal(r.items[0].sourceId,'a');
+});
+test('Metadata cache shares requests, backs off failures including synchronous errors, and stays bounded',async()=>{
+ const c=new MetadataCache(null,{maxEntries:2});let hits=0;
+ await Promise.all([c.get('a',async()=>{hits++;return 1;}),c.get('a',async()=>{hits++;return 2;})]);assert.equal(hits,1);
+ await assert.rejects(c.get('bad',()=>{throw Error('offline');}),/offline/);assert.equal(c.inflight.size,0);
+ c.set('b',2);c.set('c',3);assert.equal(c.entries.size,2);assert.equal(c.entries.has('a'),false);
+});

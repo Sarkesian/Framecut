@@ -1,7 +1,7 @@
 // Editor workspace: asset browser | preview | inspector over a multitrack timeline.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { ArrowLeft, Undo2, Redo2, Download, Check, LoaderCircle, TriangleAlert, Keyboard, Settings, ChevronDown } from 'lucide-preact';
-import { project, saveState, history, undo, redo, commit, toast, player, time, selection, saveNow, jobs } from '../lib/state.js';
+import { project, saveState, history, undo, redo, commit, toast, player, time, selection, saveNow, jobs, audioExpanded, libraryTab } from '../lib/state.js';
 import { native } from '../lib/api.js';
 import { openMenu, useDraft } from './kit.jsx';
 import { Logo } from './Logo.jsx';
@@ -40,12 +40,15 @@ function Splitter({ dir, onDrag, onReset, label }) {
 export function Editor() {
   const p = project.value;
   const [left, setLeft] = usePanelSize('left', 340, 260, 560), [right, setRight] = usePanelSize('right', 330, 280, 520), [bottom, setBottom] = usePanelSize('timeline', 330, 180, 700);
+  const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+  useEffect(() => { const resize = () => setWindowWidth(window.innerWidth); window.addEventListener('resize', resize); return () => window.removeEventListener('resize', resize); }, []);
   useEffect(() => installShortcuts(), []);
   useEffect(() => { native?.setTitleColors?.({ color: '#0b0c10', symbolColor: '#c9ccd6' }); const beforeUnload = () => { saveNow(); }; window.addEventListener('beforeunload', beforeUnload); return () => window.removeEventListener('beforeunload', beforeUnload); }, []);
   useEffect(() => { setTimeout(() => applySavedOutput().catch(() => {}), 500); }, []);
   if (!p) return null;
   const studio = studioOpen.value, focus = studio && focusMode.value;
-  return <div class={`editor ${focus ? 'focus' : ''}`} style={{ '--left': (studio ? Math.max(left, 360) : left) + 'px', '--right': right + 'px', '--bottom': bottom + 'px' }}>
+  const wideAudio = audioExpanded.value && libraryTab.value === 'audio' && !studio;
+  return <div class={`editor ${focus ? 'focus' : ''}`} style={{ '--left': (studio ? Math.max(left, 360) : wideAudio ? Math.max(left, Math.min(640, windowWidth - right - 330)) : left) + 'px', '--right': right + 'px', '--bottom': bottom + 'px' }}>
     <TopBar />
     <div class="workspace">
       <aside class="panel left">{studio ? <StudioPanel /> : <AssetPanel />}</aside>

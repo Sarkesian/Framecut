@@ -34,7 +34,7 @@ async function startServer({ dataDir = path.join(__dirname, '..', '.workspace'),
   const studio = new Studio({ library, jobs, cacheDir, dataDir, prefs: getPrefs });
   const recorder = new Recorder({ dir: path.join(dataDir, 'media', 'recordings'), library }); await recorder.init();
   const nativeAudio = new NativeAudio({ dir: path.join(dataDir, 'media', 'recordings'), library }); await nativeAudio.init();
-  const creative = new Creative({ dataDir, cacheDir, library, jobs, secrets, ...creativeOptions }); await creative.init();
+  const creative = new Creative({ dataDir, cacheDir, library, jobs, secrets, prefs: getPrefs, ...creativeOptions }); await creative.init();
   const speech = new Speech({ dataDir, cacheDir, jobs, prefs: getPrefs, library });
   let provider = { baseUrl: prefs.ai?.baseUrl || '', key: '', model: prefs.ai?.model || '', speechModel: prefs.ai?.speechModel || 'whisper-1' };
 

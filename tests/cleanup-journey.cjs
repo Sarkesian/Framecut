@@ -16,7 +16,7 @@ const out = path.resolve(process.env.FRAMECUT_QA_OUT || 'test-output/cleanup');
     await page.setViewportSize({ width: 1100, height: 700 });
     await page.getByText('New project').first().click(); await page.locator('.editor').waitFor();
     await page.evaluate(() => { window.__fc.state.libraryTab.value = 'audio'; });
-    await page.locator('.lib-mix').waitFor();
+    await page.getByRole('button', { name: 'Music', exact: true }).click(); await page.locator('.lib-mix').waitFor();
     console.log('· mix labels stay inside their buttons at narrow and wide panel sizes');
     for (const width of [230, 250, 280, 340]) {
       const result = await page.evaluate(w => {
@@ -32,6 +32,14 @@ const out = path.resolve(process.env.FRAMECUT_QA_OUT || 'test-output/cleanup');
       if (width === 230) await page.screenshot({ path: path.join(out, 'sound-controls-narrow.png'), clip: await page.locator('.asset-content').boundingBox() });
     }
     await page.evaluate(() => { document.querySelector('.asset-content').removeAttribute('style'); });
+
+    console.log('· focused library categories receive Home/End instead of timeline shortcuts');
+    const rail = page.locator('.audio-category-rail').first();
+    await rail.focus(); await page.keyboard.press('End');
+    await page.waitForFunction(() => { const e = document.querySelector('.audio-category-rail'); return e.lastElementChild.getBoundingClientRect().right <= e.getBoundingClientRect().right + 2; });
+    await page.keyboard.press('Home');
+    await page.waitForFunction(() => document.querySelector('.audio-category-rail').scrollLeft < 2);
+    await page.evaluate(() => document.activeElement?.blur());
 
     console.log('· concurrent preference edits both persist');
     const settings = await page.evaluate(async () => {
@@ -58,14 +66,14 @@ const out = path.resolve(process.env.FRAMECUT_QA_OUT || 'test-output/cleanup');
         c.search('music', {}, { more: true }); c.search('music', {}, { more: true });
         const requests = pending.length; answer(2, 'next'); await flush();
         c.search('music', { q: 'clear-me' }, { now: true });
-        c.search('music', { q: '' }, { now: true }); answer(3, 'must-not-return'); await flush();
+        c.search('music', { q: '' }, { now: true }); answer(3, 'must-not-return'); answer(4, 'default-browse'); await flush();
         return { abortedImmediately, short, requests, cleared: structuredClone(c.searches.music.value) };
       } finally { window.fetch = original; }
     });
     assert.equal(searchResults.abortedImmediately, true);
     assert.equal(searchResults.short.status, 'idle'); assert.deepEqual(searchResults.short.results, []);
     assert.equal(searchResults.requests, 3, 'only one pagination request');
-    assert.equal(searchResults.cleared.status, 'idle'); assert.deepEqual(searchResults.cleared.results, []);
+    assert.equal(searchResults.cleared.status, 'ok'); assert.deepEqual(searchResults.cleared.results.map(r=>r.title), ['default-browse']);
 
     console.log('· ducking can be enabled again after it was turned off');
     await page.route('**/api/tools/speech', route => route.fulfill({ json: { speech: [{ start: 1, end: 3 }] } }));

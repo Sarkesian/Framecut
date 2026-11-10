@@ -3,7 +3,7 @@
 // optional registered-app credentials. Anonymous access is limited to 20 requests/minute and
 // 200/day, so results are cached and the client throttles itself before Openverse has to.
 const { licenseFilter, assessRights, verifyLicense, includeMode } = require('../../shared/rights.mjs');
-
+const { musicEvidence, canonicalAudioUrl } = require('../../shared/audio-library.mjs');
 const { isWikimediaRecord, assertSourceAllowed } = require('./blocked-sources.cjs');
 
 const API = 'https://api.openverse.org/v1';
@@ -72,7 +72,7 @@ class Openverse {
       if (kind !== 'sticker' && /^(mid|midi|kar|ogx)$/i.test(rec.filetype || '')) continue;
       if (!rec.licenseCheck.ok) { dropped++; continue; } // unknown / contradictory license data is never offered
       if (rec.durationMs != null && rec.durationMs < minMs) continue;
-
+      if (kind === 'music' && (!rec.musicEvidence?.length || !Number.isFinite(rec.durationMs))) continue;
       if (LENGTHS[length] && !(rec.durationMs >= LENGTHS[length][0] && rec.durationMs < LENGTHS[length][1])) continue;
       const dupe = (rec.title + '|' + rec.creator).toLowerCase(); if (seen.has(rec.sourceId) || seen.has(dupe)) continue;
       seen.add(rec.sourceId); seen.add(dupe); items.push(rec);
@@ -102,7 +102,7 @@ class Openverse {
     rec.licenseCheck = verifyLicense(rec, { checkedAt: rec.metadataCheckedAt, method: 'openverse-search' });
     const rights = assessRights({ provider: 'openverse', license: rec.license, licenseVersion: rec.licenseVersion, kind: k, usage: 'personal', verification: rec.licenseCheck });
     rec.tier = rights.tier; rec.localStorageAllowed = rights.storage; rec.exportAllowed = rights.blocked ? false : 'license';
-
+    if (!image) { rec.canonicalKey = canonicalAudioUrl(downloadUrl); rec.musicEvidence = musicEvidence({ ...rec, tags: (r.tags || []).map(t => t.name).filter(Boolean), category: r.category, description: r.description || '' }); }
     Object.defineProperty(rec, 'downloadUrl', { value: downloadUrl, enumerable: false });
     return rec;
   }

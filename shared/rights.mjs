@@ -14,9 +14,9 @@ export const includeMode = v => (['free', 'credit', 'all'].includes(v) ? v : 'fr
 // `license` marks providers whose whole catalog is under one license (verified against their terms).
 export const PROVIDERS = {
   openverse: {
-    id: 'openverse', name: 'Openverse', kinds: ['music', 'sfx', 'sticker'], enabled: true,
+    id: 'openverse', name: 'Openverse', kinds: ['music', 'sfx'], enabled: true,
     home: 'https://openverse.org', terms: 'https://docs.openverse.org/terms_of_service.html',
-    note: 'Openverse indexes openly licensed audio and images hosted by Freesound, Jamendo, SVG Silh and PhyloPic. FrameCut re-reads each item’s license from Openverse before adding it and keeps that record.',
+    note: 'Openverse indexes openly licensed audio and images from Freesound, Jamendo, SVG Silh and PhyloPic. Wikimedia sources are excluded. FrameCut re-reads each item’s license before adding it and keeps that record.',
     preview: true, storage: 'license', export: 'license',
   },
   sfxkit: {
@@ -31,10 +31,23 @@ export const PROVIDERS = {
     note: 'Community music with per-track Creative Commons licenses. Attribution-free mode shows only tracks their creators released under CC0; each license is re-read from ccMixter before adding.',
     preview: true, storage: 'license', export: 'license',
   },
+  archive: {
+    id: 'archive', name: 'Internet Archive', kinds: ['music'], enabled: true, defaultActive: false,
+    home: 'https://archive.org', terms: 'https://archive.org/about/terms.php',
+    note: 'CC0 music with a named creator, musical metadata and an eligible audio file. FrameCut checks both the item license and the selected file’s metadata; an upload’s claim is not independent proof of ownership.',
+    preview: true, storage: 'license', export: 'license',
+  },
+  sfxmint: {
+    id: 'sfxmint', name: 'SFXMint', kinds: ['sfx'], enabled: true, optionalCredentials: true,
+    home: 'https://sfxmint.com', terms: 'https://sfxmint.com/terms',
+    note: 'CC0 sound effects via the supported API. Free MP3 previews; anonymous API access allows 20 lookups and 5 selected downloads per UTC day. A free optional key raises these limits. No paid format is required. The API returns up to 50 matches per search and does not offer catalog pagination.',
+    preview: true, storage: true, export: true,
+    license: { id: 'cc0', version: '1.0', url: 'https://creativecommons.org/publicdomain/zero/1.0/', holder: null },
+  },
   assetpolish: {
-    id: 'assetpolish', name: 'AssetPolish', kinds: ['sticker'], enabled: true,
+    id: 'assetpolish', name: 'AssetPolish', kinds: ['sticker'], enabled: true, retired: true,
     home: 'https://www.assetpolish.com', terms: 'https://www.assetpolish.com/licenses/',
-    note: 'About 3,900 vector stickers, illustrations and icons that AssetPolish publishes under CC0, so they need no credit. FrameCut reads its public catalog once a day, and each file you add is checked against the fingerprint the catalog publishes. Animated items are offered as stills for now.',
+    note: 'Removed from discovery and new imports. This license entry only preserves compatibility with files already saved in projects.',
     preview: true, storage: true, export: true, license: { id: 'cc0', version: '1.0', url: 'https://creativecommons.org/publicdomain/zero/1.0/', holder: null },
   },
   pixabay: {
@@ -190,7 +203,7 @@ export function assessRights({ provider, license, licenseVersion, kind = 'music'
 // Licenses to ask Openverse for in each discovery mode (metadata-based, re-checked on import).
 export function licenseFilter(usage, kind, include = 'all') {
   const free = ['cc0', 'pdm'];
-  if (include === 'free') return free;
+  if (include === 'free') return kind === 'music' || kind === 'sfx' ? ['cc0'] : free;
   if (include === 'credit') return [...free, 'by'];
   const ok = usage === 'commercial' ? [...free, 'by', 'by-sa', 'sampling+'] : [...free, 'by', 'by-sa', 'by-nc', 'by-nc-sa', 'sampling+', 'nc-sampling+'];
   return (kind === 'music' || kind === 'sfx') ? ok : [...ok, 'by-nd', ...(usage === 'commercial' ? [] : ['by-nc-nd'])];

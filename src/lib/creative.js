@@ -9,19 +9,19 @@ import { freeTrack, addTrack, trackOf, overlaps } from './edit.js';
 import { activeOutput } from '../audio/devices.js';
 import { shortTime } from './format.js';
 
-export const audioTab = signal('music');   // music | sfx | mine
+export const audioTab = signal('discover'); // discover | music | sfx | favorites | recent | mine
 export const stickerTab = signal('discover'); // discover | animated | static | mine
 export const libStatus = signal(null);
 export const busyKeys = signal(new Map()); // key -> progress 0..1 (or null = indeterminate)
 export const selectedRecord = signal(null); // detail drawer
 
-const blank = () => ({ q: '', length: '', source: '', category: '', collection: '', results: [], page: 0, pages: 0, total: 0, status: 'idle', error: null, scroll: 0 });
+const blank = () => ({ q: '', length: '', source: '', category: '', collection: '', browseQuery: '', browseTitle: '', sort: 'relevance', results: [], page: 0, pages: 0, total: 0, status: 'idle', error: null, scroll: 0 });
 export const searches = { music: signal(blank()), sfx: signal(blank()), fluent: signal(blank()), stickers: signal(blank()) };
 // Music, sound effects and the sticker search ask every free source at once ('all'); the server merges
 // them. The Animated tab browses Fluent Emoji only. Picking a source in the filter narrows to it.
 const PROVIDER = { music: 'all', sfx: 'all', fluent: 'fluent', stickers: 'all' };
 const KIND = { music: 'music', sfx: 'sfx', fluent: 'sticker', stickers: 'sticker' };
-const OWN_SOURCES = ['ccmixter', 'sfxkit', 'pixabay', 'openverse', 'assetpolish', 'fluent']; // source filter values that are whole providers
+const OWN_SOURCES = ['ccmixter', 'sfxkit', 'sfxmint', 'archive', 'pixabay', 'openverse', 'fluent']; // source filter values that are whole providers
 // Category browsing (no search words) is answered by the source that owns the categories.
 const CATEGORY_PROVIDER = { sfx: 'sfxkit', fluent: 'fluent' };
 
@@ -34,7 +34,13 @@ export const rightsOf = rec => assessRights({ provider: rec.provider, license: r
 
 // Category lists of sources that have them (SFX Kit, Fluent), loaded once.
 export const categories = signal({});
-export async function loadCategories(provider) { if (categories.value[provider]) return; try { categories.value = { ...categories.value, [provider]: await api('/api/creative/categories?provider=' + provider) }; } catch {} }
+const categoryFlights = new Map();
+export async function loadCategories(provider) {
+  if (categories.value[provider]) return;
+  if (categoryFlights.has(provider)) return categoryFlights.get(provider);
+  const flight = api('/api/creative/categories?provider=' + provider).then(items => { categories.value = { ...categories.value, [provider]: items }; }).catch(() => {}).finally(() => categoryFlights.delete(provider));
+  categoryFlights.set(provider, flight); return flight;
+}
 export const warmSources = kind => api('/api/creative/warm?kind=' + kind).catch(() => {});
 export async function loadStatus() { try { libStatus.value = await api('/api/creative/status'); } catch {} return libStatus.value; }
 
@@ -57,14 +63,16 @@ async function runSearch(panel, more, retried = false, revision = revisions[pane
   const s = searches[panel], cur = s.value;
   const q = cur.q.trim();
   const stickerBrowse = panel === 'stickers';
-  const browsing = stickerBrowse || (!q && cur.category && CATEGORY_PROVIDER[panel]);
+  const audioBrowse = panel === 'music' || panel === 'sfx';
+  const browsing = stickerBrowse || audioBrowse || (!q && cur.category && CATEGORY_PROVIDER[panel]);
   if (panel !== 'fluent' && ((!q && !browsing) || (!stickerBrowse && q && q.length < 2))) { s.value = { ...cur, results: [], status: 'idle', error: null, total: 0, page: 0, pages: 0, partial: [], sources: [] }; return; }
   controllers[panel]?.abort(); const ctl = new AbortController(); controllers[panel] = ctl;
   const page = more ? cur.page + 1 : 1;
   s.value = { ...cur, status: more ? 'more' : 'loading', error: null };
   const own = OWN_SOURCES.includes(cur.source);
-  const provider = stickerBrowse && (cur.category || cur.collection || (!q && !cur.source)) ? 'assetpolish' : cur.category && CATEGORY_PROVIDER[panel] ? CATEGORY_PROVIDER[panel] : own ? cur.source : cur.source ? 'openverse' : PROVIDER[panel];
-  const params = new URLSearchParams({ provider, kind: KIND[panel], q, page: String(page), usage: usageMode(), length: cur.length, source: own ? '' : cur.source, category: cur.category, ...(stickerBrowse ? { collection: cur.collection } : {}) });
+  const provider = stickerBrowse && !cur.source ? 'fluent' : own ? cur.source : cur.category && CATEGORY_PROVIDER[panel] ? CATEGORY_PROVIDER[panel] : cur.source ? 'openverse' : PROVIDER[panel];
+  const effectiveQuery = q || (panel === 'music' ? cur.browseQuery || 'ambient' : panel === 'sfx' && !cur.category && !['sfxkit', 'sfxmint'].includes(cur.source) ? cur.browseQuery || 'whoosh' : '');
+  const params = new URLSearchParams({ provider, kind: KIND[panel], q: effectiveQuery, page: String(page), usage: usageMode(), length: cur.length, source: own ? '' : cur.source, category: cur.category, ...(stickerBrowse ? { collection: cur.collection } : {}), ...(audioBrowse && provider === 'all' ? { deadline: '2500' } : {}) });
   try {
     const r = await fetch('/api/creative/search?' + params, { signal: ctl.signal }); const d = await r.json();
     if (!r.ok) throw Object.assign(Error(d.error), { code: d.code, retryAfter: d.retryAfter });
@@ -129,13 +137,14 @@ async function previewFailed() {
 let warmTimer, warmed = new Set();
 export function warmPreview(rec, delay = 160) {
   clearTimeout(warmTimer);
-  if (!rec || rec.url || rec.imported || !rec.provider || warmed.has(rec.key) || preview.value.key === rec.key) return;
+  if (!rec || rec.url || rec.previewUrl || rec.imported || !rec.provider || warmed.has(rec.key) || preview.value.key === rec.key) return;
   warmTimer = setTimeout(() => { if (warmed.size > 400) warmed = new Set(); warmed.add(rec.key); api('/api/creative/warm-preview', { provider: rec.provider, id: rec.sourceId }).catch(() => {}); }, delay);
 }
 // rec: a library record, or { key, url, title, durationMs } for a file that is already local.
 export async function togglePreview(rec) {
   if (preview.value.key === rec.key && audioEl) {
     if (preview.value.state === 'paused') { if (recordingCheck()) return toast('Previews are paused while you record, so nothing leaks into your microphone.', 'warn'); player.current?.pause(); audioEl.play().catch(() => {}); }
+    else if (preview.value.state === 'loading') stopPreview();
     else pausePreview();
     return;
   }
@@ -151,20 +160,24 @@ export async function togglePreview(rec) {
     audioEl.addEventListener('error', previewFailed);
   }
   player.current?.pause();
+  audioEl.pause();
+  audioEl.removeAttribute('src'); audioEl.load();
   const key = rec.key;
   preview.value = { key, state: 'loading', d: (rec.durationMs || 0) / 1000, title: rec.title || '' }; previewTime.value = 0;
   const sink = activeOutput.value && activeOutput.value !== 'default' ? activeOutput.value : '';
   if (audioEl.setSinkId) await audioEl.setSinkId(sink).catch(() => {});
   if (preview.value.key !== key) return; // another item was clicked while switching outputs
+  if (recordingCheck() || playing.value) { stopPreview(); return; }
   audioEl.volume = Math.min(1, Math.max(0, prefs.value.libraryPreviewVolume ?? 0.8));
-  audioEl.src = rec.url || (rec.imported && asset(rec.imported) ? asset(rec.imported).url : previewUrl(rec));
+  audioEl.src = rec.url || (rec.imported && asset(rec.imported) ? asset(rec.imported).url : rec.previewUrl || previewUrl(rec));
   // A file the player cannot load is reported through its 'error' event (previewFailed), which retries as MP3.
-  audioEl.play().catch(e => { if (e.name !== 'AbortError' && e.name !== 'NotSupportedError') { toast('Preview failed to start: ' + e.message, 'warn'); stopPreview(); } });
+  audioEl.play().catch(e => { if (preview.value.key === key && e.name !== 'AbortError' && e.name !== 'NotSupportedError') { toast('Preview failed to start: ' + e.message, 'warn'); stopPreview(); } });
 }
 // Starting the timeline pauses a preview, so two things never play over each other.
 effect(() => { if (playing.value) pausePreview(); });
-export function setPreviewVolume(v) { if (audioEl) audioEl.volume = v; }
-export function seekPreview(frac) { if (audioEl?.duration) { audioEl.currentTime = Math.max(0, Math.min(1, frac)) * audioEl.duration; previewTime.value = audioEl.currentTime; } }
+effect(() => { const sink = activeOutput.value; if (audioEl?.setSinkId) audioEl.setSinkId(sink && sink !== 'default' ? sink : '').catch(() => {}); });
+export function setPreviewVolume(v) { if (audioEl && Number.isFinite(v)) audioEl.volume = Math.max(0, Math.min(1, v)); }
+export function seekPreview(frac) { if (Number.isFinite(audioEl?.duration) && Number.isFinite(frac)) { audioEl.currentTime = Math.max(0, Math.min(1, frac)) * audioEl.duration; previewTime.value = audioEl.currentTime; } }
 
 // ----- import + insert -----
 const setBusy = (key, v) => { const m = new Map(busyKeys.value); if (v === undefined) m.delete(key); else m.set(key, v); busyKeys.value = m; };

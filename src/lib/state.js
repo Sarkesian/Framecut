@@ -38,6 +38,7 @@ export const saveState = signal('saved'); // saved | saving | error | unsaved
 export const history = signal({ past: [], future: [] });
 export const drag = signal(null); // transient timeline drag/trim preview
 export const libraryTab = signal('media');
+export const audioExpanded = signal(false);
 export const zoom = signal(Math.min(800, Math.max(4, +ui.value.zoom || 80))); // timeline pixels per second
 effect(() => { const z = zoom.value; if (ui.peek().zoom !== z) setUi({ zoom: z }); });
 export const duration = computed(() => (project.value ? projectDuration(project.value) : 0));

@@ -42,6 +42,7 @@ class SafeHttp {
     if (url.protocol !== 'https:') throw Object.assign(Error('Only secure (https) downloads are allowed.'), { code: 'unsafe' });
     if (url.username || url.password) throw Object.assign(Error('Unsafe address.'), { code: 'unsafe' });
     const host = url.hostname.replace(/^\[|\]$/g, '');
+    if (host === 'assetpolish.com' || host.endsWith('.assetpolish.com')) throw Object.assign(Error('AssetPolish has been removed from FrameCut’s online library.'), { code: 'unavailable' });
     if (['wikimedia.org', 'wikipedia.org'].some(base => host === base || host.endsWith('.' + base))) throw Object.assign(Error('Wikimedia has been removed from FrameCut’s online library.'), { code: 'unavailable' });
     const addrs = net.isIP(host) ? [{ address: host }] : await dns.lookup(host, { all: true }).catch(() => { throw Object.assign(Error('You appear to be offline.'), { code: 'offline' }); });
     if (!this.allowLocal && addrs.some(a => isPrivate(a.address))) throw Object.assign(Error('That address points to a private network.'), { code: 'unsafe' });

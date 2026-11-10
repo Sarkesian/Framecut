@@ -8,7 +8,7 @@ const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
 const { Readable } = require('node:stream');
 const { writeStreamedFile } = require('./streams.cjs');
-const { isWikimediaRecord, assertSourceAllowed } = require('./providers/blocked-sources.cjs');
+const { isRemovedRecord, assertSourceAllowed } = require('./providers/blocked-sources.cjs');
 const { run, ffmpeg, ffprobe } = require('./tools.cjs');
 const { toStored, fromStored } = require('./paths.cjs');
 const { writeJson, readJsonSync } = require('./jsonstore.cjs');
@@ -18,7 +18,8 @@ const { Fluent } = require('./providers/fluent.cjs');
 const { Pixabay } = require('./providers/pixabay.cjs');
 const { SfxKit } = require('./providers/sfxkit.cjs');
 const { CcMixter } = require('./providers/ccmixter.cjs');
-const { AssetPolish } = require('./providers/assetpolish.cjs');
+const { Archive } = require('./providers/archive.cjs');
+const { SfxMint } = require('./providers/sfxmint.cjs');
 const { assessRights, verifyLicense, discoverable, includeMode, providerTier, PROVIDERS, APP_NOTICES } = require('../shared/rights.mjs');
 
 const PREVIEW_CAP = 250 * 1024 ** 2;
@@ -28,12 +29,17 @@ const EXT_FOR = { 'image/svg+xml': '.svg', 'image/gif': '.gif', 'audio/mpeg': '.
 const safeName = s => String(s || 'asset').replace(/[<>:"/\\|?*\x00-\x1f]+/g, '').replace(/\s+/g, ' ').trim().slice(0, 60) || 'asset';
 
 class Creative {
-  constructor({ dataDir, cacheDir, library, jobs, secrets = null, http = new SafeHttp(), openverseBase, pixabayBase, sfxkitBase, ccmixterBase, assetpolishBase }) {
-    this.library = library; this.jobs = jobs; this.secrets = secrets; this.http = http;
+  constructor({ dataDir, cacheDir, library, jobs, secrets = null, prefs = () => ({}), http = new SafeHttp(), openverseBase, pixabayBase, sfxkitBase, ccmixterBase, audioProviders = true, archiveBase, sfxmintBase }) {
+    this.library = library; this.jobs = jobs; this.secrets = secrets; this.http = http; this.prefs = prefs;
     this.statePath = path.join(dataDir, 'creative.json'); this.dataDir = dataDir;
     this.dirs = { lib: path.join(dataDir, 'media', 'library'), previews: path.join(cacheDir, 'creative', 'previews'), bake: path.join(cacheDir, 'creative', 'bake') };
     this.memCreds = {};
-    this.providers = { openverse: new Openverse({ http, base: openverseBase, credentials: () => this.credentials('openverse') }), fluent: new Fluent(), pixabay: new Pixabay({ http, base: pixabayBase, credentials: () => this.credentials('pixabay') }), sfxkit: new SfxKit({ base: sfxkitBase }), ccmixter: new CcMixter({ http, base: ccmixterBase }), ...(assetpolishBase === false ? {} : { assetpolish: new AssetPolish({ http, base: assetpolishBase, catalogFile: path.join(cacheDir, 'creative', 'assetpolish-catalog.json') }) }) }; // false: left out (tests that must stay offline)
+    this.providers = { openverse: new Openverse({ http, base: openverseBase, credentials: () => this.credentials('openverse') }), fluent: new Fluent(), pixabay: new Pixabay({ http, base: pixabayBase, credentials: () => this.credentials('pixabay') }), sfxkit: new SfxKit({ base: sfxkitBase }), ccmixter: new CcMixter({ http, base: ccmixterBase }) };
+    if (audioProviders) {
+      const cacheFile = id => path.join(cacheDir, 'creative', id + '-metadata.json');
+      this.providers.archive = new Archive({ http, base: archiveBase, cacheFile: cacheFile('archive') });
+      this.providers.sfxmint = new SfxMint({ http, base: sfxmintBase, credentials: () => this.credentials('sfxmint'), cacheFile: cacheFile('sfxmint') });
+    }
     this.cache = new Map(); this.known = new Map(); this.inflight = new Map(); this.sessions = new Map(); this.tokens = new Map();
     this.state = { favorites: [], recents: [], imports: {} };
   }
@@ -56,15 +62,16 @@ class Creative {
   // Browsable categories of a source that has them (SFX Kit, Fluent Emoji).
   categories(id) { const p = this.provider(id); return typeof p.categories === 'function' ? p.categories() : []; }
   persist() { clearTimeout(this.saveTimer); this.saveTimer = setTimeout(() => this.flush().catch(e => console.error('Saving creative.json failed:', e.message)), 300); }
-  flush() { clearTimeout(this.saveTimer); return writeJson(this.statePath, toStored(this.state, this.dataDir)); }
-  provider(id) { const p = this.providers[id]; if (!p) throw Object.assign(Error(PROVIDERS[id]?.reason || 'Unknown media source.'), { code: 'unavailable' }); return p; }
+  flush() { clearTimeout(this.saveTimer); return Promise.all([writeJson(this.statePath, toStored(this.state, this.dataDir)), ...Object.values(this.providers).filter(p => typeof p.cache?.flush === 'function').map(p => p.cache.flush())]); }
+  provider(id) { assertSourceAllowed({ provider: id }); const p = this.providers[id]; if (!p) throw Object.assign(Error(PROVIDERS[id]?.reason || 'Unknown media source.'), { code: 'unavailable' }); return p; }
 
   // ----- credentials (kept in the OS credential store via the desktop shell; never sent to the UI) -----
   credentials(id) { try { const v = this.secrets?.get('provider:' + id); return v ? JSON.parse(v) : this.memCreds[id] || null; } catch { return this.memCreds[id] || null; } }
   setCredentials(id, value) {
-    if (!['openverse', 'pixabay'].includes(id)) throw Error('This source does not use credentials.');
+    if (!['openverse', 'pixabay', 'sfxmint'].includes(id)) throw Error('This source does not use credentials.');
     let clean;
     if (id === 'pixabay') { const k = String(value?.key || '').trim(); if (k && !/^[\w-]{8,100}$/.test(k)) throw Error('That does not look like a Pixabay API key.'); clean = k ? { key: k } : null; }
+    else if (id === 'sfxmint') { const k = String(value?.key || '').trim(); if (k && !/^sfx_live_[a-zA-Z0-9_-]{8,200}$/.test(k)) throw Error('That does not look like an SFXMint API key.'); clean = k ? { key: k } : null; }
     else clean = value && value.clientId && value.clientSecret ? { clientId: String(value.clientId).trim().slice(0, 200), clientSecret: String(value.clientSecret).trim().slice(0, 400) } : null;
     if (this.secrets?.available?.()) this.secrets.set('provider:' + id, clean ? JSON.stringify(clean) : null); else this.memCreds[id] = clean;
     this.providers.openverse.token = null; this.cache.clear();
@@ -74,17 +81,19 @@ class Creative {
     return {
       openverse: { ...this.providers.openverse.status(), credentials: !!this.credentials('openverse'), secureStore: !!this.secrets?.available?.() },
       pixabay: this.providers.pixabay.status(), notices: APP_NOTICES,
-      assetpolish: this.providers.assetpolish?.status() || null,
-      providers: Object.values(PROVIDERS).map(p => ({ id: p.id, name: p.name, enabled: p.enabled, optional: !!p.optional, configured: p.needsKey ? !!this.providers[p.id]?.configured?.() : null, kinds: p.kinds, reason: p.reason || null, note: p.note || null, home: p.home || null, terms: p.terms || null, tier: providerTier(p.id) })),
+      sfxmint: this.providers.sfxmint?.status() || null,
+      archive: this.providers.archive?.status() || null,
+      providers: Object.values(PROVIDERS).filter(p => !p.retired).map(p => ({ id: p.id, name: p.name, enabled: p.enabled, active: this.prefs()?.librarySources?.[p.id] ?? p.defaultActive !== false, optional: !!p.optional, configured: p.needsKey || p.optionalCredentials ? !!this.providers[p.id]?.configured?.() : null, kinds: p.kinds, reason: p.reason || null, note: p.note || null, home: p.home || null, terms: p.terms || null, tier: providerTier(p.id) })),
     };
   }
   // Providers that can answer a search for this kind in this discovery mode (configured, enabled, right tier).
   searchable(kind, include) {
     // Bundled-index sources (instant, work offline) lead the interleaved results.
-    const order = ['fluent', 'sfxkit', 'assetpolish', 'openverse', 'ccmixter', 'pixabay'];
+    const order = ['fluent', 'sfxkit', 'sfxmint', 'openverse', 'ccmixter', 'archive', 'pixabay'];
     return Object.keys(this.providers).sort((x, y) => order.indexOf(x) - order.indexOf(y)).filter(id => {
       const pv = PROVIDERS[id], p = this.providers[id];
       if (!pv?.enabled || !pv.kinds.includes(kind)) return false;
+      if (!(this.prefs()?.librarySources?.[id] ?? pv.defaultActive !== false)) return false;
       if (pv.needsKey && !p.configured?.()) return false;
       const t = providerTier(id); return !t || t === 'free' || (t === 'credit' && include !== 'free') || include === 'all';
     });
@@ -99,6 +108,7 @@ class Creative {
   async search(providerId, params = {}) {
     if (providerId === 'all') return this.searchAll(params);
     const p = this.provider(providerId);
+    if (this.prefs()?.librarySources?.[providerId] === false) throw Object.assign(Error('This source is turned off in Preferences › Library.'), { code: 'unavailable' });
     const q = { q: String(params.q || '').trim().slice(0, 200), kind: params.kind, page: +params.page || 1, usage: params.usage === 'personal' ? 'personal' : 'commercial', length: params.length || '', source: params.source || '', category: params.category || '', ...(providerId === 'assetpolish' ? { collection: params.collection || '' } : {}), include: includeMode(params.include) };
     const key = providerId + JSON.stringify(q);
     const hit = this.cache.get(key);
@@ -112,7 +122,7 @@ class Creative {
     }
     for (const r of data.items) this.remember(r);
     // Only verified items that belong in this discovery mode are shown.
-    const items = data.items.filter(r => (!r.licenseCheck || r.licenseCheck.ok) && discoverable(assessRights({ provider: r.provider, license: r.license, licenseVersion: r.licenseVersion, kind: r.kind, usage: q.usage, verification: r.licenseCheck }), q.include));
+    const items = data.items.filter(r => (!r.licenseCheck || r.licenseCheck.ok) && (!(q.include === 'free' && ['music', 'sfx'].includes(r.kind)) || r.license === 'cc0') && discoverable(assessRights({ provider: r.provider, license: r.license, licenseVersion: r.licenseVersion, kind: r.kind, usage: q.usage, verification: r.licenseCheck }), q.include));
     return { ...data, items: items.map(r => this.decorate(r)), cached: !!hit, query: q, provider: providerId };
   }
   // One search across every compatible source for a kind. Results are interleaved so no source buries
@@ -132,12 +142,13 @@ class Creative {
     if (!ok.length && failed.length) throw failed[0].error;
     // Near-duplicates (same title and creator) are only merged across sources: within one source,
     // titles can legitimately repeat (Pixabay titles come from tags).
-    const keys = new Set(), names = new Map(), items = []; const lists = ok.map(([, d]) => d.items);
+    const keys = new Set(), names = new Map(), canonical = new Set(), items = []; const lists = ok.map(([, d]) => d.items);
     for (let i = 0; lists.some(l => i < l.length); i++) for (const l of lists) {
       const r = l[i]; if (!r || keys.has(r.key)) continue;
+      if (r.canonicalKey && canonical.has(r.canonicalKey)) continue;
       const k = (r.title + '|' + (r.creator || '')).toLowerCase().replace(/[^a-z0-9|]+/g, '');
       if (names.has(k) && names.get(k) !== r.provider) continue;
-      keys.add(r.key); names.set(k, r.provider); items.push(r);
+      keys.add(r.key); names.set(k, r.provider); if (r.canonicalKey) canonical.add(r.canonicalKey); items.push(r);
     }
     return { items, total: ok.reduce((n, [, d]) => n + (d.total || 0), 0), page: +params.page || 1, pages: Math.max(0, ...ok.map(([, d]) => d.pages || 0)), sources: ok.map(([id, d]) => ({ provider: id, name: PROVIDERS[id]?.name, total: d.total || 0 })), partial: failed.map(({ error, ...f }) => f), provider: 'all' };
   }
@@ -277,6 +288,7 @@ class Creative {
 
   // ----- import (rights check → download → project media → optional sticker bake) -----
   importAsset({ provider: providerId, id, kind, usage = 'commercial' }) {
+    assertSourceAllowed({ provider: providerId });
     const key = providerId + ':' + id; const prev = this.state.imports[key]; const existing = prev && this.library.get(prev.mediaId);
     if (existing && !existing.missing) { this.touchRecent(key); return { reused: true, asset: this.library.public(existing) }; }
     for (const j of this.jobs.jobs.values()) if (j.meta?.creativeKey === key && ['queued', 'running'].includes(j.status)) return { job: j.id };
@@ -296,7 +308,7 @@ class Creative {
       const src = p.download(rec);
       const tmp = path.join(dir, `.${randomUUID()}.download`);
       const dl = await this.http.toFile(src.url, tmp, { accept: src.accept, headers: src.headers, maxBytes: src.maxBytes, timeout: src.timeout, signal, onProgress: f => progress(0.05 + (f ?? 0.5) * 0.75, 'Downloading') });
-      if (rec.expectedSha256 && dl.sha256 !== rec.expectedSha256) { await fsp.unlink(tmp).catch(() => {}); throw Object.assign(Error(`“${rec.title}” didn’t match the file its source published, so it wasn’t added.`), { code: 'corrupt' }); }
+      if ((rec.expectedSha256 && dl.sha256 !== rec.expectedSha256) || (rec.expectedSha1 && dl.sha1 !== rec.expectedSha1)) { await fsp.unlink(tmp).catch(() => {}); throw Object.assign(Error(`“${rec.title}” didn’t match the file its source published, so it wasn’t added.`), { code: 'corrupt' }); }
       // Same bytes already imported under another listing? Reuse that file.
       const twin = Object.entries(this.state.imports).find(([, v]) => v.sha256 === dl.sha256 && this.library.get(v.mediaId) && !this.library.get(v.mediaId).missing);
       const ext = EXT_FOR[dl.contentType] || (rec.filetype && /^(mp3|ogg|wav|flac|m4a|aac|opus)$/.test(rec.filetype) ? '.' + rec.filetype : rec.filetype === 'mp32' ? '.mp3' : rec.kind === 'sticker' ? '.png' : '.audio');
@@ -328,7 +340,7 @@ class Creative {
     this.persist(); return { favorite: !!on };
   }
   lists(kind) {
-    const f = list => list.filter(x => !isWikimediaRecord(x.record) && (!kind || kindGroup(x.record.kind) === kindGroup(kind))).map(x => this.decorate(x.record));
+    const f = list => list.filter(x => !isRemovedRecord(x.record) && (!kind || kindGroup(x.record.kind) === kindGroup(kind))).map(x => this.decorate(x.record));
     return { favorites: f(this.state.favorites), recents: f(this.state.recents) };
   }
 
