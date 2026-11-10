@@ -136,6 +136,8 @@
 
 /* Audio discovery stays usable in both the compact sidebar and the expanded browser. */
 .audio-hub { container-type: inline-size; }
+.audio-browse-all { width: 100%; margin: -8px 0 18px; }
+.audio-browse-actions { margin: 0 0 12px; }
 .audio-nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 12px; overflow: visible; padding: 0 1px 6px; border-bottom: 1px solid var(--line-2); margin-bottom: 12px; }
 .audio-nav button { position: relative; flex: none; white-space: nowrap; border: 0; border-radius: 0; padding: 12px 1px 13px; background: transparent; color: var(--text-3); cursor: pointer; font: inherit; font-size: 12px; font-weight: 550; transition: color .15s; }
 .audio-nav button:hover { color: var(--text); }

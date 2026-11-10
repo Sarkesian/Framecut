@@ -29,6 +29,7 @@ export const AUDIO_DISCOVERY = {
 };
 const MUSICAL = /\b(music|musical|song|soundtrack|instrumental|melod(?:y|ic)|piano|guitar|orchestr(?:a|al)|jazz|synth(?:esizer)?|cinematic|lo[ -]?fi|hip[ -]?hop|techno|electronic|acoustic|classical|drum|beat|bass|composition|chord|violin|flute|cello)\b/i;
 const SPOKEN = /\b(spoken[ -]?word|speech|speaking|podcast|interview|lecture|audiobook|news[ -]?report|sermon|language[ -]?lesson|radio[ -]?show)\b/i;
+export const isSpokenAudio = ({ title = '', tags = [] } = {}) => SPOKEN.test(title + ' ' + tags.join(' '));
 export function musicEvidence({ title = '', tags = [], genres = [], description = '', category = '' } = {}) {
   if (SPOKEN.test(title + ' ' + tags.join(' '))) return [];
   const fields = [title, ...tags, ...genres, category === 'music' ? '' : category, description];

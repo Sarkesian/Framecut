@@ -3,8 +3,16 @@ const assert=require('node:assert/strict');
 const {Archive}=require('../desktop/providers/archive.cjs');
 const {SfxMint}=require('../desktop/providers/sfxmint.cjs');
 const {MetadataCache}=require('../desktop/providers/metadata.cjs');
+const {Openverse}=require('../desktop/providers/openverse.cjs');
 const {musicEvidence,AUDIO_DISCOVERY}=require('../shared/audio-library.mjs');
 const cc0='https://creativecommons.org/publicdomain/zero/1.0/';
+test('Music ranking preserves sparse CC0 tracks and unknown durations without admitting spoken or invalid licenses',async()=>{
+ const row=(n,title,duration,tags=[],extra={})=>({id:String(n),title,duration,tags:tags.map(name=>({name})),url:'https://example.org/'+n+'.mp3',foreign_landing_url:'https://example.org/track/'+n,source:'freesound',license:'cc0',license_version:'1.0',license_url:cc0,filetype:'mp3',...extra});
+ const rows=[row(1,'Cinematic drone 1',60000),row(2,'Peaceful Acoustic 1',90000),row(3,'Untitled by Composer',null),row(4,'Piano melody',60000,['music']),row(5,'Recorded interview',60000,['speech']),row(6,'Mislabeled license',60000,[],{license_url:'https://creativecommons.org/licenses/by/4.0/'})];
+ const p=new Openverse({http:{json:async()=>({results:rows,result_count:6,page_count:1,page:1})}});
+ const all=await p.search({q:'',kind:'music'});assert.deepEqual(all.items.map(r=>r.sourceId),['4','1','2','3']);
+ const timed=await p.search({q:'',kind:'music',length:'song'});assert.ok(!timed.items.some(r=>r.sourceId==='3'));
+});
 test('Audio relevance distinguishes musical evidence from spoken recordings; comedy is discoverable',()=>{
  assert.ok(musicEvidence({title:'Funny piano melody',tags:['comedy']}).length);
  assert.deepEqual(musicEvidence({title:'quirky electronic bubbling sound',tags:['boil']}),[]);

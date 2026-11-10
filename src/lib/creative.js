@@ -15,7 +15,7 @@ export const libStatus = signal(null);
 export const busyKeys = signal(new Map()); // key -> progress 0..1 (or null = indeterminate)
 export const selectedRecord = signal(null); // detail drawer
 
-const blank = () => ({ q: '', length: '', source: '', category: '', collection: '', browseQuery: '', browseTitle: '', sort: 'relevance', results: [], page: 0, pages: 0, total: 0, status: 'idle', error: null, scroll: 0 });
+const blank = () => ({ q: '', length: '', source: '', category: '', collection: '', browseQuery: '', browseTitle: '', browseAll: false, sort: 'relevance', results: [], page: 0, pages: 0, total: 0, status: 'idle', error: null, scroll: 0 });
 export const searches = { music: signal(blank()), sfx: signal(blank()), fluent: signal(blank()), stickers: signal(blank()) };
 // Music, sound effects and the sticker search ask every free source at once ('all'); the server merges
 // them. The Animated tab browses Fluent Emoji only. Picking a source in the filter narrows to it.
@@ -71,7 +71,7 @@ async function runSearch(panel, more, retried = false, revision = revisions[pane
   s.value = { ...cur, status: more ? 'more' : 'loading', error: null };
   const own = OWN_SOURCES.includes(cur.source);
   const provider = stickerBrowse && !cur.source ? 'fluent' : own ? cur.source : cur.category && CATEGORY_PROVIDER[panel] ? CATEGORY_PROVIDER[panel] : cur.source ? 'openverse' : PROVIDER[panel];
-  const effectiveQuery = q || (panel === 'music' ? cur.browseQuery || 'ambient' : panel === 'sfx' && !cur.category && !['sfxkit', 'sfxmint'].includes(cur.source) ? cur.browseQuery || 'whoosh' : '');
+  const effectiveQuery = q || (panel === 'music' ? cur.browseAll ? '' : cur.browseQuery || 'ambient' : panel === 'sfx' && !cur.category && !['sfxkit', 'sfxmint'].includes(cur.source) ? cur.browseQuery || 'whoosh' : '');
   const params = new URLSearchParams({ provider, kind: KIND[panel], q: effectiveQuery, page: String(page), usage: usageMode(), length: cur.length, source: own ? '' : cur.source, category: cur.category, ...(stickerBrowse ? { collection: cur.collection } : {}), ...(audioBrowse && provider === 'all' ? { deadline: '2500' } : {}) });
   try {
     const r = await fetch('/api/creative/search?' + params, { signal: ctl.signal }); const d = await r.json();
