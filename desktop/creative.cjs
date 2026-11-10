@@ -89,7 +89,7 @@ class Creative {
   // Providers that can answer a search for this kind in this discovery mode (configured, enabled, right tier).
   searchable(kind, include) {
     // Bundled-index sources (instant, work offline) lead the interleaved results.
-    const order = ['fluent', 'sfxkit', 'sfxmint', 'openverse', 'ccmixter', 'archive', 'pixabay'];
+    const order = ['fluent', 'sfxkit', 'sfxmint', ...(kind === 'music' ? ['ccmixter', 'openverse'] : ['openverse', 'ccmixter']), 'archive', 'pixabay'];
     return Object.keys(this.providers).sort((x, y) => order.indexOf(x) - order.indexOf(y)).filter(id => {
       const pv = PROVIDERS[id], p = this.providers[id];
       if (!pv?.enabled || !pv.kinds.includes(kind)) return false;
