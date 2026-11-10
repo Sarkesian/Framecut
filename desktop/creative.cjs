@@ -7,6 +7,8 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
 const { Readable } = require('node:stream');
+const { writeStreamedFile } = require('./streams.cjs');
+const { isWikimediaRecord, assertSourceAllowed } = require('./providers/blocked-sources.cjs');
 const { run, ffmpeg, ffprobe } = require('./tools.cjs');
 const { toStored, fromStored } = require('./paths.cjs');
 const { writeJson, readJsonSync } = require('./jsonstore.cjs');
@@ -141,7 +143,7 @@ class Creative {
   }
   async record(providerId, id, { fresh = false, kind } = {}) {
     const k = providerId + ':' + id;
-    if (!fresh && this.known.has(k)) return this.known.get(k);
+    if (!fresh && this.known.has(k)) { const rec = this.known.get(k); assertSourceAllowed(rec); return rec; }
     return this.remember(await this.provider(providerId).getAsset(id, kind));
   }
 
@@ -152,42 +154,51 @@ class Creative {
   // from what has already arrived instead of asking the source again. Finished downloads land in the cache.
   flight(providerId, id, rec) {
     const file = this.previewPath(providerId, id); this.flights ||= new Map();
-    let f = this.flights.get(file); if (f) return f;
-    // A warm-up nobody followed with a click gives its place to the new request.
+    let f = this.flights.get(file); if (f && !f.cancelled) return f;
     for (const o of this.flights.values()) if (!o.subs.size && !o.done) o.abort();
-    const src = this.provider(providerId).preview(rec);
-    f = { file, chunks: [], kept: true, bytes: 0, type: null, length: null, done: false, ok: false, subs: new Set(), ctl: null, timer: null };
-    f.abort = () => { clearTimeout(f.timer); f.ctl?.abort(); };
-    // Left alone (the listener moved on, or a warm-up was never used) the download is dropped after a short grace.
+    const src = this.provider(providerId).preview(rec), controller = new AbortController();
+    f = { file, chunks: [], kept: true, bytes: 0, type: null, length: null, done: false, ok: false, cancelled: false, subs: new Set(), ctl: controller, timer: null };
+    f.abort = () => { clearTimeout(f.timer); f.cancelled = true; controller.abort(); };
     f.idle = ms => { clearTimeout(f.timer); if (!f.done) f.timer = setTimeout(() => { if (!f.subs.size) f.abort(); }, ms); };
     f.finished = new Promise(resolve => { f.settle = resolve; });
+    f.finish = ok => {
+      if (f.done) return; clearTimeout(f.timer); f.ok = !!ok; f.done = true;
+      if (this.flights.get(file) === f) this.flights.delete(file);
+      for (const sub of f.subs) { try { const p = sub(null); p?.catch?.(() => f.subs.delete(sub)); } catch { f.subs.delete(sub); } }
+      f.settle(f.ok);
+    };
     f.head = (async () => {
       let r, release = () => {};
-      const get = async u => { const slot = await this.hostSlot(u); try { const x = await this.http.open(u, { accept: src.accept, headers: src.headers, timeout: src.timeout || 20000 }); release = slot.release; return x; } catch (e) { slot.release(); if (e.code === 'quota' || e.status === 429) slot.pause(e.retryAfter); throw e; } };
-      try { r = await get(src.url); }
-      catch (e) { if (!src.fallback || e.code === 'quota') throw e; r = await get(src.fallback); }
-      f.ctl = r.controller;
-      const type = (r.headers.get('content-type') || '').split(';')[0] || 'application/octet-stream';
-      f.type = type === 'application/octet-stream' && rec.kind === 'sticker' ? 'image/png' : type; f.length = r.headers.get('content-length');
-      (async () => {
-        const part = file + '.' + process.pid + '.part'; const out = fs.createWriteStream(part); let ok = true;
+      const get = async url => {
+        if (controller.signal.aborted) throw Object.assign(Error('Cancelled'), { cancelled: true });
+        const slot = await this.hostSlot(url);
         try {
-          for await (const chunk of Readable.fromWeb(r.body)) {
-            f.bytes += chunk.length; if (f.bytes > src.maxBytes) { ok = false; break; }
-            out.write(chunk);
-            if (f.kept) { if (f.bytes > FLIGHT_KEEP) { f.kept = false; f.chunks = []; } else f.chunks.push(chunk); }
-            for (const s of f.subs) s(chunk);
-          }
-        } catch { ok = false; } finally { r.cleanup(); release(); }
-        await new Promise(x => out.end(x));
-        if (ok && f.bytes) { await fsp.rename(part, file).catch(() => {}); await fsp.writeFile(file + '.type', f.type).catch(() => {}); this.prunePreviews().catch(() => {}); } else await fsp.unlink(part).catch(() => {});
-        clearTimeout(f.timer); f.ok = ok && f.bytes > 0; f.done = true; this.flights.delete(file);
-        for (const s of f.subs) s(null); f.settle(f.ok);
+          const response = await this.http.open(url, { signal: controller.signal, accept: src.accept, headers: src.headers, timeout: src.timeout || 20000 });
+          release = slot.release; return response;
+        } catch (error) { slot.release(); if (error.code === 'quota' || error.status === 429) slot.pause(error.retryAfter); throw error; }
+      };
+      try { r = await get(src.url); } catch (error) { if (!src.fallback || error.code === 'quota' || controller.signal.aborted) throw error; r = await get(src.fallback); }
+      const type = (r.headers.get('content-type') || '').split(';')[0] || 'application/octet-stream';
+      f.type = type === 'application/octet-stream' && rec.kind === 'sticker' ? (rec.filetype === 'svg' ? 'image/svg+xml' : rec.filetype === 'gif' ? 'image/gif' : 'image/png') : type;
+      f.length = r.headers.get('content-length');
+      f.body = (async () => {
+        const part = file + '.' + randomUUID() + '.part'; let ok = false;
+        try {
+          await writeStreamedFile(Readable.fromWeb(r.body), part, { signal: controller.signal, maxBytes: src.maxBytes, onChunk: async (chunk, bytes) => {
+            f.bytes = bytes;
+            if (f.kept) { if (bytes > FLIGHT_KEEP) { f.kept = false; f.chunks = []; } else f.chunks.push(chunk); }
+            await Promise.all([...f.subs].map(async sub => { try { await sub(chunk); } catch { f.subs.delete(sub); } }));
+          } });
+          if (!f.bytes) throw Error('The preview was empty.');
+          await fsp.rename(part, file); await fsp.writeFile(file + '.type', f.type); ok = true;
+          this.prunePreviews().catch(() => {});
+        } catch { await fsp.unlink(part).catch(() => {}); }
+        finally { r.cleanup(); release(); f.finish(ok); }
       })();
+      f.body.catch(() => { r.cleanup(); release(); f.finish(false); });
     })();
-    f.head.catch(() => { this.flights.delete(file); f.done = true; f.settle(false); });
-    this.flights.set(file, f);
-    return f;
+    f.head.catch(() => f.finish(false));
+    this.flights.set(file, f); return f;
   }
   // Starts fetching a preview before it is asked for (pointer resting on a row). Never throws.
   async warmPreview(providerId, id) {
@@ -210,7 +221,7 @@ class Creative {
       res.setHeader('Content-Type', 'audio/mpeg'); res.setHeader('Cache-Control', 'no-cache');
       const { spawn } = require('node:child_process');
       const ff = spawn(ffmpeg, ['-v', 'error', '-i', file, '-vn', '-f', 'mp3', '-b:a', '160k', 'pipe:1'], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
-      req.on('close', () => { if (!res.writableFinished) ff.kill(); });
+      res.on('close', () => { if (!res.writableFinished) ff.kill(); });
       ff.stdout.pipe(res); await new Promise(x => { ff.on('close', x); ff.on('error', x); });
       if (!res.writableEnded) res.end();
       return;
@@ -220,7 +231,8 @@ class Creative {
     // Hold the download open while the headers are awaited; the real listener joins in the same tick as the
     // replay of what has already arrived, so no byte is sent twice or missed.
     let closed = false; const hold = () => {}; let sub = hold; f.subs.add(hold);
-    req.on('close', () => { closed = true; f.subs.delete(sub); if (!f.subs.size) f.idle(2500); });
+    const disconnect = () => { closed = true; f.subs.delete(sub); if (!f.subs.size) f.idle(2500); };
+    res.on('close', disconnect); res.on('error', disconnect);
     try { await f.head; } catch (e) { f.subs.delete(hold); throw e; }
     if (closed) return;
     if (!f.kept && f.bytes) { // joined too late to replay from memory: wait for the finished file instead
@@ -229,10 +241,20 @@ class Creative {
     }
     res.setHeader('Content-Type', f.type);
     if (f.length) res.setHeader('Content-Length', f.length);
-    for (const c of f.chunks) res.write(c);
-    if (f.done) return res.end();
-    sub = chunk => { if (closed) return; if (chunk === null) res.end(); else res.write(chunk); };
-    f.subs.delete(hold); f.subs.add(sub);
+    const send = chunk => {
+      if (closed || res.destroyed || res.writableEnded) return;
+      if (chunk === null) { res.end(); return; }
+      if (!res.write(chunk)) return new Promise(resolve => {
+        const finish = () => { res.off('drain', finish); res.off('close', finish); res.off('error', finish); resolve(); };
+        res.once('drain', finish); res.once('close', finish); res.once('error', finish);
+        if (closed || res.destroyed) finish();
+      });
+    };
+    let queue = Promise.resolve();
+    sub = chunk => { queue = queue.then(() => send(chunk)); return queue; };
+    for (const chunk of f.chunks) sub(chunk);
+    f.subs.delete(hold); if (f.done) sub(null); else f.subs.add(sub);
+    await queue;
   }
   // Media hosts are asked politely: at most two preview downloads at a time per host, and when a host
   // says "slow down" (HTTP 429) FrameCut stops asking it until the time it gave, instead of retrying
@@ -306,7 +328,7 @@ class Creative {
     this.persist(); return { favorite: !!on };
   }
   lists(kind) {
-    const f = list => list.filter(x => !kind || kindGroup(x.record.kind) === kindGroup(kind)).map(x => this.decorate(x.record));
+    const f = list => list.filter(x => !isWikimediaRecord(x.record) && (!kind || kindGroup(x.record.kind) === kindGroup(kind))).map(x => this.decorate(x.record));
     return { favorites: f(this.state.favorites), recents: f(this.state.recents) };
   }
 

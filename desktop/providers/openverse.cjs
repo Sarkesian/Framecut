@@ -4,12 +4,14 @@
 // 200/day, so results are cached and the client throttles itself before Openverse has to.
 const { licenseFilter, assessRights, verifyLicense, includeMode } = require('../../shared/rights.mjs');
 
+const { isWikimediaRecord, assertSourceAllowed } = require('./blocked-sources.cjs');
+
 const API = 'https://api.openverse.org/v1';
-const SOURCES = { jamendo: 'Jamendo', freesound: 'Freesound', wikimedia_audio: 'Wikimedia Commons', ccmixter: 'ccMixter', svgsilh: 'SVG Silh', wikimedia: 'Wikimedia Commons', phylopic: 'PhyloPic' };
+const SOURCES = { jamendo: 'Jamendo', freesound: 'Freesound', ccmixter: 'ccMixter', svgsilh: 'SVG Silh', phylopic: 'PhyloPic' };
 // Openverse has no CC0 / public-domain items in its "music" category (Jamendo is all CC BY variants),
-// so attribution-free music is searched across Freesound and Wikimedia Commons without the category
+// so attribution-free music is searched through Freesound without the category
 // and short clips are left out.
-const FREE_MUSIC_SOURCES = 'freesound,wikimedia_audio';
+const FREE_MUSIC_SOURCES = 'freesound';
 const FREE_MUSIC_MIN_MS = 20e3;
 // Duration filters are applied to the provider's reported durations (Openverse's own buckets are coarse).
 const LENGTHS = { short: [0, 10e3], medium: [10e3, 60e3], long: [60e3, Infinity], song: [60e3, Infinity], clip: [0, 60e3] };
@@ -50,14 +52,15 @@ class Openverse {
     }
   }
   async search({ q = '', kind = 'music', page = 1, usage = 'commercial', length, source, pageSize = 20, include = 'free' }) {
+    assertSourceAllowed({ source });
     include = includeMode(include);
     const params = new URLSearchParams({ q: String(q).slice(0, 200), page: String(Math.max(1, Math.min(50, page | 0 || 1))), page_size: String(pageSize), license: licenseFilter(usage, kind, include).join(','), mature: 'false' });
     let path = '/audio/?', minMs = 0;
     if (kind === 'sticker') {
       // Stickers: illustrations in formats that can carry transparency.
       path = '/images/?'; params.set('extension', 'png,svg,gif'); params.set('category', 'illustration');
-      if (SOURCES[source]) params.set('source', source);
-    } else if (kind === 'sfx') params.set('source', SOURCES[source] ? source : 'freesound,wikimedia_audio');
+      params.set('source', SOURCES[source] ? source : 'svgsilh,phylopic');
+    } else if (kind === 'sfx') params.set('source', SOURCES[source] ? source : 'freesound');
     // Openverse's category field is reliable for music (Jamendo) but empty for most Freesound sounds.
     else if (include === 'free') { params.set('source', SOURCES[source] && source !== 'jamendo' ? source : FREE_MUSIC_SOURCES); minMs = FREE_MUSIC_MIN_MS; }
     else { params.set('category', 'music'); if (SOURCES[source]) params.set('source', source); }
@@ -69,6 +72,7 @@ class Openverse {
       if (kind !== 'sticker' && /^(mid|midi|kar|ogx)$/i.test(rec.filetype || '')) continue;
       if (!rec.licenseCheck.ok) { dropped++; continue; } // unknown / contradictory license data is never offered
       if (rec.durationMs != null && rec.durationMs < minMs) continue;
+
       if (LENGTHS[length] && !(rec.durationMs >= LENGTHS[length][0] && rec.durationMs < LENGTHS[length][1])) continue;
       const dupe = (rec.title + '|' + rec.creator).toLowerCase(); if (seen.has(rec.sourceId) || seen.has(dupe)) continue;
       seen.add(rec.sourceId); seen.add(dupe); items.push(rec);
@@ -83,6 +87,7 @@ class Openverse {
   }
   normalize(r, kind) {
     if (!r || !r.id || !r.url || r.mature) return null;
+    if (isWikimediaRecord(r)) return null;
     let downloadUrl; try { const u = new URL(r.url); if (u.protocol !== 'https:' && !(this.http.allowLocal && u.hostname === '127.0.0.1')) return null; downloadUrl = u.href; } catch { return null; }
     const k = kind || (r.category === 'sound_effect' ? 'sfx' : 'music'); const image = k === 'sticker';
     const rec = {
@@ -97,26 +102,17 @@ class Openverse {
     rec.licenseCheck = verifyLicense(rec, { checkedAt: rec.metadataCheckedAt, method: 'openverse-search' });
     const rights = assessRights({ provider: 'openverse', license: rec.license, licenseVersion: rec.licenseVersion, kind: k, usage: 'personal', verification: rec.licenseCheck });
     rec.tier = rights.tier; rec.localStorageAllowed = rights.storage; rec.exportAllowed = rights.blocked ? false : 'license';
+
     Object.defineProperty(rec, 'downloadUrl', { value: downloadUrl, enumerable: false });
-    const thumb = image && previewFor(downloadUrl); if (thumb) Object.defineProperty(rec, 'thumbUrl', { value: thumb, enumerable: false });
     return rec;
   }
   download(rec) {
+    assertSourceAllowed(rec);
     if (rec.kind === 'sticker') return { url: rec.downloadUrl, accept: /^(image\/(png|apng|gif|svg\+xml)|application\/octet-stream|binary\/octet-stream)/i, maxBytes: 25 * 1024 ** 2 };
     return { url: rec.downloadUrl, accept: /^(audio\/|application\/ogg|video\/ogg|application\/octet-stream|binary\/octet-stream)/i, maxBytes: 300 * 1024 ** 2 };
   }
-  // Sticker previews use Openverse's small thumbnail, falling back to the original file.
-  preview(rec) { const d = this.download(rec); return rec.kind === 'sticker' && rec.thumbUrl ? { ...d, url: rec.thumbUrl, fallback: rec.downloadUrl, accept: /^image\//i, maxBytes: 8 * 1024 ** 2 } : d; }
+  preview(rec) { return this.download(rec); }
   status() { return { anonymous: !this.token, blockedFor: Math.max(0, Math.ceil((this.blockedUntil - Date.now()) / 1000)), limits: this.lastLimits }; }
-}
-// Sticker previews. Openverse's own /thumb/ service rate-limits anonymous use hard (a grid of tiles
-// trips it) and often fails upstream, so Wikimedia images use Wikimedia's cached standard-width
-// thumbnail and other hosts (e.g. SVG Silh's small PNGs) the original file.
-function previewFor(url) {
-  const m = /^https:\/\/upload\.wikimedia\.org\/wikipedia\/commons\/([0-9a-f])\/([0-9a-f]{2})\/([^/?#]+)$/i.exec(url || '');
-  if (!m) return null;
-  const name = m[3]; const ext = /\.svg$/i.test(name) ? '.png' : /\.(tiff?|xcf|pdf)$/i.test(name) ? '.png' : '';
-  return `https://upload.wikimedia.org/wikipedia/commons/thumb/${m[1]}/${m[2]}/${name}/250px-${name}${ext}`;
 }
 function safeUrl(u) { try { const x = new URL(u); return ['https:', 'http:'].includes(x.protocol) ? x.href : null; } catch { return null; } }
 module.exports = { Openverse, SOURCES };

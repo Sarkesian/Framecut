@@ -7,6 +7,7 @@ const fsp = require('node:fs/promises');
 const { createHash } = require('node:crypto');
 const { Readable } = require('node:stream');
 const https = require('node:https');
+const { writeStreamedFile } = require('../streams.cjs');
 
 // Some library hosts (ccMixter) take far longer than fetch's fixed 10 s to finish the TLS handshake.
 // Requests to those hosts go through node:https with a longer handshake allowance and kept-alive
@@ -41,11 +42,13 @@ class SafeHttp {
     if (url.protocol !== 'https:') throw Object.assign(Error('Only secure (https) downloads are allowed.'), { code: 'unsafe' });
     if (url.username || url.password) throw Object.assign(Error('Unsafe address.'), { code: 'unsafe' });
     const host = url.hostname.replace(/^\[|\]$/g, '');
+    if (['wikimedia.org', 'wikipedia.org'].some(base => host === base || host.endsWith('.' + base))) throw Object.assign(Error('Wikimedia has been removed from FrameCut’s online library.'), { code: 'unavailable' });
     const addrs = net.isIP(host) ? [{ address: host }] : await dns.lookup(host, { all: true }).catch(() => { throw Object.assign(Error('You appear to be offline.'), { code: 'offline' }); });
     if (!this.allowLocal && addrs.some(a => isPrivate(a.address))) throw Object.assign(Error('That address points to a private network.'), { code: 'unsafe' });
     return url;
   }
   async open(u, { method = 'GET', headers = {}, body, signal, timeout = 20000, accept } = {}) {
+    if (signal?.aborted) throw Object.assign(Error('Cancelled'), { cancelled: true });
     let url = await this.check(u);
     const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(Object.assign(Error('The server took too long to answer.'), { code: 'timeout' })), timeout);
     const onAbort = () => ctl.abort(signal.reason); signal?.addEventListener('abort', onAbort, { once: true });
@@ -75,21 +78,17 @@ class SafeHttp {
     const res = await this.open(u, { accept, headers, signal, timeout });
     const declared = +res.headers.get('content-length') || 0;
     if (declared > maxBytes) { res.body?.cancel().catch(() => {}); res.cleanup(); throw Object.assign(Error('That file is too large to import.'), { code: 'size' }); }
-    const part = file + '.part'; const hash = createHash('sha256'); let bytes = 0;
-    const out = fs.createWriteStream(part);
+    const part = file + '.part'; const hash = createHash('sha256'), sha1 = createHash('sha1'); let bytes = 0;
     const watch = stallWatch(res, timeout);
     try {
-      for await (const chunk of Readable.fromWeb(res.body)) {
-        watch.kick();
-        bytes += chunk.length; if (bytes > maxBytes) throw Object.assign(Error('That file is too large to import.'), { code: 'size' });
-        hash.update(chunk); if (!out.write(chunk)) await new Promise(r => out.once('drain', r));
+      await writeStreamedFile(Readable.fromWeb(res.body), part, { signal: res.controller.signal, maxBytes, onChunk(chunk, count) {
+        watch.kick(); bytes = count; hash.update(chunk); sha1.update(chunk);
         onProgress?.(declared ? bytes / declared : null, bytes);
-      }
-      await new Promise((resolve, reject) => out.end(err => (err ? reject(err) : resolve())));
+      } });
       if (!bytes) throw Object.assign(Error('The download was empty.'), { code: 'http' });
       await fsp.rename(part, file);
-      return { bytes, sha256: hash.digest('hex'), contentType: (res.headers.get('content-type') || '').split(';')[0], finalUrl: res.finalUrl };
-    } catch (e) { out.destroy(); await fsp.unlink(part).catch(() => {}); if (watch.stalled) throw watch.error(); if (signal?.aborted) throw Object.assign(Error('Cancelled'), { cancelled: true }); throw e.code ? e : Object.assign(Error('The download was interrupted.'), { code: 'offline', cause: e }); }
+      return { bytes, sha256: hash.digest('hex'), sha1: sha1.digest('hex'), contentType: (res.headers.get('content-type') || '').split(';')[0], finalUrl: res.finalUrl };
+    } catch (e) { await fsp.unlink(part).catch(() => {}); if (watch.stalled) throw watch.error(); if (signal?.aborted) throw Object.assign(Error('Cancelled'), { cancelled: true }); throw e.code ? e : Object.assign(Error('The download was interrupted.'), { code: 'offline', cause: e }); }
     finally { watch.stop(); res.cleanup(); }
   }
 }

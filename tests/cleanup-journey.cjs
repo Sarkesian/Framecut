@@ -29,7 +29,7 @@ const out = path.resolve(process.env.FRAMECUT_QA_OUT || 'test-output/cleanup');
         });
       }, width);
       assert.ok(result.every(r => r.fits && r.inRow), JSON.stringify({ width, result }));
-      if (width === 230) await page.locator('.asset-content').screenshot({ path: path.join(out, 'sound-controls-narrow.png') });
+      if (width === 230) await page.screenshot({ path: path.join(out, 'sound-controls-narrow.png'), clip: await page.locator('.asset-content').boundingBox() });
     }
     await page.evaluate(() => { document.querySelector('.asset-content').removeAttribute('style'); });
 
@@ -80,6 +80,18 @@ const out = path.resolve(process.env.FRAMECUT_QA_OUT || 'test-output/cleanup');
       return { enabled, keys, reenabled: state.project.value.settings.ducking.on };
     }, clips);
     assert.equal(ducking.enabled, true); assert.equal(ducking.reenabled, true); assert.ok(ducking.keys.some(k => k.v < 1));
+
+    console.log('· speeding up a tiny cut cannot shorten it below the saved-project minimum');
+    const shortCut = await page.evaluate(() => {
+      const { state, edit } = window.__fc;
+      state.commit('Short cut', p => { const c = p.clips.find(c => c.id === 'music'); c.duration = 0.12; c.speed = 1; });
+      const before = state.history.value.past.length; edit.setSpeed('music', 10);
+      const refused = state.project.value.clips.find(c => c.id === 'music').duration;
+      const historyUnchanged = state.history.value.past.length === before;
+      edit.setSpeed('music', 2);
+      return { refused, historyUnchanged, allowed: state.project.value.clips.find(c => c.id === 'music').duration };
+    });
+    assert.equal(shortCut.refused, 0.12); assert.equal(shortCut.historyUnchanged, true); assert.equal(shortCut.allowed, 0.06);
 
     console.log('· cancelled audio processing stops polling and closing cancels pending requests');
     const playback = await page.evaluate(async () => {
