@@ -13,6 +13,7 @@ import { relinkOne } from './AssetPanel.jsx';
 import { EMOJI, SHAPE_STICKERS } from '../../shared/catalog.mjs';
 import { creditLine, PROVIDERS } from '../../shared/rights.mjs';
 import { AUDIO_DISCOVERY } from '../../shared/audio-library.mjs';
+import { MEME_COLLECTIONS } from '../../shared/meme-library.mjs';
 import { svgUrl } from '../engine/raster.js';
 import { shortTime } from '../lib/format.js';
 import {
@@ -161,14 +162,16 @@ function MemeLibrary() {
   };
   const favorites = lists.value.audio.favorites.filter(r => r.provider === 'myinstants');
   return <div class="meme-library">
-    <div class="meme-intro"><div><span class="audio-eyebrow">MYINSTANTS SOUNDBOARD</span><h3>Memes & Reactions</h3></div><button class="btn sm" onClick={importOwn} disabled={importing}>{importing ? <LoaderCircle size={13} class="spin" /> : <Upload size={13} />}Import your audio</button></div>
+    <div class="meme-intro"><b>MyInstants soundboard</b><button class="btn sm" onClick={importOwn} disabled={importing}>{importing ? <LoaderCircle size={13} class="spin" /> : <Upload size={13} />}Import your audio</button></div>
     <nav class="meme-views" aria-label="Meme collection">{[['browse', 'Browse sounds'], ['favorites', 'Favorites'], ['mine', 'My meme audio']].map(([id, label]) => <button key={id} class={view === id ? 'on' : ''} aria-pressed={view === id} onClick={() => setView(id)}>{label}</button>)}</nav>
     {view === 'mine' ? <><p class="muted meme-note">Your imported files work offline and can be added or dragged onto the timeline. Use recordings you have permission to include.</p><MyAudio ids={ownIds} effectsOnly /></> : <>
-      <p class="meme-rights-note"><Info size={13} /><span>MyInstants doesn’t provide reuse licenses. You decide whether your use is permitted; importing a sound does not label it CC0.</span></p>
+      <p class="meme-rights-note"><Info size={13} /><span>Reuse rights unverified. Check permission before use.</span></p>
       {view === 'favorites' ? favorites.length ? <AudioList items={favorites} panel="memes" /> : <div class="lib-state"><Heart size={22} /><b>Save a sound for later</b><span>Tap the heart on a MyInstants result to keep it here.</span></div> : <>
         <SearchField panel="memes" placeholder="Search MyInstants by sound name…" />
-        <Chips label="Quick searches" icon={Smile} items={['Meme', 'Bruh', 'Vine boom', 'Cartoon', 'Fail', 'Laugh', 'Gaming', 'Surprise']} onPick={q => search('memes', { q }, { now: true })} />
-        {s.q && <button class="btn sm ghost" onClick={() => search('memes', { q: '' }, { now: true })}>Browse all API matches</button>}
+        <div class="meme-collections" role="group" aria-label="Curated meme collections">{[...MEME_COLLECTIONS, { id: '', label: 'All API sounds' }].map(g => <button key={g.id} class={`fchip ${!s.q && s.collection === g.id ? 'on' : ''}`} aria-pressed={!s.q && s.collection === g.id} onClick={() => search('memes', { collection: g.id, q: '' }, { now: true })}>{g.label}</button>)}</div>
+        <p class="muted meme-note">{s.q ? 'Searching all MyInstants sound names.' : s.collection ? `${MEME_COLLECTIONS.find(g => g.id === s.collection)?.label} · Curated by FrameCut, not a live popularity ranking.` : 'Full API browse order. Use Show more to continue.'}</p>
+        <details class="meme-search-ideas"><summary>Search ideas</summary><Chips label="Quick searches" icon={Smile} items={['Meme', 'Bruh', 'Vine boom', 'Cartoon', 'Fail', 'Laugh', 'Gaming', 'Surprise']} onPick={q => search('memes', { q }, { now: true })} /></details>
+        {s.q && <button class="btn sm ghost" onClick={() => search('memes', { q: '' }, { now: true })}>Back to {MEME_COLLECTIONS.find(g => g.id === s.collection)?.label || 'all API sounds'}</button>}
         <AudioResults s={s} panel="memes" />
         <p class="muted meme-note">Searches match sound names. Show more continues through the API’s pages. Anonymous access: 10 lookups per minute; searches are cached.</p>
       </>}
@@ -246,7 +249,7 @@ function AudioResults({ s, panel, limit, compact }) {
   if (s.sort === 'long') items.sort((a, b) => (b.durationMs || 0) - (a.durationMs || 0));
   if (limit) items = items.slice(0, limit);
   return <>
-    {!compact && <div class="audio-result-summary" aria-live="polite"><span>{panel === 'memes' ? `${s.results.length} of ${s.total} source matches loaded` : `${s.results.length} ${panel === 'music' ? 'tracks' : 'sounds'} shown`}</span><span>{[...new Set(s.results.map(r => r.sourceName || SOURCE_NAMES[r.provider]))].filter(Boolean).join(' · ')}</span></div>}
+    {!compact && <div class="audio-result-summary" aria-live="polite"><span>{panel === 'memes' ? `${s.results.length} of ${s.total} ${!s.q && s.collection ? 'curated picks' : 'source matches'} loaded` : `${s.results.length} ${panel === 'music' ? 'tracks' : 'sounds'} shown`}</span><span>{[...new Set(s.results.map(r => r.sourceName || SOURCE_NAMES[r.provider]))].filter(Boolean).join(' · ')}</span></div>}
     {s.partial?.length > 0 && <div class="audio-source-notice" role="status">{s.partial.map(p => `${SOURCE_NAMES[p.provider] || p.provider} ${p.code === 'slow' ? 'is still loading' : p.code === 'quota' ? 'has reached its access limit' : 'is unavailable'}`).join(' · ')}<button onClick={() => search(panel, {}, { now: true })}>Retry</button></div>}
     <AudioList items={items} panel={panel} />
     {!compact && <MoreButton s={s} panel={panel} />}

@@ -112,6 +112,7 @@ class Creative {
     const p = this.provider(providerId);
     if (this.prefs()?.librarySources?.[providerId] === false) throw Object.assign(Error('This source is turned off in Preferences › Library.'), { code: 'unavailable' });
     const q = { q: String(params.q || '').trim().slice(0, 200), kind: params.kind, page: +params.page || 1, usage: params.usage === 'personal' ? 'personal' : 'commercial', length: params.length || '', source: params.source || '', category: params.category || '', ...(providerId === 'assetpolish' ? { collection: params.collection || '' } : {}), include: includeMode(params.include) };
+    if (providerId === 'myinstants') q.collection = String(params.collection || '').slice(0, 40);
     const key = providerId + JSON.stringify(q);
     const hit = this.cache.get(key);
     let data;

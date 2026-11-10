@@ -142,7 +142,7 @@
 .sfx-sections { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 15px; }
 .sfx-sections button { display: inline-flex; align-items: center; justify-content: center; flex: 1 1 115px; gap: 6px; border: 1px solid var(--line-2); border-radius: 9px; padding: 9px 8px; background: var(--bg-2); color: var(--text-2); font: inherit; font-size: 11px; cursor: pointer; }
 .sfx-sections button.on { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
-.meme-intro { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid var(--line-2); border-radius: 13px; padding: 14px; margin-bottom: 12px; background: radial-gradient(ellipse at 100% 0, #3e344d, transparent 85%), var(--bg-2); }
+.meme-intro { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; border: 1px solid var(--line-2); border-radius: 9px; padding: 7px 10px; margin-bottom: 7px; background: radial-gradient(ellipse at 100% 0, #3e344d, transparent 85%), var(--bg-2); font-size: 12px; }
 .meme-intro h3 { margin: 7px 0 0; font-size: 21px; letter-spacing: -.03em; }
 .meme-intro p { color: var(--text-2); font-size: 12px; margin: 0 0 15px; line-height: 1.5; }
 .meme-views { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; border-bottom: 1px solid var(--line); }
@@ -209,6 +209,12 @@
 .audio-fx-categories button.on, .audio-fx-categories button:hover { border-color: var(--accent-line); color: var(--accent); }
 .audio-fx-categories b { font-size: 11px; line-height: 1.4; }
 .audio-fx-categories small { font-size: 9px; color: var(--text-3); }
+.meme-collections { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 5px; }
+.meme-collections .fchip { white-space: normal; text-align: left; min-height: 28px; }
+.meme-collections .fchip.on { border-color: var(--accent-line); color: var(--accent); background: var(--bg-3); }
+.meme-search-ideas { font-size: 11px; color: var(--text-3); margin: 6px 0; }
+.meme-search-ideas summary { cursor: pointer; width: fit-content; }
+.meme-library .meme-note { margin: 7px 0; }
 .audio-provider-note { font-size: 11px; line-height: 1.6; margin: 14px 2px; }
 .sticker-category-strip { display: flex; gap: 5px; overflow-x: auto; padding: 4px 0 10px; scrollbar-width: thin; }
 .sticker-category-strip button { flex: none; }

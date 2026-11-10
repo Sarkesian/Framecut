@@ -3,6 +3,7 @@
 // represented as independently cleared or CC0.
 const { MetadataCache } = require('./metadata.cjs');
 const { plain } = require('../../shared/audio-library.mjs');
+const { MEME_COLLECTIONS, MEME_SOUNDS } = require('../../shared/meme-library.mjs');
 class MyInstants {
   constructor({ http, base = 'https://www.myinstants.com', cacheFile }) {
     this.id = 'myinstants'; this.http = http; this.base = base.replace(/\/$/, ''); this.cacheTtl = 0;
@@ -26,8 +27,15 @@ class MyInstants {
       }
     }, { ttl: 6 * 3600e3, stale: false });
   }
-  async search({ q = '', page = 1 }) {
+  async search({ q = '', page = 1, collection = '' }) {
     page = Math.max(1, Math.floor(+page || 1));
+    if (!String(q).trim() && collection) {
+      const group = MEME_COLLECTIONS.find(g => g.id === collection);
+      if (!group) throw Error('Unknown meme collection.');
+      const items = group.slugs.map(id => this.normalize(MEME_SOUNDS.find(r => r.slug === id))).filter(Boolean);
+      const size = 12;
+      return { items: items.slice((page - 1) * size, page * size), total: items.length, page, pages: Math.ceil(items.length / size), curated: true, rightsUnverified: true };
+    }
     const data = await this.call('/instants/?' + new URLSearchParams({ name: String(q).slice(0, 160), page: String(page), format: 'json' }));
     if (!Array.isArray(data.results) || !Number.isFinite(data.count)) throw Error('MyInstants returned an unreadable catalog response.');
     if (data.next) {

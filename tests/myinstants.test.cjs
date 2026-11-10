@@ -4,6 +4,21 @@ const { MyInstants } = require('../desktop/providers/myinstants.cjs');
 const { Creative } = require('../desktop/creative.cjs');
 const { assessRights } = require('../shared/rights.mjs');
 const row = (slug = 'vine-boom-123') => ({ slug, name: 'Vine boom', sound: 'https://www.myinstants.com/media/sounds/vine-boom.mp3', description: 'A reaction sound.', tags: 'meme, reaction' });
+
+test('Curated meme collections keep editorial order, paginate completely and leave global search intact', async () => {
+  const { MEME_COLLECTIONS, MEME_SOUNDS } = require('../shared/meme-library.mjs');
+  let hits = 0;
+  const p = new MyInstants({ http: { json: async url => { hits++; assert.equal(new URL(url).searchParams.get('name'), 'bruh'); return { count: 1, next: null, results: [row()] }; } } });
+  assert.equal(new Set(MEME_SOUNDS.map(r => r.slug)).size, MEME_SOUNDS.length);
+  for (const group of MEME_COLLECTIONS) {
+    const ids = []; const first = await p.search({ collection: group.id });
+    for (let page = 1; page <= first.pages; page++) ids.push(...(await p.search({ collection: group.id, page })).items.map(r => r.sourceId));
+    assert.deepEqual(ids, group.slugs); assert.equal(first.total, group.slugs.length);
+  }
+  assert.equal(hits, 0);
+  await p.search({ q: 'bruh', collection: 'gaming' }); assert.equal(hits, 1);
+  await assert.rejects(p.search({ collection: 'invalid' }), /Unknown meme collection/);
+});
 test('MyInstants preserves official API pagination and caches shared name searches', async () => {
   let hits = 0; const p = new MyInstants({ http: { json: async url => { hits++; const page = +new URL(url).searchParams.get('page'); return { count: 31, next: page < 4 ? `https://www.myinstants.com/api/v1/instants/?page=${page + 1}` : null, results: [row('sound-' + page)] }; } } });
   const [a, b] = await Promise.all([p.search({ q: 'boom' }), p.search({ q: 'boom' })]);
