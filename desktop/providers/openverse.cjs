@@ -3,7 +3,7 @@
 // optional registered-app credentials. Anonymous access is limited to 20 requests/minute and
 // 200/day, so results are cached and the client throttles itself before Openverse has to.
 const { licenseFilter, assessRights, verifyLicense, includeMode } = require('../../shared/rights.mjs');
-const { musicEvidence, isSpokenAudio, canonicalAudioUrl } = require('../../shared/audio-library.mjs');
+const { musicEvidence, canonicalAudioUrl } = require('../../shared/audio-library.mjs');
 const { isWikimediaRecord, assertSourceAllowed } = require('./blocked-sources.cjs');
 
 const API = 'https://api.openverse.org/v1';
@@ -72,7 +72,6 @@ class Openverse {
       if (kind !== 'sticker' && /^(mid|midi|kar|ogx)$/i.test(rec.filetype || '')) continue;
       if (!rec.licenseCheck.ok) { dropped++; continue; } // unknown / contradictory license data is never offered
       if (rec.durationMs != null && rec.durationMs < minMs) continue;
-      if (kind === 'music' && isSpokenAudio({ title: rec.title, tags: (r.tags || []).map(t => t.name).filter(Boolean) })) continue;
       if (LENGTHS[length] && !(rec.durationMs >= LENGTHS[length][0] && rec.durationMs < LENGTHS[length][1])) continue;
       const dupe = (rec.title + '|' + rec.creator).toLowerCase(); if (seen.has(rec.sourceId) || seen.has(dupe)) continue;
       seen.add(rec.sourceId); seen.add(dupe); items.push(rec);

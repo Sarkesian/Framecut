@@ -13,10 +13,19 @@ export const AUDIO_DISCOVERY = {
   ],
   genres: [
     ['cinematic', 'Cinematic', 'cinematic', 'film'], ['electronic', 'Electronic', 'electronic', 'waves'],
-    ['lofi', 'Lo-fi', 'lofi', 'coffee'], ['hiphop', 'Hip-hop', 'hip hop beat', 'disc'],
+    ['techno', 'Techno', 'techno', 'waves'], ['trance', 'Trance', 'trance', 'waves'],
+    ['house', 'House', 'house music', 'waves'], ['edm', 'Dance & EDM', 'edm', 'waves'],
+    ['dnb', 'Drum & bass', 'drum and bass', 'disc'], ['dubstep', 'Dubstep', 'dubstep', 'waves'],
+    ['synthwave', 'Synthwave', 'synthwave', 'waves'], ['chiptune', 'Chiptune & 8-bit', 'chiptune', 'gamepad'],
+    ['lofi', 'Lo-fi', 'lo-fi', 'coffee'], ['hiphop', 'Hip-hop', 'hip hop', 'disc'],
     ['rock', 'Rock', 'rock', 'guitar'], ['orchestral', 'Orchestral', 'orchestral', 'music'],
     ['ambient', 'Ambient', 'ambient', 'cloud'], ['acoustic', 'Acoustic', 'acoustic', 'guitar'],
     ['jazz', 'Jazz', 'jazz', 'music'], ['classical', 'Classical', 'classical', 'piano'],
+    ['pop', 'Pop', 'pop music', 'music'], ['funk', 'Funk', 'funk', 'disc'],
+    ['blues', 'Blues', 'blues music', 'guitar'], ['country', 'Country', 'country music', 'guitar'],
+    ['folk', 'Folk', 'folk music', 'guitar'], ['reggae', 'Reggae', 'reggae', 'disc'],
+    ['metal', 'Metal', 'metal music', 'guitar'], ['world', 'World', 'world music', 'globe'],
+    ['soul', 'Soul', 'soul music', 'music'], ['rnb', 'R&B', 'rnb', 'disc'],
   ],
   purposes: [
     ['comedy', 'Comedy & silly edits', 'quirky', 'smile'],
@@ -29,7 +38,6 @@ export const AUDIO_DISCOVERY = {
 };
 const MUSICAL = /\b(music|musical|song|soundtrack|instrumental|melod(?:y|ic)|piano|guitar|orchestr(?:a|al)|jazz|synth(?:esizer)?|cinematic|lo[ -]?fi|hip[ -]?hop|techno|electronic|acoustic|classical|drum|beat|bass|composition|chord|violin|flute|cello)\b/i;
 const SPOKEN = /\b(spoken[ -]?word|speech|speaking|podcast|interview|lecture|audiobook|news[ -]?report|sermon|language[ -]?lesson|radio[ -]?show)\b/i;
-export const isSpokenAudio = ({ title = '', tags = [] } = {}) => SPOKEN.test(title + ' ' + tags.join(' '));
 export function musicEvidence({ title = '', tags = [], genres = [], description = '', category = '' } = {}) {
   if (SPOKEN.test(title + ' ' + tags.join(' '))) return [];
   const fields = [title, ...tags, ...genres, category === 'music' ? '' : category, description];

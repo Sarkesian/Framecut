@@ -6,12 +6,18 @@ const {MetadataCache}=require('../desktop/providers/metadata.cjs');
 const {Openverse}=require('../desktop/providers/openverse.cjs');
 const {musicEvidence,AUDIO_DISCOVERY}=require('../shared/audio-library.mjs');
 const cc0='https://creativecommons.org/publicdomain/zero/1.0/';
-test('Music ranking preserves sparse CC0 tracks and unknown durations without admitting spoken or invalid licenses',async()=>{
+test('Music ranking never deletes eligible records based on sparse tags or title guesses; invalid licenses stay excluded',async()=>{
  const row=(n,title,duration,tags=[],extra={})=>({id:String(n),title,duration,tags:tags.map(name=>({name})),url:'https://example.org/'+n+'.mp3',foreign_landing_url:'https://example.org/track/'+n,source:'freesound',license:'cc0',license_version:'1.0',license_url:cc0,filetype:'mp3',...extra});
  const rows=[row(1,'Cinematic drone 1',60000),row(2,'Peaceful Acoustic 1',90000),row(3,'Untitled by Composer',null),row(4,'Piano melody',60000,['music']),row(5,'Recorded interview',60000,['speech']),row(6,'Mislabeled license',60000,[],{license_url:'https://creativecommons.org/licenses/by/4.0/'})];
  const p=new Openverse({http:{json:async()=>({results:rows,result_count:6,page_count:1,page:1})}});
- const all=await p.search({q:'',kind:'music'});assert.deepEqual(all.items.map(r=>r.sourceId),['4','1','2','3']);
+ const all=await p.search({q:'',kind:'music'});assert.deepEqual(all.items.map(r=>r.sourceId),['4','1','2','3','5']);
  const timed=await p.search({q:'',kind:'music',length:'song'});assert.ok(!timed.items.some(r=>r.sourceId==='3'));
+});
+test('Every genre retains eligible sparse metadata on every requested page, with explicit techno navigation',async()=>{
+ const p=new Openverse({http:{json:async url=>{const u=new URL(url),page=+u.searchParams.get('page'),q=u.searchParams.get('q');return{results:[{id:q+'-'+page,title:'Untitled 2020 session',url:'https://example.org/'+page+'.mp3',foreign_landing_url:'https://example.org/track/'+page,source:'freesound',license:'cc0',license_version:'1.0',license_url:cc0,duration:60000,filetype:'mp3',tags:[]}],result_count:40,page_count:2,page};}}});
+ for(const genre of AUDIO_DISCOVERY.genres)for(const page of [1,2]){p.window=[];const r=await p.search({q:genre[2],kind:'music',page});assert.equal(r.items.length,1,genre[1]+' page '+page);}
+ for(const id of ['techno','trance','house','edm','dnb','dubstep','synthwave','chiptune'])assert.ok(AUDIO_DISCOVERY.genres.some(g=>g[0]===id));
+ assert.equal(AUDIO_DISCOVERY.genres.find(g=>g[0]==='hiphop')[2],'hip hop','do not add an unnecessary AND term');
 });
 test('Audio relevance distinguishes musical evidence from spoken recordings; comedy is discoverable',()=>{
  assert.ok(musicEvidence({title:'Funny piano melody',tags:['comedy']}).length);

@@ -53,7 +53,7 @@ export function search(panel, patch = {}, { now = false, more = false } = {}) {
   // populate a new query, including when the user clears it or types one character.
   controllers[panel]?.abort(); clearTimeout(retries[panel]);
   const revision = revisions[panel] = (revisions[panel] || 0) + 1;
-  s.value = { ...s.value, ...patch };
+  s.value = { ...s.value, ...patch, ...(!more ? { status: 'loading', error: null } : {}) };
   clearTimeout(timers[panel]);
   const go = () => runSearch(panel, more, false, revision);
   if (now || more) go(); else timers[panel] = setTimeout(go, 420);
