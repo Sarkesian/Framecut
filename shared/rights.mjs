@@ -13,6 +13,12 @@ export const includeMode = v => (['free', 'credit', 'all'].includes(v) ? v : 'fr
 // What each provider allows FrameCut to do. Preview, local storage and export are separate rights.
 // `license` marks providers whose whole catalog is under one license (verified against their terms).
 export const PROVIDERS = {
+  myinstants: {
+    id: 'myinstants', name: 'MyInstants', kinds: ['sfx'], enabled: true, dedicated: true, userManaged: true,
+    home: 'https://www.myinstants.com/', terms: 'https://www.myinstants.com/en/terms_of_use.html',
+    note: 'Official API soundboard in Memes & Reactions. Selected sounds can be imported and edited. The API does not provide reuse licenses: source details are preserved and reuse rights remain unverified. You decide whether your use is permitted. Anonymous API access allows 10 requests per minute.',
+    preview: true, storage: true, export: true,
+  },
   openverse: {
     id: 'openverse', name: 'Openverse', kinds: ['music', 'sfx'], enabled: true,
     home: 'https://openverse.org', terms: 'https://docs.openverse.org/terms_of_service.html',
@@ -174,6 +180,7 @@ export function assessRights({ provider, license, licenseVersion, kind = 'music'
   const out = (level, o) => { const tier = level === 'own' ? 'own' : level === 'ok' ? 'free' : level === 'credit' ? 'credit' : 'restricted'; return { level, tier, label: LABELS[tier], badge: LABELS[tier], reason: null, name: null, details: [], restrictions: [], commercial: false, storage: false, export: false, attribution: false, notice: false, blocked: false, ...o }; };
   if (provider === 'local') return out('own', { summary: 'You imported this file. Make sure you have the rights to use it.', commercial: 'unknown', storage: true, export: true });
   if (!pv || !pv.enabled) return out('blocked', { reason: 'unavailable', summary: pv?.reason || 'This source is not available.', blocked: true });
+  if (pv.userManaged) return out('caution', { badge: 'Rights unverified', label: 'Rights unverified', reason: 'user-managed', summary: 'The MyInstants API does not supply a reuse license for this recording.', details: ['You are responsible for determining whether your use is permitted. Importing does not establish ownership, CC0 status, or commercial clearance.'], commercial: 'unknown', storage: true, export: true });
   const id = String(license || (pv.license ? pv.license.id : '')).toLowerCase(); const d = LICENSES[id];
   if (verification && verification.status && verification.status !== 'verified') return out('unknown', { reason: 'unclear', summary: 'The license information is ' + (verification.status === 'contradictory' ? 'contradictory' : verification.status === 'incomplete' ? 'incomplete' : 'unclear') + ', so FrameCut treats it as not cleared.', details: (verification.problems || []).map(p => p.text), blocked: true });
   if (!d) return out('unknown', { reason: 'unclear', summary: 'The source did not give a recognizable license. Treat it as not cleared until you confirm the rights yourself.', details: ['Open the source page and look for the license before publishing.'], commercial: 'unknown', blocked: true });

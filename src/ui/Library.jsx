@@ -3,8 +3,8 @@
 // and license; anything that cannot be used for this project says why instead of failing silently.
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { Music, AudioLines, FolderOpen, Search, X, Play, Pause, Square, Plus, Heart, LoaderCircle, Upload, WifiOff, TriangleAlert, Clock, Info, ExternalLink, Copy, Check, Sparkles, Shapes, Smile, Ban, Mic, Link2, Rows3, LayoutGrid, Volume2, Hourglass, ChevronRight, SlidersHorizontal, Maximize2, Minimize2, Headphones } from 'lucide-preact';
-import { project, media, asset, toast, prefs, savePrefs, time, player, audioExpanded } from '../lib/state.js';
-import { native, api } from '../lib/api.js';
+import { project, media, asset, toast, prefs, savePrefs, time, player, audioExpanded, refreshMedia } from '../lib/state.js';
+import { native, api, pickMedia } from '../lib/api.js';
 import { addSticker } from '../lib/edit.js';
 import { openMenu, Segmented, Select, Progress, Toggle } from './kit.jsx';
 import { importMedia } from './commands.jsx';
@@ -16,7 +16,7 @@ import { AUDIO_DISCOVERY } from '../../shared/audio-library.mjs';
 import { svgUrl } from '../engine/raster.js';
 import { shortTime } from '../lib/format.js';
 import {
-  audioTab, stickerTab, searches, search, recentSearches, lists, loadLists, loadStatus, libStatus, toggleFavorite, togglePreview, stopPreview, preview, previewTime, seekPreview, setPreviewVolume,
+  audioTab, sfxSection, stickerTab, searches, search, recentSearches, lists, loadLists, loadStatus, libStatus, toggleFavorite, togglePreview, stopPreview, preview, previewTime, seekPreview, setPreviewVolume,
   useRecord, dragRecord, dragAsset, insertAudio, insertSticker, busyKeys, warmPreview, selectedRecord, usageMode, setUsageMode, rightsOf, importStickerFiles, pickStickerFiles, categories, loadCategories, warmSources,
 } from '../lib/creative.js';
 
@@ -28,7 +28,7 @@ const SOURCES = {
   music: [['', 'All music sources'], ['ccmixter', 'ccMixter'], ['openverse', 'Openverse'], ['jamendo', 'Jamendo via Openverse'], ['archive', 'Internet Archive']],
   sfx: [['', 'All sound sources'], ['sfxkit', 'SFX Kit'], ['sfxmint', 'SFXMint'], ['openverse', 'Openverse']],
 };
-const SOURCE_NAMES = { openverse: 'Openverse', ccmixter: 'ccMixter', archive: 'Internet Archive', sfxmint: 'SFXMint', sfxkit: 'SFX Kit', fluent: 'Fluent Emoji', pixabay: 'Pixabay' };
+const SOURCE_NAMES = { myinstants: 'MyInstants', openverse: 'Openverse', ccmixter: 'ccMixter', archive: 'Internet Archive', sfxmint: 'SFXMint', sfxkit: 'SFX Kit', fluent: 'Fluent Emoji', pixabay: 'Pixabay' };
 const reduced = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 const scrollMemory = new Map();
 
@@ -120,7 +120,7 @@ export function AudioLibrary() {
   const navigate = next => {
     audioTab.value = next;
     if (next === 'music' && !searches.music.value.visited && !searches.music.value.q) browseAllMusic();
-    if (next === 'sfx' && !searches.sfx.value.visited) search('sfx', { source: '', category: '', q: '', visited: true }, { now: true });
+    if (next === 'sfx' && sfxSection.value === 'effects' && !searches.sfx.value.visited) search('sfx', { source: '', category: '', q: '', visited: true }, { now: true });
   };
   return <div class="tab-body lib audio-hub" ref={ref}>
     <div class="asset-head"><h2>Audio</h2><div class="grow" />
@@ -128,8 +128,51 @@ export function AudioLibrary() {
       <button class="btn sm" onClick={() => importMedia()} data-tip="Import your own music or sound files"><Upload size={14} />Import</button>
     </div>
     <nav class="lib-tabs audio-nav" aria-label="Audio library">{[['discover', 'Discover'], ['music', 'Music'], ['sfx', 'Sound FX'], ['favorites', 'Favorites'], ['recent', 'Recent'], ['mine', 'My audio']].map(([id, label]) => <button key={id} class={tab === id ? 'on' : ''} aria-pressed={tab === id} onClick={() => navigate(id)}>{label}</button>)}</nav>
-    {tab === 'discover' ? <AudioDiscover /> : tab === 'mine' ? <MyAudio /> : tab === 'favorites' || tab === 'recent' ? <SavedAudio recent={tab === 'recent'} /> : <OnlineAudio key={tab} panel={tab} />}
+    {tab === 'discover' ? <AudioDiscover /> : tab === 'mine' ? <MyAudio /> : tab === 'favorites' || tab === 'recent' ? <SavedAudio recent={tab === 'recent'} /> : tab === 'sfx' ? <SoundEffectsLibrary /> : <OnlineAudio key={tab} panel={tab} />}
     <PreviewBar /><Drawer />
+  </div>;
+}
+
+function SoundEffectsLibrary() {
+  return <>
+    <div class="sfx-sections" role="group" aria-label="Sound effect sections">
+      <button class={sfxSection.value === 'effects' ? 'on' : ''} onClick={() => (sfxSection.value = 'effects')}><AudioLines size={14} />Sound effects</button>
+      <button class={sfxSection.value === 'memes' ? 'on' : ''} onClick={() => (sfxSection.value = 'memes')}><Smile size={14} />Memes & Reactions</button>
+    </div>
+    {sfxSection.value === 'memes' ? <MemeLibrary /> : <OnlineAudio panel="sfx" />}
+  </>;
+}
+
+function MemeLibrary() {
+  const [view, setView] = useState('browse'), [importing, setImporting] = useState(false);
+  const s = searches.memes.value;
+  useEffect(() => { if (searches.memes.value.status === 'idle') search('memes', {}, { now: true }); }, []);
+  const ownIds = [...new Set([...(prefs.value.memeAudioIds || []), ...[...media.value.values()].filter(a => a.source?.provider === 'myinstants' && a.audio).map(a => a.id)])];
+  const importOwn = async () => {
+    if (importing) return; setImporting(true);
+    try {
+      const r = await pickMedia(); if (!r) return;
+      const ids = (r.assets || []).filter(a => a.audio).map(a => a.id);
+      await refreshMedia();
+      if (!ids.length) { toast('Choose a file with playable audio.', 'warn'); return; }
+      await savePrefs({ memeAudioIds: [...new Set([...(prefs.value.memeAudioIds || []), ...ids])].slice(-5000) });
+      setView('mine'); toast('Added to your meme audio. Click + or drag a file onto the timeline.');
+    } catch (e) { toast(e.message, 'error'); } finally { setImporting(false); }
+  };
+  const favorites = lists.value.audio.favorites.filter(r => r.provider === 'myinstants');
+  return <div class="meme-library">
+    <div class="meme-intro"><div><span class="audio-eyebrow">MYINSTANTS SOUNDBOARD</span><h3>Memes & Reactions</h3></div><button class="btn sm" onClick={importOwn} disabled={importing}>{importing ? <LoaderCircle size={13} class="spin" /> : <Upload size={13} />}Import your audio</button></div>
+    <nav class="meme-views" aria-label="Meme collection">{[['browse', 'Browse sounds'], ['favorites', 'Favorites'], ['mine', 'My meme audio']].map(([id, label]) => <button key={id} class={view === id ? 'on' : ''} aria-pressed={view === id} onClick={() => setView(id)}>{label}</button>)}</nav>
+    {view === 'mine' ? <><p class="muted meme-note">Your imported files work offline and can be added or dragged onto the timeline. Use recordings you have permission to include.</p><MyAudio ids={ownIds} effectsOnly /></> : <>
+      <p class="meme-rights-note"><Info size={13} /><span>MyInstants doesn’t provide reuse licenses. You decide whether your use is permitted; importing a sound does not label it CC0.</span></p>
+      {view === 'favorites' ? favorites.length ? <AudioList items={favorites} panel="memes" /> : <div class="lib-state"><Heart size={22} /><b>Save a sound for later</b><span>Tap the heart on a MyInstants result to keep it here.</span></div> : <>
+        <SearchField panel="memes" placeholder="Search MyInstants by sound name…" />
+        <Chips label="Quick searches" icon={Smile} items={['Meme', 'Bruh', 'Vine boom', 'Cartoon', 'Fail', 'Laugh', 'Gaming', 'Surprise']} onPick={q => search('memes', { q }, { now: true })} />
+        {s.q && <button class="btn sm ghost" onClick={() => search('memes', { q: '' }, { now: true })}>Browse all API matches</button>}
+        <AudioResults s={s} panel="memes" />
+        <p class="muted meme-note">Searches match sound names. Show more continues through the API’s pages. Anonymous access: 10 lookups per minute; searches are cached.</p>
+      </>}
+    </>}
   </div>;
 }
 
@@ -203,7 +246,7 @@ function AudioResults({ s, panel, limit, compact }) {
   if (s.sort === 'long') items.sort((a, b) => (b.durationMs || 0) - (a.durationMs || 0));
   if (limit) items = items.slice(0, limit);
   return <>
-    {!compact && <div class="audio-result-summary" aria-live="polite"><span>{s.results.length} {panel === 'music' ? 'tracks' : 'sounds'} shown</span><span>{[...new Set(s.results.map(r => r.sourceName || SOURCE_NAMES[r.provider]))].filter(Boolean).join(' · ')}</span></div>}
+    {!compact && <div class="audio-result-summary" aria-live="polite"><span>{panel === 'memes' ? `${s.results.length} of ${s.total} source matches loaded` : `${s.results.length} ${panel === 'music' ? 'tracks' : 'sounds'} shown`}</span><span>{[...new Set(s.results.map(r => r.sourceName || SOURCE_NAMES[r.provider]))].filter(Boolean).join(' · ')}</span></div>}
     {s.partial?.length > 0 && <div class="audio-source-notice" role="status">{s.partial.map(p => `${SOURCE_NAMES[p.provider] || p.provider} ${p.code === 'slow' ? 'is still loading' : p.code === 'quota' ? 'has reached its access limit' : 'is unavailable'}`).join(' · ')}<button onClick={() => search(panel, {}, { now: true })}>Retry</button></div>}
     <AudioList items={items} panel={panel} />
     {!compact && <MoreButton s={s} panel={panel} />}
@@ -246,7 +289,7 @@ function AudioRow({ rec, panel }) {
   const r = rightsOf(rec); const sel = selectedRecord.value?.key === rec.key;
   const add = () => useRecord(rec).then(id => id && rec.kind === 'music' && afterMusic(id));
   const menu = e => openMenu(e, [
-    { text: r.blocked ? 'Can’t be used — see why' : 'Add at playhead', icon: r.blocked ? Info : Plus, onClick: r.blocked ? () => (selectedRecord.value = rec) : add },
+    { text: rec.previewOnly ? 'Open on MyInstants' : r.blocked ? 'Can’t be used — see why' : 'Add at playhead', icon: r.blocked ? Info : Plus, onClick: rec.previewOnly ? () => window.open(rec.sourcePageUrl, '_blank') : r.blocked ? () => (selectedRecord.value = rec) : add },
     { text: playing && !paused ? 'Pause preview' : paused ? 'Resume preview' : 'Preview', icon: playing && !paused ? Pause : Play, onClick: () => togglePreview(rec) },
     playing && { text: 'Stop preview', icon: Square, onClick: stopPreview },
     { text: rec.favorite ? 'Remove from favorites' : 'Save to favorites', icon: Heart, onClick: () => toggleFavorite(rec) },
@@ -256,7 +299,7 @@ function AudioRow({ rec, panel }) {
     { text: 'Copy credit', icon: Copy, onClick: () => copy(creditLine(rec)) },
     rec.imported && native && { text: 'Reveal project file', icon: FolderOpen, onClick: () => { const a = asset(rec.imported); a && native.showInFolder(a.folder + '\\' + a.fileName); } },
   ]);
-  return <div class={`audio-row lib-row ${playing ? 'playing' : ''} ${sel ? 'sel' : ''} ${r.blocked ? 'blocked' : ''}`} role="option" aria-selected={sel} tabIndex={0} draggable={!r.blocked}
+  return <div class={`audio-row lib-row ${playing ? 'playing' : ''} ${sel ? 'sel' : ''} ${r.blocked && !rec.previewOnly ? 'blocked' : ''}`} role="option" aria-selected={sel} tabIndex={0} draggable={!r.blocked}
     aria-label={`${rec.title}${rec.creator ? ' by ' + rec.creator : ''}, ${rec.durationMs ? shortTime(rec.durationMs / 1000) : ''}, ${r.badge}`}
     onDragStart={e => dragRecord(e, rec)} onDblClick={e => { if (!e.target.closest('button') && !r.blocked) add(); }} onContextMenu={menu} onClick={e => { if (!e.target.closest('button')) togglePreview(rec); }}
     onPointerEnter={() => warmPreview(rec)} onPointerLeave={() => warmPreview(null)} onFocus={() => warmPreview(rec, 400)}
@@ -272,7 +315,7 @@ function AudioRow({ rec, panel }) {
     </div>
     <button class={`icon-btn sm fav-btn ${rec.favorite ? 'on' : ''}`} tabIndex={-1} aria-label={rec.favorite ? 'Remove from favorites' : 'Save to favorites'} aria-pressed={rec.favorite} onClick={() => toggleFavorite(rec)}><Heart size={14} fill={rec.favorite ? 'currentColor' : 'none'} /></button>
     {busy ? <span class="busy-ring" role="progressbar" aria-label="Downloading" data-tip="Downloading — it is added to the timeline when it arrives" style={{ '--p': ((prog ?? 0.15) * 100) + '%' }}><LoaderCircle size={14} class="spin" /></span>
-      : <button class="icon-btn sm add" tabIndex={-1} disabled={false} data-tip={r.blocked ? r.summary : rec.imported ? 'Add at playhead (already downloaded)' : 'Add at playhead'} aria-label="Add at playhead" onClick={() => (r.blocked ? (selectedRecord.value = rec) : add())}>{r.blocked ? <Info size={15} /> : rec.imported ? <Check size={15} /> : <Plus size={16} />}</button>}
+      : rec.previewOnly ? <button class="icon-btn sm" aria-label="Open on MyInstants" data-tip="Open sound page on MyInstants" onClick={() => window.open(rec.sourcePageUrl, '_blank')}><ExternalLink size={14} /></button> : <button class="icon-btn sm add" tabIndex={-1} disabled={false} data-tip={r.blocked ? r.summary : rec.imported ? 'Add at playhead (already downloaded)' : 'Add at playhead'} aria-label="Add at playhead" onClick={() => (r.blocked ? (selectedRecord.value = rec) : add())}>{r.blocked ? <Info size={15} /> : rec.imported ? <Check size={15} /> : <Plus size={16} />}</button>}
   </div>;
 }
 async function afterMusic(clipId) {
@@ -339,16 +382,16 @@ function Drawer() {
   </div>;
 }
 
-function MyAudio() {
+function MyAudio({ ids, effectsOnly = false }) {
   const p = project.value; const [q, setQ] = useState('');
-  const all = [...media.value.values()].filter(a => a.audio && a.role !== 'sticker' && (p.mediaIds.includes(a.id) || a.role === 'library-audio') && a.name.toLowerCase().includes(q.toLowerCase()));
+  const all = [...media.value.values()].filter(a => a.audio && a.role !== 'sticker' && (ids ? ids.includes(a.id) : p.mediaIds.includes(a.id) || a.role === 'library-audio') && a.name.toLowerCase().includes(q.toLowerCase()));
   all.sort((a, b) => (p.mediaIds.includes(b.id) - p.mediaIds.includes(a.id)) || String(b.imported).localeCompare(String(a.imported)));
   const keyOf = a => 'mine:' + a.id;
-  const play = a => !a.missing && togglePreview({ key: keyOf(a), url: a.url, title: (a.source?.title || a.name).replace(/\.[^.]+$/, ''), durationMs: (a.duration || 0) * 1000 });
-  const kindOf = a => (a.source?.kind === 'sfx' ? 'sfx' : a.source?.kind === 'music' ? 'music' : a.duration < 20 ? 'sfx' : 'music');
+  const play = a => !a.missing && togglePreview({ key: keyOf(a), url: a.url, title: (a.source?.title || a.name.replace(/\.[^.]+$/, '')), durationMs: (a.duration || 0) * 1000 });
+  const kindOf = a => effectsOnly ? 'sfx' : (a.source?.kind === 'sfx' ? 'sfx' : a.source?.kind === 'music' ? 'music' : a.duration < 20 ? 'sfx' : 'music');
   const add = a => (a.missing ? relinkOne(a) : a.kind === 'audio' ? insertAudio(a, kindOf(a)) : insertAudio(a, 'sfx'));
   return <>
-    <button class="studio-entry" onClick={openStudio}><span class="dot" /><div><b>Record voiceover</b><small>Studio-quality WAV · script reader · auto cleanup</small></div></button>
+    {!ids && <button class="studio-entry" onClick={openStudio}><span class="dot" /><div><b>Record voiceover</b><small>Studio-quality WAV · script reader · auto cleanup</small></div></button>}
     <div class="asset-tools"><div class="search"><Search size={14} /><input class="input" type="search" placeholder="Search your audio" value={q} onInput={e => setQ(e.target.value)} /></div></div>
     {!all.length ? <div class="lib-state"><Music size={22} /><b>No audio yet</b><span>Add music or sound effects from the other tabs, import your own files, or record a voiceover. Everything here works offline.</span></div>
       : <div class="audio-list" role="listbox" aria-label="My audio" onKeyDown={e => navKeys(e, '.lib-row')}>{all.map(a => {
@@ -357,7 +400,7 @@ function MyAudio() {
           onKeyDown={e => { if (e.target !== e.currentTarget) return; if (e.key === ' ') { e.preventDefault(); play(a); } if (e.key === 'Enter') { e.preventDefault(); add(a); } }}
           onContextMenu={e => openMenu(e, [{ text: 'Add at playhead', icon: Plus, onClick: () => add(a) }, src && { text: 'Copy credit', icon: Copy, onClick: () => copy(creditLine(src)) }, src?.sourcePageUrl && { text: 'Open source page', icon: ExternalLink, onClick: () => window.open(src.sourcePageUrl, '_blank') }, native && !a.missing && { text: 'Reveal file', icon: FolderOpen, onClick: () => native.showInFolder(a.folder + '\\' + a.fileName) }, a.missing && { text: 'Relink…', icon: Link2, onClick: () => relinkOne(a) }])}>
           <PlayButton active={preview.value.key === keyOf(a)} disabled={a.missing} onClick={() => play(a)} />
-          <div class="grow lib-meta"><div class="ellipsis lib-title">{(src?.title || a.name).replace(/\.[^.]+$/, '')}</div><div class="lib-sub"><small class="muted ellipsis">{a.missing ? 'File missing — relink to use' : [shortTime(a.duration), a.recording ? 'Recording' : src ? src.sourceName || 'Openverse' : a.kind === 'audio' ? 'Your file' : 'From video', p.mediaIds.includes(a.id) ? 'In project' : 'Ready offline'].filter(Boolean).join(' · ')}</small></div></div>
+          <div class="grow lib-meta"><div class="ellipsis lib-title">{(src?.title || a.name.replace(/\.[^.]+$/, ''))}</div><div class="lib-sub"><small class="muted ellipsis">{a.missing ? 'File missing — relink to use' : [shortTime(a.duration), a.recording ? 'Recording' : src ? src.sourceName || 'Openverse' : a.kind === 'audio' ? 'Your file' : 'From video', p.mediaIds.includes(a.id) ? 'In project' : 'Ready offline'].filter(Boolean).join(' · ')}</small></div></div>
           <button class="icon-btn sm add" tabIndex={-1} data-tip="Add at playhead" aria-label="Add at playhead" onClick={() => add(a)}>{a.missing ? <Link2 size={15} /> : <Plus size={16} />}</button>
         </div>;
       })}</div>}

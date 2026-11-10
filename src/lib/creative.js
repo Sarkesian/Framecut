@@ -10,17 +10,18 @@ import { activeOutput } from '../audio/devices.js';
 import { shortTime } from './format.js';
 
 export const audioTab = signal('discover'); // discover | music | sfx | favorites | recent | mine
+export const sfxSection = signal('effects'); // effects | memes
 export const stickerTab = signal('discover'); // discover | animated | static | mine
 export const libStatus = signal(null);
 export const busyKeys = signal(new Map()); // key -> progress 0..1 (or null = indeterminate)
 export const selectedRecord = signal(null); // detail drawer
 
 const blank = () => ({ q: '', length: '', source: '', category: '', collection: '', browseQuery: '', browseTitle: '', browseAll: false, sort: 'relevance', results: [], page: 0, pages: 0, total: 0, status: 'idle', error: null, scroll: 0 });
-export const searches = { music: signal(blank()), sfx: signal(blank()), fluent: signal(blank()), stickers: signal(blank()) };
+export const searches = { music: signal(blank()), sfx: signal(blank()), memes: signal(blank()), fluent: signal(blank()), stickers: signal(blank()) };
 // Music, sound effects and the sticker search ask every free source at once ('all'); the server merges
 // them. The Animated tab browses Fluent Emoji only. Picking a source in the filter narrows to it.
-const PROVIDER = { music: 'all', sfx: 'all', fluent: 'fluent', stickers: 'all' };
-const KIND = { music: 'music', sfx: 'sfx', fluent: 'sticker', stickers: 'sticker' };
+const PROVIDER = { music: 'all', sfx: 'all', memes: 'myinstants', fluent: 'fluent', stickers: 'all' };
+const KIND = { music: 'music', sfx: 'sfx', memes: 'sfx', fluent: 'sticker', stickers: 'sticker' };
 const OWN_SOURCES = ['ccmixter', 'sfxkit', 'sfxmint', 'archive', 'pixabay', 'openverse', 'fluent']; // source filter values that are whole providers
 // Category browsing (no search words) is answered by the source that owns the categories.
 const CATEGORY_PROVIDER = { sfx: 'sfxkit', fluent: 'fluent' };
@@ -63,14 +64,14 @@ async function runSearch(panel, more, retried = false, revision = revisions[pane
   const s = searches[panel], cur = s.value;
   const q = cur.q.trim();
   const stickerBrowse = panel === 'stickers';
-  const audioBrowse = panel === 'music' || panel === 'sfx';
+  const audioBrowse = panel === 'music' || panel === 'sfx' || panel === 'memes';
   const browsing = stickerBrowse || audioBrowse || (!q && cur.category && CATEGORY_PROVIDER[panel]);
   if (panel !== 'fluent' && ((!q && !browsing) || (!stickerBrowse && q && q.length < 2))) { s.value = { ...cur, results: [], status: 'idle', error: null, total: 0, page: 0, pages: 0, partial: [], sources: [] }; return; }
   controllers[panel]?.abort(); const ctl = new AbortController(); controllers[panel] = ctl;
   const page = more ? cur.page + 1 : 1;
   s.value = { ...cur, status: more ? 'more' : 'loading', error: null };
   const own = OWN_SOURCES.includes(cur.source);
-  const provider = stickerBrowse && !cur.source ? 'fluent' : own ? cur.source : cur.category && CATEGORY_PROVIDER[panel] ? CATEGORY_PROVIDER[panel] : cur.source ? 'openverse' : PROVIDER[panel];
+  const provider = panel === 'memes' ? 'myinstants' : stickerBrowse && !cur.source ? 'fluent' : own ? cur.source : cur.category && CATEGORY_PROVIDER[panel] ? CATEGORY_PROVIDER[panel] : cur.source ? 'openverse' : PROVIDER[panel];
   const effectiveQuery = q || (panel === 'music' ? cur.browseAll ? '' : cur.browseQuery || 'ambient' : panel === 'sfx' && !cur.category && !['sfxkit', 'sfxmint'].includes(cur.source) ? cur.browseQuery || 'whoosh' : '');
   const params = new URLSearchParams({ provider, kind: KIND[panel], q: effectiveQuery, page: String(page), usage: usageMode(), include: cur.include || 'free', length: cur.length, source: own ? '' : cur.source, category: cur.category, ...(stickerBrowse ? { collection: cur.collection } : {}), ...(audioBrowse && provider === 'all' ? { deadline: '2500' } : {}) });
   try {
@@ -190,7 +191,7 @@ export async function obtain(rec) {
   // Adding from the library downloads the file first; say so, since a long track can take a moment.
   toast(`Downloading “${rec.title}”… it is added as soon as it arrives.`, 'info', { timeout: 3500 });
   try {
-    const res = await api('/api/creative/import', { provider: rec.provider, id: rec.sourceId, kind: rec.kind, usage: usageMode() });
+    const res = await api('/api/creative/import', { provider: rec.provider, id: rec.sourceId, kind: rec.kind, usage: usageMode(), ...(rec.provider === 'myinstants' ? { acknowledgeUnknownRights: true } : {}) });
     const out = res.asset || (await waitJob(res.job, p => setBusy(rec.key, p))).asset;
     const m = new Map(media.value); m.set(out.id, out); media.value = m;
     markImported(rec.key, out.id); loadLists();

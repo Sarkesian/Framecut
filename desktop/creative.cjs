@@ -20,6 +20,7 @@ const { SfxKit } = require('./providers/sfxkit.cjs');
 const { CcMixter } = require('./providers/ccmixter.cjs');
 const { Archive } = require('./providers/archive.cjs');
 const { SfxMint } = require('./providers/sfxmint.cjs');
+const { MyInstants } = require('./providers/myinstants.cjs');
 const { assessRights, verifyLicense, discoverable, includeMode, providerTier, PROVIDERS, APP_NOTICES } = require('../shared/rights.mjs');
 
 const PREVIEW_CAP = 250 * 1024 ** 2;
@@ -39,6 +40,7 @@ class Creative {
       const cacheFile = id => path.join(cacheDir, 'creative', id + '-metadata.json');
       this.providers.archive = new Archive({ http, base: archiveBase, cacheFile: cacheFile('archive') });
       this.providers.sfxmint = new SfxMint({ http, base: sfxmintBase, credentials: () => this.credentials('sfxmint'), cacheFile: cacheFile('sfxmint') });
+      this.providers.myinstants = new MyInstants({ http, cacheFile: cacheFile('myinstants') });
     }
     this.cache = new Map(); this.known = new Map(); this.inflight = new Map(); this.sessions = new Map(); this.tokens = new Map();
     this.state = { favorites: [], recents: [], imports: {} };
@@ -92,7 +94,7 @@ class Creative {
     const order = ['fluent', 'sfxkit', 'sfxmint', ...(kind === 'music' ? ['ccmixter', 'openverse'] : ['openverse', 'ccmixter']), 'archive', 'pixabay'];
     return Object.keys(this.providers).sort((x, y) => order.indexOf(x) - order.indexOf(y)).filter(id => {
       const pv = PROVIDERS[id], p = this.providers[id];
-      if (!pv?.enabled || !pv.kinds.includes(kind)) return false;
+      if (!pv?.enabled || pv.dedicated || !pv.kinds.includes(kind)) return false;
       if (!(this.prefs()?.librarySources?.[id] ?? pv.defaultActive !== false)) return false;
       if (pv.needsKey && !p.configured?.()) return false;
       const t = providerTier(id); return !t || t === 'free' || (t === 'credit' && include !== 'free') || include === 'all';
@@ -103,7 +105,7 @@ class Creative {
   remember(rec) { const k = rec.provider + ':' + rec.sourceId; this.known.delete(k); this.known.set(k, rec); if (this.known.size > 3000) this.known.delete(this.known.keys().next().value); return rec; }
   decorate(rec) {
     const k = rec.provider + ':' + rec.sourceId, imp = this.state.imports[k], a = imp && this.library.get(imp.mediaId);
-    return { ...rec, key: k, favorite: this.state.favorites.some(f => f.key === k), imported: a && !a.missing ? a.id : null, downloadable: !!rec.downloadUrl };
+    return { ...rec, ...(PROVIDERS[rec.provider]?.userManaged ? { previewOnly: false, rightsUnverified: true } : {}), key: k, favorite: this.state.favorites.some(f => f.key === k), imported: a && !a.missing ? a.id : null, downloadable: !!rec.downloadUrl };
   }
   async search(providerId, params = {}) {
     if (providerId === 'all') return this.searchAll(params);
@@ -121,6 +123,7 @@ class Creative {
       this.cache.set(key, { at: Date.now(), data }); if (this.cache.size > 400) this.cache.delete(this.cache.keys().next().value);
     }
     for (const r of data.items) this.remember(r);
+    if (PROVIDERS[providerId]?.userManaged) return { ...data, items: data.items.map(r => this.decorate(r)), provider: providerId };
     // Only verified items that belong in this discovery mode are shown.
     const items = data.items.filter(r => (!r.licenseCheck || r.licenseCheck.ok) && (!(q.include === 'free' && ['music', 'sfx'].includes(r.kind)) || r.license === 'cc0') && discoverable(assessRights({ provider: r.provider, license: r.license, licenseVersion: r.licenseVersion, kind: r.kind, usage: q.usage, verification: r.licenseCheck }), q.include));
     return { ...data, items: items.map(r => this.decorate(r)), cached: !!hit, query: q, provider: providerId };
@@ -222,6 +225,7 @@ class Creative {
   }
   async preview(providerId, id, req, res) {
     const rec = await this.record(providerId, id);
+    if (PROVIDERS[providerId]?.userManaged) return res.redirect(rec.previewUrl);
     const file = this.previewPath(providerId, id);
     const cached = async () => { const now = new Date(); fsp.utimes(file, now, now).catch(() => {}); const t = await fsp.readFile(file + '.type', 'utf8').catch(() => null); return t || (rec.kind === 'sticker' ? 'image/png' : 'audio/mpeg'); };
     // ?as=mp3: the player could not decode the file as it is (an unusual format, or a source that labels it wrongly),
@@ -287,8 +291,9 @@ class Creative {
   }
 
   // ----- import (rights check → download → project media → optional sticker bake) -----
-  importAsset({ provider: providerId, id, kind, usage = 'commercial' }) {
+  importAsset({ provider: providerId, id, kind, usage = 'commercial', acknowledgeUnknownRights = false }) {
     assertSourceAllowed({ provider: providerId });
+    if (PROVIDERS[providerId]?.userManaged && !acknowledgeUnknownRights) throw Object.assign(Error('MyInstants imports require an explicit user-directed action; reuse rights are not supplied by its API.'), { code: 'license' });
     const key = providerId + ':' + id; const prev = this.state.imports[key]; const existing = prev && this.library.get(prev.mediaId);
     if (existing && !existing.missing) { this.touchRecent(key); return { reused: true, asset: this.library.public(existing) }; }
     for (const j of this.jobs.jobs.values()) if (j.meta?.creativeKey === key && ['queued', 'running'].includes(j.status)) return { job: j.id };
@@ -298,8 +303,8 @@ class Creative {
       const listed = this.known.get(key) || null;
       const rec = await this.record(providerId, id, { fresh: true, kind });
       // Verify the license from the provider's current record (not the search listing) and keep the evidence.
-      const licenseRecord = verifyLicense(rec, { listed, method: providerId + '-detail' });
-      if (!licenseRecord.ok) throw Object.assign(Error(`“${rec.title}” wasn’t added: ${licenseRecord.problems.map(p => p.text).join(' ')} FrameCut only uses assets whose license it can confirm.`), { code: 'license' });
+      const licenseRecord = PROVIDERS[providerId]?.userManaged ? { ...rec.licenseCheck, method: 'user-directed-import', userDirected: true, checkedAt: new Date().toISOString() } : verifyLicense(rec, { listed, method: providerId + '-detail' });
+      if (!licenseRecord.ok && !PROVIDERS[providerId]?.userManaged) throw Object.assign(Error(`“${rec.title}” wasn’t added: ${licenseRecord.problems.map(p => p.text).join(' ')} FrameCut only uses assets whose license it can confirm.`), { code: 'license' });
       const rights = assessRights({ provider: providerId, license: rec.license, licenseVersion: rec.licenseVersion, kind: rec.kind, usage, verification: licenseRecord });
       if (!rights.storage) throw Object.assign(Error(rights.summary), { code: 'license' });
       if (rights.blocked) throw Object.assign(Error(rights.summary), { code: 'license' });
