@@ -25,7 +25,7 @@ const SFX_IDEAS = ['Whoosh', 'Click', 'Pop', 'Swoosh', 'Applause', 'Footsteps', 
 const STICKER_IDEAS = ['Star', 'Heart', 'Arrow', 'Speech bubble', 'Crown', 'Trophy', 'Rocket', 'Lightning', 'Fire', 'Music note', 'Sun', 'Flower', 'Cat', 'Dog', 'Bird', 'Tree', 'Check mark', 'Question mark'];
 // Source filter per panel. Whole providers (ccMixter, SFX Kit) or Openverse's own sources.
 const SOURCES = {
-  music: [['', 'All music sources'], ['ccmixter', 'ccMixter'], ['openverse', 'Openverse'], ['archive', 'Internet Archive']],
+  music: [['', 'All music sources'], ['ccmixter', 'ccMixter'], ['openverse', 'Openverse'], ['jamendo', 'Jamendo via Openverse'], ['archive', 'Internet Archive']],
   sfx: [['', 'All sound sources'], ['sfxkit', 'SFX Kit'], ['sfxmint', 'SFXMint'], ['openverse', 'Openverse']],
 };
 const SOURCE_NAMES = { openverse: 'Openverse', ccmixter: 'ccMixter', archive: 'Internet Archive', sfxmint: 'SFXMint', sfxkit: 'SFX Kit', fluent: 'Fluent Emoji', pixabay: 'Pixabay' };
@@ -133,15 +133,16 @@ export function AudioLibrary() {
   </div>;
 }
 
-function browseMusic(item) {
-  const patch = { q: '', source: '', category: '', length: '', visited: true, browseAll: false, browseQuery: item[2], browseTitle: item[1] };
+function browseMusic(item, { preserveSource = false } = {}) {
+  const patch = { q: '', source: preserveSource ? searches.music.value.source : '', category: '', length: '', visited: true, browseAll: false, browseQuery: item[2], browseTitle: item[1] };
   try { localStorage.setItem('fc:audio-last-lens', JSON.stringify(patch)); } catch {}
   audioTab.value = 'music'; search('music', patch, { now: true });
 }
 function browseAllMusic() {
   audioTab.value = 'music';
-  search('music', { q: '', source: '', category: '', length: '', visited: true, browseAll: true, browseQuery: '', browseTitle: 'All CC0 music & background audio' }, { now: true });
+  search('music', { q: '', source: '', category: '', length: '', visited: true, browseAll: true, browseQuery: '', browseTitle: 'All music & background audio' }, { now: true });
 }
+function browseOriginalMusic() { audioTab.value = 'music'; search('music', { q: '', source: 'jamendo', include: 'all', length: '', category: '', browseAll: true, visited: true, browseQuery: '', browseTitle: 'Original Jamendo catalog' }, { now: true }); }
 function BrowseRail({ label, className, children }) {
   const ref = useRef(), [edges, setEdges] = useState([false, false]);
   useLayoutEffect(() => {
@@ -171,7 +172,8 @@ function AudioDiscover() {
   }, []);
   return <>
     <SearchField panel="music" placeholder="Search music, artists, moods…" />
-    <div class="audio-welcome"><span class="audio-eyebrow">YOUR NEXT VIDEO STARTS HERE</span><h3>Find its sound.</h3><p>Music, little details, big moments.</p><span class="audio-library-note"><Check size={11} />CC0 audio · source details kept with every download</span><button class="audio-comedy-link" onClick={() => browseMusic(AUDIO_DISCOVERY.moods[0])}><Smile size={14} />Goofy & funny music<ChevronRight size={12} /></button></div>
+    <div class="audio-welcome"><span class="audio-eyebrow">YOUR NEXT VIDEO STARTS HERE</span><h3>Find its sound.</h3><p>Music, little details, big moments.</p><span class="audio-library-note"><Check size={11} />CC0 by default · other licenses available</span><button class="audio-comedy-link" onClick={() => browseMusic(AUDIO_DISCOVERY.moods[0])}><Smile size={14} />Goofy & funny music<ChevronRight size={12} /></button></div>
+    <button class="btn sm ghost audio-browse-all" onClick={browseOriginalMusic}><Music size={14} />Original Jamendo music · credits & terms apply<ChevronRight size={14} /></button>
     <DiscoveryRail title="Browse by mood" items={AUDIO_DISCOVERY.moods} group="mood" />
     <button class="btn sm ghost audio-browse-all" onClick={browseAllMusic}><Music size={14} />Browse full music library<ChevronRight size={14} /></button>
     <section class="audio-discovery-section"><div class="audio-section-head"><div><h3>{s.q ? 'Search results' : s.browseTitle || 'Music to start with'}</h3><small class="muted">{s.q ? 'Across your enabled music sources' : 'A starting point for your edit'}</small></div><button class="icon-btn sm" aria-label="View all music" onClick={() => (audioTab.value = 'music')}><ChevronRight size={17} /></button></div>
@@ -220,8 +222,8 @@ function OnlineAudio({ panel }) {
   return <>
     <SearchField panel={panel} placeholder={panel === 'music' ? 'Search music, artists, moods…' : 'Search sound effects — whoosh, click, rain…'} onArrowDown={() => listRef.current?.querySelector('.lib-row')?.focus()} />
     <div class="audio-section-head audio-browse-title"><div><h3>{s.q ? 'Search results' : s.category ? fxCategories.find(c => c.id === s.category && c.provider === s.source)?.name || 'Sound collection' : panel === 'music' ? s.browseTitle || 'Ambient & atmospheric' : 'Sound effects'}</h3><small class="muted">{panel === 'music' ? s.q ? 'Find a track for your video' : s.browseAll ? 'Music, loops & atmospheres across your enabled sources' : 'Discovery search: ' + (s.browseQuery || 'ambient') : 'Transitions, accents & environments'}</small></div><button class={`btn sm ghost ${filters ? 'on' : ''}`} aria-expanded={filters} onClick={() => setFilters(!filters)}><SlidersHorizontal size={13} />Filters{activeFilters ? ` (${activeFilters})` : ''}</button></div>
-    {filters && <div class="audio-filter-panel"><div class="lib-filters"><Select label="Source" value={s.source} options={sourceOptions} onChange={v => search(panel, { source: v, category: '' }, { now: true })} /><Select label="Length" value={s.length} options={panel === 'music' ? [['', 'Any length'], ['clip', 'Under 1 min'], ['song', 'Over 1 min']] : [['', 'Any length'], ['short', 'Under 10 s'], ['medium', '10–60 s'], ['long', 'Over 1 min']]} onChange={v => search(panel, { length: v }, { now: true })} /><Select label="Sort shown tracks" value={s.sort} options={[['relevance', 'Provider order'], ['title', 'Title A–Z'], ['short', 'Shortest first'], ['long', 'Longest first']]} onChange={v => (searches[panel].value = { ...searches[panel].value, sort: v })} /></div><p class="muted tiny">Only CC0 audio with source license metadata is shown.</p><details class="audio-project-use"><summary>Project use</summary><UsageSwitch /><small class="muted">For license checks on older assets already in this project.</small></details></div>}
-    {panel === 'music' && <><div class="audio-browse-actions"><Select label="Browse music genre" value={!s.q ? AUDIO_DISCOVERY.genres.find(g => g[2] === s.browseQuery)?.[0] || '' : ''} options={[['', 'All genres'], ...AUDIO_DISCOVERY.genres.map(g => [g[0], g[1]])]} onChange={id => id ? browseMusic(AUDIO_DISCOVERY.genres.find(g => g[0] === id)) : browseAllMusic()} /><button class="btn sm ghost" onClick={browseAllMusic}><Music size={13} />Browse full music library</button></div><MusicMixOptions /></>}
+    {filters && <div class="audio-filter-panel"><div class="lib-filters"><Select label="Source" value={s.source} options={sourceOptions} onChange={v => search(panel, { source: v, category: '', ...(v === 'jamendo' ? { include: 'all' } : {}) }, { now: true })} /><Select label="Length" value={s.length} options={panel === 'music' ? [['', 'Any length'], ['clip', 'Under 1 min'], ['song', 'Over 1 min']] : [['', 'Any length'], ['short', 'Under 10 s'], ['medium', '10–60 s'], ['long', 'Over 1 min']]} onChange={v => search(panel, { length: v }, { now: true })} /><Select label="Sort shown tracks" value={s.sort} options={[['relevance', 'Provider order'], ['title', 'Title A–Z'], ['short', 'Shortest first'], ['long', 'Longest first']]} onChange={v => (searches[panel].value = { ...searches[panel].value, sort: v })} /></div><p class="muted tiny">{(s.include || 'free') === 'free' ? 'Only CC0 audio is shown. Older Jamendo music is available under the other license views.' : 'Credits or additional terms may apply. Open a track’s license details before using it.'}</p><details class="audio-project-use"><summary>Project use</summary><UsageSwitch /><small class="muted">For license checks on older assets already in this project.</small></details></div>}
+    {panel === 'music' && <><div class="audio-browse-actions"><Select label="Music licenses" value={s.include || 'free'} options={[['free', 'CC0 only'], ['credit', 'CC0 + CC BY (credits)'], ['all', 'All usable licenses']]} onChange={v => search(panel, { include: v, ...(v === 'free' && s.source === 'jamendo' ? { source: '' } : {}) }, { now: true })} /><Select label="Browse music genre" value={!s.q ? AUDIO_DISCOVERY.genres.find(g => g[2] === s.browseQuery)?.[0] || '' : ''} options={[['', 'All genres'], ...AUDIO_DISCOVERY.genres.map(g => [g[0], g[1]])]} onChange={id => id ? browseMusic(AUDIO_DISCOVERY.genres.find(g => g[0] === id), { preserveSource: true }) : browseAllMusic()} /><button class="btn sm ghost" onClick={browseAllMusic}><Music size={13} />Browse full music library</button></div><MusicMixOptions /></>}
     {panel === 'sfx' && <Chips label="Goofy & silly sounds" icon={Smile} items={['Boing', 'Cartoon', 'Pop', 'Squeak', 'Laugh', 'Slide whistle']} onPick={q => search('sfx', { q, source: '', category: '' }, { now: true })} />}
     {!s.q && panel === 'sfx' && fxCategories.length > 0 && <BrowseRail className="audio-fx-categories" label="Sound effect categories">{fxCategories.map(c => <button key={c.provider + c.id} class={s.source === c.provider && s.category === c.id ? 'on' : ''} onClick={() => search('sfx', { source: c.provider, category: c.id, q: '' }, { now: true })}><AudioLines size={16} /><b>{c.name}</b><small>{SOURCE_NAMES[c.provider]}</small></button>)}</BrowseRail>}
     {s.q && <Chips label="Recent searches" icon={Clock} items={recentSearches(panel).filter(q => q !== s.q).slice(0, 4)} onPick={q => search(panel, { q }, { now: true })} />}
@@ -266,7 +268,7 @@ function AudioRow({ rec, panel }) {
     <PlayButton active={playing} onClick={() => togglePreview(rec)} />
     <div class="grow lib-meta">
       <div class="ellipsis lib-title" title={rec.title}>{rec.title}</div>
-      <div class="lib-sub"><button class="lic-btn" tabIndex={-1} aria-label="License and source" onClick={() => (selectedRecord.value = rec)}><Info size={12} /></button><small class={`ellipsis ${busy ? 'lib-dl' : 'muted'}`}>{busy ? `Downloading${prog != null ? ' ' + Math.round(prog * 100) + '%' : '…'}` : [rec.durationMs ? shortTime(rec.durationMs / 1000) : null, rec.creator, rec.sourceName].filter(Boolean).join(' · ')}</small></div>
+      <div class="lib-sub">{r.attribution && <LicenseBadge rec={rec} compact />}<button class="lic-btn" tabIndex={-1} aria-label="License and source" onClick={() => (selectedRecord.value = rec)}><Info size={12} /></button><small class={`ellipsis ${busy ? 'lib-dl' : 'muted'}`}>{busy ? `Downloading${prog != null ? ' ' + Math.round(prog * 100) + '%' : '…'}` : [rec.durationMs ? shortTime(rec.durationMs / 1000) : null, rec.creator, rec.sourceName].filter(Boolean).join(' · ')}</small></div>
     </div>
     <button class={`icon-btn sm fav-btn ${rec.favorite ? 'on' : ''}`} tabIndex={-1} aria-label={rec.favorite ? 'Remove from favorites' : 'Save to favorites'} aria-pressed={rec.favorite} onClick={() => toggleFavorite(rec)}><Heart size={14} fill={rec.favorite ? 'currentColor' : 'none'} /></button>
     {busy ? <span class="busy-ring" role="progressbar" aria-label="Downloading" data-tip="Downloading — it is added to the timeline when it arrives" style={{ '--p': ((prog ?? 0.15) * 100) + '%' }}><LoaderCircle size={14} class="spin" /></span>

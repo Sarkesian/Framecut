@@ -6,6 +6,12 @@ const {MetadataCache}=require('../desktop/providers/metadata.cjs');
 const {Openverse}=require('../desktop/providers/openverse.cjs');
 const {musicEvidence,AUDIO_DISCOVERY}=require('../shared/audio-library.mjs');
 const cc0='https://creativecommons.org/publicdomain/zero/1.0/';
+test('Original Jamendo music has an explicit licensed view; CC0 stays default and Wikimedia stays excluded',async()=>{
+ const queries=[];const p=new Openverse({http:{json:async url=>{queries.push(new URL(url));return{results:[{id:'original',title:'Lo-fi Love Song',url:'https://example.org/song.mp3',creator:'Composer',foreign_landing_url:'https://example.org/song',source:'jamendo',license:'by-sa',license_version:'4.0',license_url:'https://creativecommons.org/licenses/by-sa/4.0/',duration:180000,filetype:'mp3'}],result_count:1,page_count:1,page:1};}}});
+ await assert.rejects(p.search({kind:'music',source:'jamendo'}),/outside the CC0/);
+ const r=await p.search({kind:'music',source:'jamendo',include:'all'});assert.equal(r.items.length,1);assert.equal(r.items[0].license,'by-sa');assert.equal(queries[0].searchParams.get('source'),'jamendo');
+ await p.search({kind:'music',include:'credit'});assert.equal(queries[1].searchParams.get('source'),'freesound,jamendo');
+});
 test('Music ranking never deletes eligible records based on sparse tags or title guesses; invalid licenses stay excluded',async()=>{
  const row=(n,title,duration,tags=[],extra={})=>({id:String(n),title,duration,tags:tags.map(name=>({name})),url:'https://example.org/'+n+'.mp3',foreign_landing_url:'https://example.org/track/'+n,source:'freesound',license:'cc0',license_version:'1.0',license_url:cc0,filetype:'mp3',...extra});
  const rows=[row(1,'Cinematic drone 1',60000),row(2,'Peaceful Acoustic 1',90000),row(3,'Untitled by Composer',null),row(4,'Piano melody',60000,['music']),row(5,'Recorded interview',60000,['speech']),row(6,'Mislabeled license',60000,[],{license_url:'https://creativecommons.org/licenses/by/4.0/'})];

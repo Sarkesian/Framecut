@@ -291,16 +291,23 @@ function TransitionBlock({ c, start, z, p }) {
 
 // Filmstrip: only the tiles inside the visible window are drawn.
 function Filmstrip({ c, a, start, w, z, h }) {
+  const stripRef = useRef(), [actualHeight, setActualHeight] = useState(h);
+  useLayoutEffect(() => {
+    const el = stripRef.current; if (!el) return;
+    const measure = () => { const height = el.getBoundingClientRect().height; if (height > 0) setActualHeight(height); };
+    const observer = new ResizeObserver(measure); observer.observe(el); measure();
+    return () => observer.disconnect();
+  }, [h]);
   const { left, width } = scroll.value; const x0 = Math.max(0, left - start * z), x1 = Math.min(w, left + width - HEADER_W - start * z);
   const visible = x1 > x0;
   useEffect(() => {
     if (a.kind !== 'video' || a.strip?.version === 2 || !visible) return;
     api(`/api/media/${a.id}/filmstrip`, {}).then(async r => { if (r.job) await waitJob(r.job); await refreshMedia(); }).catch(() => {});
   }, [a.id, a.strip?.version, visible]);
-  if (a.kind === 'image') return <div class="strip" style={{ backgroundImage: a.thumb ? `url(${a.thumb})` : (a.svg ? `url(${a.url})` : 'none'), backgroundSize: 'auto 100%', backgroundRepeat: 'repeat-x' }} />;
-  const s = a.strip; if (!s) return <div class="strip loading" />;
-  const tiles = filmstripTiles(c, s, { zoom: z, height: h, from: x0, to: x1 }).map(tile => <i key={tile.id} data-source-time={tile.sourceTime} data-frame-index={tile.index} style={{ left: tile.left, width: tile.width, backgroundImage: `url(${s.url})`, backgroundSize: `${s.count * tile.width}px 100%`, backgroundPosition: `${-tile.index * tile.width}px 0` }} />);
-  return <div class="strip">{tiles}</div>;
+  if (a.kind === 'image') return <div ref={stripRef} class="strip" style={{ backgroundImage: a.thumb ? `url(${a.thumb})` : (a.svg ? `url(${a.url})` : 'none'), backgroundSize: 'auto 100%', backgroundRepeat: 'repeat-x' }} />;
+  const s = a.strip; if (!s) return <div ref={stripRef} class="strip loading" />;
+  const tiles = filmstripTiles(c, s, { zoom: z, height: actualHeight, from: x0, to: x1 }).map(tile => <i key={tile.id} data-source-time={tile.sourceTime} data-frame-index={tile.index} style={{ left: tile.left, width: tile.width, backgroundImage: `url(${s.url})`, backgroundSize: `${s.count * tile.width}px 100%`, backgroundPosition: `${-tile.index * tile.width}px 0` }} />);
+  return <div ref={stripRef} class="strip">{tiles}</div>;
 }
 const peakCache = new Map();
 function usePeaks(url) {

@@ -72,7 +72,7 @@ async function runSearch(panel, more, retried = false, revision = revisions[pane
   const own = OWN_SOURCES.includes(cur.source);
   const provider = stickerBrowse && !cur.source ? 'fluent' : own ? cur.source : cur.category && CATEGORY_PROVIDER[panel] ? CATEGORY_PROVIDER[panel] : cur.source ? 'openverse' : PROVIDER[panel];
   const effectiveQuery = q || (panel === 'music' ? cur.browseAll ? '' : cur.browseQuery || 'ambient' : panel === 'sfx' && !cur.category && !['sfxkit', 'sfxmint'].includes(cur.source) ? cur.browseQuery || 'whoosh' : '');
-  const params = new URLSearchParams({ provider, kind: KIND[panel], q: effectiveQuery, page: String(page), usage: usageMode(), length: cur.length, source: own ? '' : cur.source, category: cur.category, ...(stickerBrowse ? { collection: cur.collection } : {}), ...(audioBrowse && provider === 'all' ? { deadline: '2500' } : {}) });
+  const params = new URLSearchParams({ provider, kind: KIND[panel], q: effectiveQuery, page: String(page), usage: usageMode(), include: cur.include || 'free', length: cur.length, source: own ? '' : cur.source, category: cur.category, ...(stickerBrowse ? { collection: cur.collection } : {}), ...(audioBrowse && provider === 'all' ? { deadline: '2500' } : {}) });
   try {
     const r = await fetch('/api/creative/search?' + params, { signal: ctl.signal }); const d = await r.json();
     if (!r.ok) throw Object.assign(Error(d.error), { code: d.code, retryAfter: d.retryAfter });

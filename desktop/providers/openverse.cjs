@@ -62,8 +62,13 @@ class Openverse {
       params.set('source', SOURCES[source] ? source : 'svgsilh,phylopic');
     } else if (kind === 'sfx') params.set('source', SOURCES[source] ? source : 'freesound');
     // Openverse's category field is reliable for music (Jamendo) but empty for most Freesound sounds.
-    else if (include === 'free') { params.set('source', SOURCES[source] && source !== 'jamendo' ? source : FREE_MUSIC_SOURCES); minMs = FREE_MUSIC_MIN_MS; }
-    else { params.set('category', 'music'); if (SOURCES[source]) params.set('source', source); }
+    else if (include === 'free') {
+      if (source === 'jamendo') throw Object.assign(Error('Jamendo’s original music is outside the CC0-only view. Choose All usable licenses to browse it; credits and other terms may apply.'), { code: 'license' });
+      params.set('source', SOURCES[source] ? source : FREE_MUSIC_SOURCES); minMs = FREE_MUSIC_MIN_MS;
+    } else {
+      params.set('source', SOURCES[source] ? source : 'freesound,jamendo');
+      if (source === 'jamendo') params.set('category', 'music');
+    }
     const data = await this.call(path + params);
     const seen = new Set(); const items = []; let dropped = 0;
     for (const r of data.results || []) {
@@ -71,7 +76,8 @@ class Openverse {
       // Wikimedia Commons lists MIDI and Ogg-container files as audio; neither can be previewed or placed on a timeline.
       if (kind !== 'sticker' && /^(mid|midi|kar|ogx)$/i.test(rec.filetype || '')) continue;
       if (!rec.licenseCheck.ok) { dropped++; continue; } // unknown / contradictory license data is never offered
-      if (rec.durationMs != null && rec.durationMs < minMs) continue;
+      const minimum = kind === 'music' && rec.source === 'freesound' ? FREE_MUSIC_MIN_MS : minMs;
+      if (rec.durationMs != null && rec.durationMs < minimum) continue;
       if (LENGTHS[length] && !(rec.durationMs >= LENGTHS[length][0] && rec.durationMs < LENGTHS[length][1])) continue;
       const dupe = (rec.title + '|' + rec.creator).toLowerCase(); if (seen.has(rec.sourceId) || seen.has(dupe)) continue;
       seen.add(rec.sourceId); seen.add(dupe); items.push(rec);
