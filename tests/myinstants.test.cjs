@@ -56,6 +56,26 @@ test('MyInstants stays outside the CC0 catalog; imports require user direction a
   const rights = assessRights({ provider: 'myinstants', license: 'cc0', kind: 'sfx' });
   assert.equal(rights.export, true); assert.equal(rights.level, 'caution'); assert.equal(rights.commercial, 'unknown'); assert.equal(rights.badge, 'Rights unverified');
 });
+test('Adding a listed MyInstants sound downloads the listed file without another catalog lookup, even when the listing has since been dropped', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'fc-myinstants-import-')); let lookups = 0, fetched = null;
+  try {
+    const http = {
+      json: async url => { lookups++; if (/\/instants\/[^/?]+\/\?/.test(url)) throw Object.assign(Error('The media service answered 404.'), { status: 404, code: 'gone' }); return { count: 250, next: null, results: [row()] }; },
+      toFile: async (url, file) => { fetched = url; await fs.writeFile(file, Buffer.concat([Buffer.from('ID3'), Buffer.alloc(64)])); return { bytes: 67, sha256: 'a'.repeat(64), sha1: 'b'.repeat(40), contentType: 'audio/mpeg', finalUrl: url }; },
+    };
+    const assets = new Map();
+    const library = { get: id => assets.get(id) || null, public: a => a, importPath: async (file, { name }) => { const a = { id: 'm1', name, file, audio: true }; assets.set(a.id, a); return a; } };
+    const c = new Creative({ dataDir: dir, cacheDir: dir, library, jobs: { jobs: new Map() }, http });
+    c.providers.myinstants = new MyInstants({ http });
+    const found = await c.search('myinstants', { kind: 'sfx', q: 'vine' }); assert.equal(found.capped, true); assert.equal(lookups, 1);
+    const key = 'myinstants:' + row().slug, ctx = { signal: new AbortController().signal, progress() {} };
+    const out = await c.importJob({ providerId: 'myinstants', id: row().slug, kind: 'sfx', usage: 'commercial', key, listed: c.known.get(key), job: {} }, ctx);
+    assert.equal(lookups, 1); assert.equal(fetched, row().sound); assert.equal(out.asset.audio, true);
+    // Without a listing (say, after a restart) the catalog is asked, and its "not found" is still reported as gone.
+    await assert.rejects(c.importJob({ providerId: 'myinstants', id: 'some-removed-sound', kind: 'sfx', usage: 'commercial', key: 'myinstants:some-removed-sound', listed: null, job: {} }, ctx), e => e.code === 'gone');
+    clearTimeout(c.saveTimer);
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
 test('Built-in picks resolve from their own entry when the catalog drops the listing or is rate limited, and every pick is importable', async () => {
   const { MEME_COLLECTIONS, MEME_SOUNDS } = require('../shared/meme-library.mjs');
   for (const code of ['gone', 'quota']) {

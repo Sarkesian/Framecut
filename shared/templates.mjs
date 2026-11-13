@@ -1,7 +1,7 @@
 // Starter templates. Project templates set up format, titles, captions style and looks;
 // text templates insert ready-made, animated title combinations.
 import { newProject, newClip } from './model.mjs';
-import { TEXT_STYLE, CAPTION_STYLE } from './catalog.mjs';
+import { TEXT_STYLE } from './catalog.mjs';
 
 const T = (props) => newClip('text', props);
 // Animated title templates, grouped by category. Each item becomes a normal text clip (grouped, so the
@@ -226,4 +226,3 @@ export function projectFromTemplate(tpl, { name } = {}) {
   if (tpl.captions) p.captionPreset = tpl.captions;
   return p;
 }
-export const CAPTION_DEFAULT = CAPTION_STYLE;

@@ -33,6 +33,9 @@ function slowFetch(url, { method = 'GET', headers = {}, body, signal } = {}) {
 const PRIVATE = [/^127\./, /^10\./, /^192\.168\./, /^172\.(1[6-9]|2\d|3[01])\./, /^169\.254\./, /^0\./, /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./, /^::1$/, /^f[cd]/i, /^fe80/i, /^::ffff:(127|10|192\.168|169\.254)\./i, /^::$/];
 const isPrivate = ip => PRIVATE.some(r => r.test(ip));
 const UA = 'FrameCutStudio/1.0 (local desktop video editor)';
+// Why a host said no, in the terms the library reports to the user: the file is gone, the host refuses
+// this download (sign-in, hotlink or region rules), it is rate limiting, or it is having trouble itself.
+const statusCode = s => (s === 404 || s === 410 ? 'gone' : s === 401 || s === 403 || s === 451 ? 'forbidden' : s === 429 ? 'quota' : s >= 500 ? 'server' : 'http');
 
 class SafeHttp {
   constructor({ allowLocal = false, userAgent = UA, slowHosts = SLOW_TLS_HOSTS } = {}) { this.allowLocal = allowLocal; this.ua = userAgent; this.slowHosts = slowHosts; }
@@ -59,7 +62,7 @@ class SafeHttp {
         try { const go = this.slowHosts.has(url.hostname) ? slowFetch : fetch; res = await go(url, { method, headers: { 'User-Agent': this.ua, ...headers }, body, redirect: 'manual', signal: ctl.signal }); }
         catch (e) { if (ctl.signal.aborted) throw ctl.signal.reason?.code ? ctl.signal.reason : Object.assign(Error('Cancelled'), { cancelled: true }); throw Object.assign(Error('Could not reach the media service. Check your internet connection.'), { code: 'offline', cause: e }); }
         if (res.status >= 300 && res.status < 400 && res.headers.get('location')) { res.body?.cancel().catch(() => {}); url = await this.check(new URL(res.headers.get('location'), url).href); method = 'GET'; body = undefined; continue; }
-        if (!res.ok) { const text = await res.text().catch(() => ''); throw Object.assign(Error(`The media service answered ${res.status}.`), { status: res.status, retryAfter: res.headers.get('retry-after'), code: res.status === 404 || res.status === 410 ? 'gone' : res.status === 429 ? 'quota' : 'http', body: text.slice(0, 300) }); }
+        if (!res.ok) { const text = await res.text().catch(() => ''); throw Object.assign(Error(`The media service answered ${res.status}.`), { status: res.status, retryAfter: res.headers.get('retry-after'), code: statusCode(res.status), body: text.slice(0, 300) }); }
         const type = (res.headers.get('content-type') || '').split(';')[0].trim();
         if (accept && !accept.test(type)) { res.body?.cancel().catch(() => {}); throw Object.assign(Error(`Unexpected file type (${type || 'unknown'}).`), { code: 'type' }); }
         clearTimeout(timer); res.finalUrl = url.href; res.cleanup = () => signal?.removeEventListener('abort', onAbort); res.controller = ctl;
@@ -118,4 +121,4 @@ async function readLimited(res, max, idleMs = 20000) {
   finally { watch.stop(); }
   return Buffer.concat(parts);
 }
-module.exports = { SafeHttp, isPrivate };
+module.exports = { SafeHttp, isPrivate, statusCode, stallWatch };

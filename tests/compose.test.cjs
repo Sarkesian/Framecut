@@ -126,3 +126,27 @@ test('Keyframes survive split, trim and speed changes without jumps', async () =
   assert.ok(Math.abs(propValue(right, 'x', 0.5) - before) < 1e-9, 'value preserved after trimming 1 s from the start');
   assert.ok(Math.abs(propValue(right, 'x', 3) - 0.5) < 1e-9, 'end value preserved');
 });
+
+test('Blurred background: photos and videos on any track get a backdrop, the lowest track showing', async () => {
+  const { buildPlan } = await import('../shared/plan.mjs');
+  const assets = { v: { id: 'v', kind: 'video', width: 640, height: 360, duration: 10 }, i: { id: 'i', kind: 'image', width: 800, height: 1000 } };
+  const plan = p => buildPlan(p, { W: 640, H: 360, media: id => assets[id] });
+  const p = newProject({ ratio: '16:9' }); p.settings.background.type = 'blur';
+  p.tracks.splice(1, 0, { id: 'over', kind: 'video', name: 'Overlay' });
+  const photo = newClip('image', { trackId: 'over', mediaId: 'i', start: 0, duration: 6 });
+  p.clips.push(photo);
+  // A photo alone on an overlay track (nothing on the main track) still fills the frame behind itself.
+  let L = plan(p).layers;
+  assert.deepEqual(L.map(l => l.id), [photo.id + ':bg', photo.id]);
+  assert.equal(L[0].type, 'bgblur'); assert.equal(L[0].image, true);
+  // A main-track video under part of it: both backdrops sit under every clip, the main one painted last.
+  const video = newClip('video', { trackId: 'main', mediaId: 'v', start: 0, duration: 4 });
+  p.clips.push(video); L = plan(p).layers;
+  assert.deepEqual(L.map(l => l.id), [photo.id + ':bg', video.id + ':bg', video.id, photo.id]);
+  // Covered for its whole time by the track below, the photo's backdrop could never be seen: left out.
+  video.duration = 6; L = plan(p).layers;
+  assert.deepEqual(L.map(l => l.id), [video.id + ':bg', video.id, photo.id]);
+  // Other backgrounds add nothing.
+  p.settings.background.type = 'black';
+  assert.ok(!plan(p).layers.some(l => l.type === 'bgblur'));
+});

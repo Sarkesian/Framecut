@@ -12,7 +12,7 @@ const { isRemovedRecord, assertSourceAllowed } = require('./providers/blocked-so
 const { run, ffmpeg, ffprobe } = require('./tools.cjs');
 const { toStored, fromStored } = require('./paths.cjs');
 const { writeJson, readJsonSync } = require('./jsonstore.cjs');
-const { SafeHttp } = require('./providers/http.cjs');
+const { SafeHttp, statusCode, stallWatch } = require('./providers/http.cjs');
 const { Openverse } = require('./providers/openverse.cjs');
 const { Fluent } = require('./providers/fluent.cjs');
 const { Pixabay } = require('./providers/pixabay.cjs');
@@ -21,16 +21,22 @@ const { CcMixter } = require('./providers/ccmixter.cjs');
 const { Archive } = require('./providers/archive.cjs');
 const { SfxMint } = require('./providers/sfxmint.cjs');
 const { MyInstants } = require('./providers/myinstants.cjs');
+const { Incompetech } = require('./providers/incompetech.cjs');
 const { assessRights, verifyLicense, discoverable, includeMode, providerTier, PROVIDERS, APP_NOTICES } = require('../shared/rights.mjs');
+const { sfxCategory } = require('../shared/audio-library.mjs');
 
 const PREVIEW_CAP = 250 * 1024 ** 2;
 const FLIGHT_KEEP = 48 * 1024 ** 2; // how much of a preview in flight is kept in memory for late joiners
 const STICKER_EXT = /\.(png|apng|gif|webp|svg|json|jpe?g)$/i;
 const EXT_FOR = { 'image/svg+xml': '.svg', 'image/gif': '.gif', 'audio/mpeg': '.mp3', 'audio/mp3': '.mp3', 'audio/ogg': '.ogg', 'application/ogg': '.ogg', 'video/ogg': '.ogg', 'audio/wav': '.wav', 'audio/x-wav': '.wav', 'audio/wave': '.wav', 'audio/flac': '.flac', 'audio/x-flac': '.flac', 'audio/mp4': '.m4a', 'audio/aac': '.aac', 'audio/opus': '.opus', 'audio/webm': '.webm', 'image/png': '.png', 'image/apng': '.png' };
+const AUDIO_TYPE = { mp3: 'audio/mpeg', mp32: 'audio/mpeg', ogg: 'audio/ogg', oga: 'audio/ogg', opus: 'audio/ogg', wav: 'audio/wav', flac: 'audio/flac', m4a: 'audio/mp4', aac: 'audio/aac' };
+const SEARCH_TTL = 24 * 3600e3; // provider answers are reused for a day, across restarts; licenses are re-read when an item is added
+const HIDDEN = ['downloadUrl', 'thumbUrl', 'expectedSha256', 'expectedSha1']; // record fields that never reach the UI
+const TRANSIENT = new Set(['offline', 'timeout', 'server', 'quota']);
 const safeName = s => String(s || 'asset').replace(/[<>:"/\\|?*\x00-\x1f]+/g, '').replace(/\s+/g, ' ').trim().slice(0, 60) || 'asset';
 
 class Creative {
-  constructor({ dataDir, cacheDir, library, jobs, secrets = null, prefs = () => ({}), http = new SafeHttp(), openverseBase, pixabayBase, sfxkitBase, ccmixterBase, audioProviders = true, archiveBase, sfxmintBase }) {
+  constructor({ dataDir, cacheDir, library, jobs, secrets = null, prefs = () => ({}), http = new SafeHttp(), openverseBase, pixabayBase, sfxkitBase, ccmixterBase, audioProviders = true, archiveBase, sfxmintBase, incompetechBase }) {
     this.library = library; this.jobs = jobs; this.secrets = secrets; this.http = http; this.prefs = prefs;
     this.statePath = path.join(dataDir, 'creative.json'); this.dataDir = dataDir;
     this.dirs = { lib: path.join(dataDir, 'media', 'library'), previews: path.join(cacheDir, 'creative', 'previews'), bake: path.join(cacheDir, 'creative', 'bake') };
@@ -38,12 +44,15 @@ class Creative {
     this.providers = { openverse: new Openverse({ http, base: openverseBase, credentials: () => this.credentials('openverse') }), fluent: new Fluent(), pixabay: new Pixabay({ http, base: pixabayBase, credentials: () => this.credentials('pixabay') }), sfxkit: new SfxKit({ base: sfxkitBase }), ccmixter: new CcMixter({ http, base: ccmixterBase }) };
     if (audioProviders) {
       const cacheFile = id => path.join(cacheDir, 'creative', id + '-metadata.json');
+      this.providers.incompetech = new Incompetech({ http, base: incompetechBase, cacheFile: cacheFile('incompetech') });
       this.providers.archive = new Archive({ http, base: archiveBase, cacheFile: cacheFile('archive') });
       this.providers.sfxmint = new SfxMint({ http, base: sfxmintBase, credentials: () => this.credentials('sfxmint'), cacheFile: cacheFile('sfxmint') });
       this.providers.myinstants = new MyInstants({ http, cacheFile: cacheFile('myinstants') });
     }
     this.cache = new Map(); this.known = new Map(); this.inflight = new Map(); this.sessions = new Map(); this.tokens = new Map();
     this.state = { favorites: [], recents: [], imports: {} };
+    this.trouble = new Map(); // key -> { error, until, dead }: why an item failed, so it isn't asked for again and again
+    this.searchFile = path.join(cacheDir, 'creative', 'search-cache.json');
   }
   async init() {
     for (const d of Object.values(this.dirs)) await fsp.mkdir(d, { recursive: true });
@@ -57,14 +66,25 @@ class Creative {
       Object.defineProperty(r, 'downloadUrl', { value: downloadUrl, enumerable: false }); if (thumbUrl) Object.defineProperty(r, 'thumbUrl', { value: thumbUrl, enumerable: false });
       this.remember(r);
     }
+    // Earlier provider answers (a day at most), so reopening a category after a restart costs the source nothing.
+    const saved = readJsonSync(this.searchFile, null).value;
+    if (Array.isArray(saved?.entries)) for (const [k, v] of saved.entries) if (typeof k === 'string' && v && Date.now() - v.at < SEARCH_TTL && Array.isArray(v.data?.items)) this.cache.set(k, { at: v.at, data: { ...v.data, items: v.data.items.map(thaw) } });
     this.prunePreviews().catch(() => {});
   }
+  saveSearches() {
+    clearTimeout(this.searchTimer);
+    this.searchDirty = true; this.searchTimer = setTimeout(() => this.writeSearches(), 1500); this.searchTimer.unref?.();
+  }
+  writeSearches() {
+    clearTimeout(this.searchTimer); if (!this.searchDirty) return Promise.resolve(); this.searchDirty = false;
+    return writeJson(this.searchFile, { entries: [...this.cache].filter(([k]) => !/^(myinstants|fluent|sfxkit)/.test(k)).slice(-150).map(([k, v]) => [k, { at: v.at, data: { ...v.data, items: v.data.items.map(freeze) } }]) }).catch(() => {});
+  }
   // Open slow sources' connections ahead of a search (the Music tab calls this when it opens).
-  warm(kind) { for (const id of this.searchable(kind, 'free')) this.providers[id].warm?.(); return { ok: true }; }
+  warm(kind) { for (const id of this.searchable(kind, 'credit')) this.providers[id].warm?.(); return { ok: true }; }
   // Browsable categories of a source that has them (SFX Kit, Fluent Emoji).
   categories(id) { const p = this.provider(id); return typeof p.categories === 'function' ? p.categories() : []; }
   persist() { clearTimeout(this.saveTimer); this.saveTimer = setTimeout(() => this.flush().catch(e => console.error('Saving creative.json failed:', e.message)), 300); }
-  flush() { clearTimeout(this.saveTimer); return Promise.all([writeJson(this.statePath, toStored(this.state, this.dataDir)), ...Object.values(this.providers).filter(p => typeof p.cache?.flush === 'function').map(p => p.cache.flush())]); }
+  flush() { clearTimeout(this.saveTimer); return Promise.all([writeJson(this.statePath, toStored(this.state, this.dataDir)), this.writeSearches(), ...Object.values(this.providers).filter(p => typeof p.cache?.flush === 'function').map(p => p.cache.flush())]); }
   provider(id) { assertSourceAllowed({ provider: id }); const p = this.providers[id]; if (!p) throw Object.assign(Error(PROVIDERS[id]?.reason || 'Unknown media source.'), { code: 'unavailable' }); return p; }
 
   // ----- credentials (kept in the OS credential store via the desktop shell; never sent to the UI) -----
@@ -85,13 +105,14 @@ class Creative {
       pixabay: this.providers.pixabay.status(), notices: APP_NOTICES,
       sfxmint: this.providers.sfxmint?.status() || null,
       archive: this.providers.archive?.status() || null,
+      incompetech: this.providers.incompetech?.status() || null,
       providers: Object.values(PROVIDERS).filter(p => !p.retired).map(p => ({ id: p.id, name: p.name, enabled: p.enabled, active: this.prefs()?.librarySources?.[p.id] ?? p.defaultActive !== false, optional: !!p.optional, configured: p.needsKey || p.optionalCredentials ? !!this.providers[p.id]?.configured?.() : null, kinds: p.kinds, reason: p.reason || null, note: p.note || null, home: p.home || null, terms: p.terms || null, tier: providerTier(p.id) })),
     };
   }
   // Providers that can answer a search for this kind in this discovery mode (configured, enabled, right tier).
   searchable(kind, include) {
     // Bundled-index sources (instant, work offline) lead the interleaved results.
-    const order = ['fluent', 'sfxkit', 'sfxmint', ...(kind === 'music' ? ['ccmixter', 'openverse'] : ['openverse', 'ccmixter']), 'archive', 'pixabay'];
+    const order = ['fluent', 'sfxkit', 'sfxmint', ...(kind === 'music' ? ['incompetech', 'ccmixter', 'openverse'] : ['openverse', 'ccmixter']), 'archive', 'pixabay'];
     return Object.keys(this.providers).sort((x, y) => order.indexOf(x) - order.indexOf(y)).filter(id => {
       const pv = PROVIDERS[id], p = this.providers[id];
       if (!pv?.enabled || pv.dedicated || !pv.kinds.includes(kind)) return false;
@@ -105,41 +126,48 @@ class Creative {
   remember(rec) { const k = rec.provider + ':' + rec.sourceId; this.known.delete(k); this.known.set(k, rec); if (this.known.size > 3000) this.known.delete(this.known.keys().next().value); return rec; }
   decorate(rec) {
     const k = rec.provider + ':' + rec.sourceId, imp = this.state.imports[k], a = imp && this.library.get(imp.mediaId);
-    return { ...rec, ...(PROVIDERS[rec.provider]?.userManaged ? { previewOnly: false, rightsUnverified: true } : {}), key: k, favorite: this.state.favorites.some(f => f.key === k), imported: a && !a.missing ? a.id : null, downloadable: !!rec.downloadUrl };
+    return { ...rec, ...(PROVIDERS[rec.provider]?.userManaged ? { previewOnly: false, rightsUnverified: true } : {}), key: k, favorite: this.state.favorites.some(f => f.key === k), imported: a && !a.missing ? a.id : null, downloadable: !!rec.downloadUrl, ...(this.trouble.get(k)?.dead ? { unavailable: this.trouble.get(k).error.message } : {}) };
   }
   async search(providerId, params = {}) {
     if (providerId === 'all') return this.searchAll(params);
     const p = this.provider(providerId);
     if (this.prefs()?.librarySources?.[providerId] === false) throw Object.assign(Error('This source is turned off in Preferences › Library.'), { code: 'unavailable' });
-    const q = { q: String(params.q || '').trim().slice(0, 200), kind: params.kind, page: +params.page || 1, usage: params.usage === 'personal' ? 'personal' : 'commercial', length: params.length || '', source: params.source || '', category: params.category || '', ...(providerId === 'assetpolish' ? { collection: params.collection || '' } : {}), include: includeMode(params.include) };
+    const q = { q: String(params.q || '').trim().slice(0, 200), kind: params.kind, page: +params.page || 1, usage: params.usage === 'personal' ? 'personal' : 'commercial', length: params.length || '', source: params.source || '', category: params.category || '', lens: String(params.lens || '').slice(0, 40), ...(providerId === 'assetpolish' ? { collection: params.collection || '' } : {}), include: includeMode(params.include) };
     if (providerId === 'myinstants') q.collection = String(params.collection || '').slice(0, 40);
     const key = providerId + JSON.stringify(q);
     const hit = this.cache.get(key);
     let data;
-    if (hit && Date.now() - hit.at < (p.cacheTtl ?? 6 * 3600e3)) data = hit.data;
+    let stale = false;
+    if (hit && Date.now() - hit.at < (p.cacheTtl ?? SEARCH_TTL)) data = hit.data;
     else if (this.inflight.has(key)) data = await this.inflight.get(key);
     else {
       const prom = p.search(q); this.inflight.set(key, prom);
-      try { data = await prom; } finally { this.inflight.delete(key); }
-      this.cache.set(key, { at: Date.now(), data }); if (this.cache.size > 400) this.cache.delete(this.cache.keys().next().value);
+      try { data = await prom; }
+      // The source can't answer right now (rate limit, outage, offline): an earlier answer beats an empty category.
+      catch (e) { if (!hit || !TRANSIENT.has(e.code)) throw e; data = hit.data; stale = true; }
+      finally { this.inflight.delete(key); }
+      if (!stale && p.cacheTtl !== 0) { this.cache.delete(key); this.cache.set(key, { at: Date.now(), data }); if (this.cache.size > 400) this.cache.delete(this.cache.keys().next().value); this.saveSearches(); }
     }
     for (const r of data.items) this.remember(r);
     if (PROVIDERS[providerId]?.userManaged) return { ...data, items: data.items.map(r => this.decorate(r)), provider: providerId };
     // Only verified items that belong in this discovery mode are shown.
-    const items = data.items.filter(r => (!r.licenseCheck || r.licenseCheck.ok) && (!(q.include === 'free' && ['music', 'sfx'].includes(r.kind)) || r.license === 'cc0') && discoverable(assessRights({ provider: r.provider, license: r.license, licenseVersion: r.licenseVersion, kind: r.kind, usage: q.usage, verification: r.licenseCheck }), q.include));
-    return { ...data, items: items.map(r => this.decorate(r)), cached: !!hit, query: q, provider: providerId };
+    const items = data.items.filter(r => !this.trouble.get(r.provider + ':' + r.sourceId)?.dead && (!r.licenseCheck || r.licenseCheck.ok) && (!(q.include === 'free' && ['music', 'sfx'].includes(r.kind)) || r.license === 'cc0') && discoverable(assessRights({ provider: r.provider, license: r.license, licenseVersion: r.licenseVersion, kind: r.kind, usage: q.usage, verification: r.licenseCheck }), q.include));
+    return { ...data, items: items.map(r => this.decorate(r)), cached: !!hit, stale, query: q, provider: providerId };
   }
   // One search across every compatible source for a kind. Results are interleaved so no source buries
   // the others, near-duplicates are dropped, and one source failing doesn't hide the rest.
   async searchAll(params = {}) {
     const kind = ['music', 'sfx', 'sticker'].includes(params.kind) ? params.kind : 'sticker'; const include = includeMode(params.include);
     // Bundled-index sources answer an empty query with their whole catalog, so they only join real searches or category browsing.
-    const ids = this.searchable(kind, include).filter(id => !['fluent', 'sfxkit'].includes(id) || params.q || params.category);
+    // A sound-effect category ("fx:doors") is one shelf filled by every source that has something for it.
+    const fx = kind === 'sfx' && /^fx:/.test(params.category || '') ? sfxCategory(params.category.slice(3)) : null;
+    const ask = id => (!fx ? params : id === 'sfxkit' ? (fx.kit ? { ...params, category: fx.kit.join(',') } : null) : id === 'sfxmint' ? (fx.mint ? { ...params, category: 'category:' + fx.mint } : null) : { ...params, category: '', q: params.q || fx.q });
+    const ids = this.searchable(kind, include).filter(id => (!['fluent', 'sfxkit'].includes(id) || params.q || params.category) && ask(id));
     // Each source gets a deadline; a slow one is reported (its answer still lands in the cache for next time).
     const deadline = +params.deadline || this.searchDeadline || 9000;
     const settled = await Promise.allSettled(ids.map(id => {
       let timer;
-      return Promise.race([this.search(id, { ...params, kind, include }), new Promise((_, no) => { timer = setTimeout(() => no(Object.assign(Error(`${PROVIDERS[id]?.name || id} is slow to answer right now.`), { code: 'slow' })), deadline); })]).finally(() => clearTimeout(timer));
+      return Promise.race([this.search(id, { ...ask(id), kind, include }), new Promise((_, no) => { timer = setTimeout(() => no(Object.assign(Error(`${PROVIDERS[id]?.name || id} is slow to answer right now.`), { code: 'slow' })), deadline); })]).finally(() => clearTimeout(timer));
     }));
     const ok = [], failed = [];
     settled.forEach((r, i) => { if (r.status === 'fulfilled') ok.push([ids[i], r.value]); else failed.push({ provider: ids[i], name: PROVIDERS[ids[i]]?.name, message: r.reason?.message, code: r.reason?.code || null, retryAfter: r.reason?.retryAfter || null, error: r.reason }); });
@@ -172,7 +200,7 @@ class Creative {
     let f = this.flights.get(file); if (f && !f.cancelled) return f;
     for (const o of this.flights.values()) if (!o.subs.size && !o.done) o.abort();
     const src = this.provider(providerId).preview(rec), controller = new AbortController();
-    f = { file, chunks: [], kept: true, bytes: 0, type: null, length: null, done: false, ok: false, cancelled: false, subs: new Set(), ctl: controller, timer: null };
+    f = { file, chunks: [], kept: true, bytes: 0, type: null, length: null, done: false, ok: false, error: null, cancelled: false, subs: new Set(), ctl: controller, timer: null };
     f.abort = () => { clearTimeout(f.timer); f.cancelled = true; controller.abort(); };
     f.idle = ms => { clearTimeout(f.timer); if (!f.done) f.timer = setTimeout(() => { if (!f.subs.size) f.abort(); }, ms); };
     f.finished = new Promise(resolve => { f.settle = resolve; });
@@ -194,26 +222,43 @@ class Creative {
       };
       try { r = await get(src.url); } catch (error) { if (!src.fallback || error.code === 'quota' || controller.signal.aborted) throw error; r = await get(src.fallback); }
       const type = (r.headers.get('content-type') || '').split(';')[0] || 'application/octet-stream';
-      f.type = type === 'application/octet-stream' && rec.kind === 'sticker' ? (rec.filetype === 'svg' ? 'image/svg+xml' : rec.filetype === 'gif' ? 'image/gif' : 'image/png') : type;
+      // Some hosts label every download "octet-stream"; the player needs the real type to start without a retry.
+      const vague = /^(application|binary)\/octet-stream$/i.test(type);
+      // (The Internet Archive also sends its M4A files as "audio/mpeg".)
+      const byExt = rec.kind === 'sticker' ? null : AUDIO_TYPE[rec.filetype];
+      f.type = vague ? (rec.kind === 'sticker' ? (rec.filetype === 'svg' ? 'image/svg+xml' : rec.filetype === 'gif' ? 'image/gif' : 'image/png') : byExt || type) : byExt && type === 'audio/mpeg' ? byExt : type;
       f.length = r.headers.get('content-length');
       f.body = (async () => {
         const part = file + '.' + randomUUID() + '.part'; let ok = false;
+        // A host that stops sending mid-file would otherwise leave the player waiting forever.
+        const watch = stallWatch({ controller }, src.stall || 25000);
         try {
           await writeStreamedFile(Readable.fromWeb(r.body), part, { signal: controller.signal, maxBytes: src.maxBytes, onChunk: async (chunk, bytes) => {
-            f.bytes = bytes;
+            watch.stop(); f.bytes = bytes; // only the wait for the source is timed, not a listener that reads slowly
             if (f.kept) { if (bytes > FLIGHT_KEEP) { f.kept = false; f.chunks = []; } else f.chunks.push(chunk); }
             await Promise.all([...f.subs].map(async sub => { try { await sub(chunk); } catch { f.subs.delete(sub); } }));
+            watch.kick();
           } });
           if (!f.bytes) throw Error('The preview was empty.');
           await fsp.rename(part, file); await fsp.writeFile(file + '.type', f.type); ok = true;
           this.prunePreviews().catch(() => {});
-        } catch { await fsp.unlink(part).catch(() => {}); }
-        finally { r.cleanup(); release(); f.finish(ok); }
+        } catch (e) { f.error = watch.stalled ? watch.error() : e; await fsp.unlink(part).catch(() => {}); }
+        finally { watch.stop(); r.cleanup(); release(); f.finish(ok); if (!ok && !f.cancelled) this.failed(rec, f.error, 'play'); }
       })();
       f.body.catch(() => { r.cleanup(); release(); f.finish(false); });
     })();
-    f.head.catch(() => f.finish(false));
+    f.head.catch(e => { f.error = e; f.finish(false); if (!f.cancelled && !e?.cancelled) this.failed(rec, e, 'play'); });
     this.flights.set(file, f); return f;
+  }
+  // Records why an item failed, in words for the user. Lasting causes (file gone, download refused, not audio)
+  // mark it unavailable for this session, so later results leave it out; passing ones are kept briefly so the
+  // player's follow-up question ("why?") is answered without asking the source again.
+  failed(rec, e, action) {
+    if (!rec || !e || e.cancelled) return e;
+    const error = explain(e, rec, action), key = rec.provider + ':' + rec.sourceId, dead = DEAD.has(error.code);
+    this.trouble.delete(key); this.trouble.set(key, { error, dead, until: dead ? Infinity : Date.now() + 20000 });
+    if (this.trouble.size > 2000) this.trouble.delete(this.trouble.keys().next().value);
+    return error;
   }
   // Starts fetching a preview before it is asked for (pointer resting on a row). Never throws.
   async warmPreview(providerId, id) {
@@ -225,14 +270,17 @@ class Creative {
     } catch {}
   }
   async preview(providerId, id, req, res) {
-    const rec = await this.record(providerId, id);
+    // The catalog itself may say the item is gone (or be unreachable): that is explained like any other failure.
+    const rec = await this.record(providerId, id).catch(e => { throw this.failed({ provider: providerId, sourceId: id, sourceName: PROVIDERS[providerId]?.name }, e, 'play'); });
     if (PROVIDERS[providerId]?.userManaged) return res.redirect(rec.previewUrl);
-    const file = this.previewPath(providerId, id);
+    const file = this.previewPath(providerId, id), key = providerId + ':' + id;
+    const known = this.trouble.get(key); if (known && Date.now() < known.until && !fs.existsSync(file)) throw known.error;
+    const why = e => (e?.cancelled ? e : this.trouble.get(key)?.error || this.failed(rec, e || Object.assign(Error('The download stopped before it finished.'), { code: 'offline' }), 'play'));
     const cached = async () => { const now = new Date(); fsp.utimes(file, now, now).catch(() => {}); const t = await fsp.readFile(file + '.type', 'utf8').catch(() => null); return t || (rec.kind === 'sticker' ? 'image/png' : 'audio/mpeg'); };
     // ?as=mp3: the player could not decode the file as it is (an unusual format, or a source that labels it wrongly),
     // so it is converted on the fly. Needs the whole file, which is fetched (or already cached) first.
     if (req.query?.as === 'mp3') {
-      if (!fs.existsSync(file)) { const f = this.flight(providerId, id, rec); f.subs.add(() => {}); await f.head; if (!(await f.finished)) throw Object.assign(Error('This preview could not be downloaded from its source.'), { code: 'gone' }); }
+      if (!fs.existsSync(file)) { const f = this.flight(providerId, id, rec); f.subs.add(() => {}); try { await f.head; } catch (e) { throw why(e); } if (!(await f.finished)) throw why(f.error); }
       await cached();
       res.setHeader('Content-Type', 'audio/mpeg'); res.setHeader('Cache-Control', 'no-cache');
       const { spawn } = require('node:child_process');
@@ -249,10 +297,10 @@ class Creative {
     let closed = false; const hold = () => {}; let sub = hold; f.subs.add(hold);
     const disconnect = () => { closed = true; f.subs.delete(sub); if (!f.subs.size) f.idle(2500); };
     res.on('close', disconnect); res.on('error', disconnect);
-    try { await f.head; } catch (e) { f.subs.delete(hold); throw e; }
+    try { await f.head; } catch (e) { f.subs.delete(hold); throw why(e); }
     if (closed) return;
     if (!f.kept && f.bytes) { // joined too late to replay from memory: wait for the finished file instead
-      if (!(await f.finished)) throw Object.assign(Error('This preview could not be downloaded from its source.'), { code: 'gone' });
+      if (!(await f.finished)) throw why(f.error);
       return res.sendFile(file, { headers: { 'Content-Type': await cached(), 'Cache-Control': 'no-cache' } });
     }
     res.setHeader('Content-Type', f.type);
@@ -298,13 +346,33 @@ class Creative {
     const key = providerId + ':' + id; const prev = this.state.imports[key]; const existing = prev && this.library.get(prev.mediaId);
     if (existing && !existing.missing) { this.touchRecent(key); return { reused: true, asset: this.library.public(existing) }; }
     for (const j of this.jobs.jobs.values()) if (j.meta?.creativeKey === key && ['queued', 'running'].includes(j.status)) return { job: j.id };
-    const job = this.jobs.add({ type: 'creative-import', label: 'Adding from library', lane: 'light', meta: { creativeKey: key } }, async ({ signal, progress }) => {
+    const job = this.jobs.add({ type: 'creative-import', label: 'Adding from library', lane: 'light', meta: { creativeKey: key } }, async ctx => {
+      const listed = this.known.get(key) || null;
+      // Whatever goes wrong, the job ends with a sentence that says what happened and what to do, and the
+      // reason code travels with the job so the UI can mark an item that is gone for good.
+      try { const out = await this.importJob({ providerId, id, kind, usage, key, listed, job }, ctx); this.trouble.delete(key); return out; }
+      catch (e) { if (e?.cancelled || ctx.signal.aborted) throw e; const error = this.failed(this.known.get(key) || listed || { provider: providerId, sourceId: id, kind }, e, 'add'); job.meta.failure = { code: error.code || null, retryAfter: error.retryAfter || null, dead: DEAD.has(error.code) }; throw error; }
+    });
+    return { job: job.id };
+  }
+  async importJob({ providerId, id, kind, usage, key, listed, job }, { signal, progress }) {
+    {
       progress(0.02, 'Checking the license');
       const p = this.provider(providerId);
-      const listed = this.known.get(key) || null;
-      const rec = await this.record(providerId, id, { fresh: true, kind });
+      let rec, method = providerId + '-detail';
+      // A user-managed soundboard has no license to re-verify, and the listing the user picked from already names
+      // the file. Asking its catalog again spends a scarce lookup (10 a minute), and a listing the site has since
+      // renamed or merged answers "not found" while the audio is still there. The download itself is the test.
+      if (PROVIDERS[providerId]?.userManaged && listed?.downloadUrl) { rec = listed; method = providerId + '-listing'; }
+      else try { rec = await this.record(providerId, id, { fresh: true, kind }); }
+      catch (e) {
+        // The source's catalog can't be asked right now (rate limit or outage). The listing FrameCut verified
+        // within the last day is the same catalog's answer, so the item stays usable; anything older waits.
+        if (!TRANSIENT.has(e.code) || !listed?.licenseCheck?.ok || !listed.downloadUrl || !(Date.now() - Date.parse(listed.metadataCheckedAt) < 24 * 3600e3)) throw e;
+        rec = listed; method = providerId + '-listing';
+      }
       // Verify the license from the provider's current record (not the search listing) and keep the evidence.
-      const licenseRecord = PROVIDERS[providerId]?.userManaged ? { ...rec.licenseCheck, method: 'user-directed-import', userDirected: true, checkedAt: new Date().toISOString() } : verifyLicense(rec, { listed, method: providerId + '-detail' });
+      const licenseRecord = PROVIDERS[providerId]?.userManaged ? { ...rec.licenseCheck, method: 'user-directed-import', userDirected: true, checkedAt: new Date().toISOString() } : verifyLicense(rec, { listed, method, ...(rec === listed ? { checkedAt: listed.metadataCheckedAt } : {}) });
       if (!licenseRecord.ok && !PROVIDERS[providerId]?.userManaged) throw Object.assign(Error(`“${rec.title}” wasn’t added: ${licenseRecord.problems.map(p => p.text).join(' ')} FrameCut only uses assets whose license it can confirm.`), { code: 'license' });
       const rights = assessRights({ provider: providerId, license: rec.license, licenseVersion: rec.licenseVersion, kind: rec.kind, usage, verification: licenseRecord });
       if (!rights.storage) throw Object.assign(Error(rights.summary), { code: 'license' });
@@ -313,11 +381,23 @@ class Creative {
       const dir = path.join(this.dirs.lib, providerId); await fsp.mkdir(dir, { recursive: true });
       const src = p.download(rec);
       const tmp = path.join(dir, `.${randomUUID()}.download`);
-      const dl = await this.http.toFile(src.url, tmp, { accept: src.accept, headers: src.headers, maxBytes: src.maxBytes, timeout: src.timeout, signal, onProgress: f => progress(0.05 + (f ?? 0.5) * 0.75, 'Downloading') });
-      if ((rec.expectedSha256 && dl.sha256 !== rec.expectedSha256) || (rec.expectedSha1 && dl.sha1 !== rec.expectedSha1)) { await fsp.unlink(tmp).catch(() => {}); throw Object.assign(Error(`“${rec.title}” didn’t match the file its source published, so it wasn’t added.`), { code: 'corrupt' }); }
+      const matches = d => !((rec.expectedSha256 && d.sha256 !== rec.expectedSha256) || (rec.expectedSha1 && d.sha1 !== rec.expectedSha1));
+      // A preview that was just listened to is the same file: use it instead of downloading it a second time.
+      let dl = rec.kind === 'sticker' ? null : await this.fromPreview(providerId, id, rec, src, tmp, signal).catch(e => { if (e?.cancelled) throw e; return null; });
+      if (dl && !matches(dl)) { await fsp.unlink(tmp).catch(() => {}); await fsp.unlink(this.previewPath(providerId, id)).catch(() => {}); dl = null; }
+      for (let attempt = 0; !dl; attempt++) {
+        try { dl = await this.http.toFile(src.url, tmp, { accept: src.accept, headers: src.headers, maxBytes: src.maxBytes, timeout: src.timeout, signal, onProgress: f => progress(0.05 + (f ?? 0.5) * 0.75, 'Downloading') }); }
+        // One more try after a dropped connection or a host hiccup; a clear "no" (missing, refused, rate limit) is final.
+        catch (e) { if (attempt || signal.aborted || !['offline', 'timeout', 'server'].includes(e.code)) throw e; progress(0.05, 'Trying again'); await new Promise(r => setTimeout(r, this.retryDelay ?? 1500)); }
+      }
+      if (!matches(dl)) { await fsp.unlink(tmp).catch(() => {}); throw Object.assign(Error(`“${rec.title}” didn’t match the file its source published, so it wasn’t added. Try again; if it keeps happening, pick another one.`), { code: 'corrupt' }); }
       // Same bytes already imported under another listing? Reuse that file.
       const twin = Object.entries(this.state.imports).find(([, v]) => v.sha256 === dl.sha256 && this.library.get(v.mediaId) && !this.library.get(v.mediaId).missing);
-      const ext = EXT_FOR[dl.contentType] || (rec.filetype && /^(mp3|ogg|wav|flac|m4a|aac|opus)$/.test(rec.filetype) ? '.' + rec.filetype : rec.filetype === 'mp32' ? '.mp3' : rec.kind === 'sticker' ? '.png' : '.audio');
+      // The file's own first bytes decide its extension (hosts mislabel types, and an unknown extension can't be
+      // played from the project); a web page where audio should be means the host turned the download away.
+      const sniffed = rec.kind === 'sticker' ? null : await sniffAudio(tmp);
+      if (sniffed === 'html') { await fsp.unlink(tmp).catch(() => {}); throw Object.assign(Error('The source sent a web page instead of the audio file.'), { code: 'forbidden' }); }
+      const ext = sniffed || EXT_FOR[dl.contentType] || (rec.filetype && /^(mp3|ogg|wav|flac|m4a|aac|opus)$/.test(rec.filetype) ? '.' + rec.filetype : rec.filetype === 'mp32' ? '.mp3' : rec.kind === 'sticker' ? '.png' : '.mp3');
       const file = path.join(dir, `${safeName(rec.title)}-${String(id).replace(/[^a-z0-9]/gi, '').slice(0, 8)}${ext}`);
       const source = { ...rec, licenseCheck: undefined, licenseRecord: { ...licenseRecord, sha256: dl.sha256, downloadedFrom: dl.finalUrl }, rights: { level: rights.level, tier: rights.tier, badge: rights.badge, summary: rights.summary, attribution: rights.attribution, commercial: rights.commercial, restrictions: rights.restrictions }, usageAtImport: usage, sha256: dl.sha256, bytes: dl.bytes, downloadedFrom: dl.finalUrl, importedAt: new Date().toISOString() };
       let out;
@@ -332,8 +412,28 @@ class Creative {
       this.state.imports[key] = { mediaId: out.id, sha256: dl.sha256, at: Date.now() };
       this.touchRecent(key, rec); this.persist();
       return { asset: this.library.public(out), record: this.decorate(rec) };
-    });
-    return { job: job.id };
+    }
+  }
+  // The cached (or still arriving) preview of an item, copied to `dest` when it is the very file an import would
+  // download. Returns null when there is nothing to reuse.
+  async fromPreview(providerId, id, rec, src, dest, signal) {
+    const p = this.provider(providerId), file = this.previewPath(providerId, id);
+    if (p.preview(rec).url !== src.url) return null;
+    const f = this.flights?.get(file);
+    if (f && !f.cancelled && !f.done) { // being listened to right now: wait for the rest of it rather than start a second download
+      const hold = () => {}; f.subs.add(hold); clearTimeout(f.timer);
+      let stop; const aborted = new Promise(r => { stop = () => r(); signal?.addEventListener('abort', stop, { once: true }); });
+      // …but only while it keeps arriving. A paused player stops reading, which holds the download still;
+      // the import then fetches the file itself instead of waiting on it.
+      try { for (let seen = -1; !f.done && !signal?.aborted && f.bytes !== seen;) { seen = f.bytes; await Promise.race([f.finished, aborted, new Promise(r => setTimeout(r, this.previewWait ?? 3000))]); } }
+      finally { signal?.removeEventListener('abort', stop); f.subs.delete(hold); if (!f.subs.size) f.idle(2500); }
+      if (signal?.aborted) throw Object.assign(Error('Cancelled'), { cancelled: true });
+    }
+    if (!fs.existsSync(file)) return null;
+    const sha256 = createHash('sha256'), sha1 = createHash('sha1'); let bytes = 0;
+    await writeStreamedFile(fs.createReadStream(file), dest, { signal, maxBytes: src.maxBytes, onChunk(chunk, n) { bytes = n; sha256.update(chunk); sha1.update(chunk); } });
+    if (!bytes) { await fsp.unlink(dest).catch(() => {}); return null; }
+    return { bytes, sha256: sha256.digest('hex'), sha1: sha1.digest('hex'), contentType: (await fsp.readFile(file + '.type', 'utf8').catch(() => '')).trim(), finalUrl: src.url, reusedPreview: true };
   }
   touchRecent(key, rec) {
     const old = this.state.recents.find(r => r.key === key); rec ||= old?.record; if (!rec) return;
@@ -473,6 +573,47 @@ class Creative {
   bakeCancel(id) { const s = this.sessions.get(id); if (s) { this.sessions.delete(id); fsp.rm(s.dir, { recursive: true, force: true }).catch(() => {}); } }
 }
 const kindGroup = k => (k === 'sticker' ? 'sticker' : 'audio');
+// Saved search answers keep the fields the UI never sees (file addresses, published checksums).
+const freeze = rec => ({ ...rec, $h: Object.fromEntries(HIDDEN.filter(k => rec[k] != null && !Object.prototype.propertyIsEnumerable.call(rec, k)).map(k => [k, rec[k]])) });
+const thaw = ({ $h, ...rec }) => { for (const [k, v] of Object.entries($h || {})) if (HIDDEN.includes(k)) Object.defineProperty(rec, k, { value: v, enumerable: false }); return rec; };
+// What kind of audio file is this, going by its first bytes? Returns an extension, 'html' for a web page, or null.
+async function sniffAudio(file) {
+  const fd = await fsp.open(file, 'r'); const b = Buffer.alloc(64); let n = 0; try { n = (await fd.read(b, 0, 64, 0)).bytesRead; } finally { await fd.close(); }
+  const head = b.toString('latin1', 0, n);
+  if (head.startsWith('ID3') || (n > 1 && b[0] === 0xff && (b[1] & 0xe6) === 0xe2)) return '.mp3';
+  if (head.startsWith('OggS')) return '.ogg';
+  if (head.startsWith('RIFF') && head.slice(8, 12) === 'WAVE') return '.wav';
+  if (head.startsWith('fLaC')) return '.flac';
+  if (head.slice(4, 8) === 'ftyp') return '.m4a';
+  if (/^\s*(<!doctype html|<html|<head)/i.test(head)) return 'html';
+  return null;
+}
+// Items that will not start working by trying again in this session.
+const DEAD = new Set(['gone', 'forbidden', 'type', 'corrupt']);
+// One place that turns a failed preview or import into words a person can act on: what happened, then what to do.
+function explain(e, rec, action = 'add') {
+  if (!e || e.cancelled || e.explained) return e;
+  const title = rec?.title ? `“${rec.title}”` : 'This item', src = rec?.sourceName || PROVIDERS[rec?.provider]?.name || 'its source';
+  const did = action === 'add' ? 'wasn’t added' : 'can’t be played', audio = rec?.kind === 'sticker' ? 'an image' : 'an audio file';
+  const wait = sec => { sec = Math.max(1, +sec || 60); return sec >= 5400 ? `in about ${Math.round(sec / 3600)} hours` : sec >= 90 ? `in about ${Math.round(sec / 60)} minutes` : `in ${Math.round(sec)} seconds`; };
+  let code = e.code && e.code !== 'http' ? e.code : e.status ? statusCode(e.status) : e.code || null;
+  if (/^(UND_ERR|ECONN|ENOTFOUND|ETIMEDOUT|EPIPE|EAI_|ERR_STREAM_PREMATURE)/.test(String(code)) || /^(terminated|fetch failed)$/i.test(e.message || '')) code = 'offline'; // the connection dropped mid-file
+  // A source's own words about its limit (for example "5 sounds a day per network") are passed on: the first
+  // sentence of its message, which may arrive cut short, without the links that follow it.
+  let said = ''; if (code === 'quota' && e.body) { const m = /"message"\s*:\s*"((?:[^"\\]|\\.)*)/.exec(e.body); if (m) said = m[1].replace(/\\(.)/g, '$1').split(/(?<=[.!?])\s|\s\(|;\s/)[0].trim().slice(0, 200).replace(/[.!?]*$/, '.'); }
+  const key = PROVIDERS[rec?.provider]?.optionalCredentials ? ' A free key in Preferences › Library raises the limit.' : '';
+  const text = {
+    gone: `${title} ${did}: it is no longer available from ${src}. It is marked unavailable; pick another one.`,
+    forbidden: `${title} ${did}: ${src} refused the download${e.status ? ` (error ${e.status})` : ''}, so the file isn’t open to apps right now. Pick another one, or open its page to get it by hand.`,
+    quota: (said ? `${title} ${did} yet. ${src} says: ${said} Try again ${wait(e.retryAfter)}.` : `${title} ${did} yet: ${src} is limiting downloads right now. Try again ${wait(e.retryAfter)}.`) + key,
+    timeout: `${title} ${did}: ${src} stopped answering part-way. Try again in a moment.`,
+    offline: `${title} ${did}: FrameCut couldn’t reach ${src}. Check your internet connection, then try again.`,
+    server: `${title} ${did}: ${src} is having trouble right now${e.status ? ` (error ${e.status})` : ''}. Try again later.`,
+    type: `${title} ${did}: ${src} sent something that isn’t ${audio}. Pick another one.`,
+    size: `${title} ${did}: the file is larger than FrameCut takes from the library.`,
+  }[code] || (['license', 'corrupt', 'unavailable', 'unsafe', 'auth'].includes(code) ? e.message : `${title} ${did}: ${e.message}`);
+  return Object.assign(Error(text), { code, status: e.status || null, retryAfter: +e.retryAfter || null, explained: true, cause: e });
+}
 const plain = rec => JSON.parse(JSON.stringify({ ...rec, key: undefined, favorite: undefined, imported: undefined, downloadable: undefined, downloadUrl: rec.downloadUrl, thumbUrl: rec.thumbUrl }));
 
 // Lottie JSON validation: structure, size and no external resources (embedded images only).
@@ -485,4 +626,4 @@ async function validateLottie(p) {
   if (JSON.stringify(j).includes('"x":"')) { /* expressions present: the light player ignores them */ }
   return j;
 }
-module.exports = { Creative, validateLottie };
+module.exports = { Creative, validateLottie, explain, sniffAudio };

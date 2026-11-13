@@ -1,7 +1,7 @@
 // Preferences: storage locations, performance, captions engine, optional AI connection.
 import { matteStatus, deleteMatteModel, MATTE_MODEL } from '../lib/matte.js';
 import { useEffect, useState } from 'preact/hooks';
-import { HardDrive, Cpu, Captions, Bot, FolderOpen, Trash2, Check, TriangleAlert, Library as LibraryIcon, KeyRound, Ban } from 'lucide-preact';
+import { HardDrive, Cpu, Captions, Bot, FolderOpen, Trash2, Check, TriangleAlert, Library as LibraryIcon, KeyRound } from 'lucide-preact';
 import { loadStatus, libStatus } from '../lib/creative.js';
 import { prefs, savePrefs, health, toast, saveNow } from '../lib/state.js';
 import { api, native } from '../lib/api.js';

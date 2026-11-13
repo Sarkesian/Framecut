@@ -51,7 +51,7 @@ const shots = path.resolve('test-output');
     await check('library sticker dragged in while the search box has focus', async () => {
       await page.locator('.lib-tabs button', { hasText: 'Discover' }).click();
       // This journey tests undo/focus, independently of Openverse's live thumbnail quota.
-      await page.getByRole('combobox', { name: 'Sticker source' }).selectOption('fluent');
+      { const src = page.getByRole('combobox', { name: 'Sticker source' }); if (await src.count()) await src.selectOption('fluent'); } // the picker only exists when a second source (Pixabay key) is set up; Fluent is the default
       await page.locator('.lib-search input').fill('star'); await page.locator('.st-card').first().waitFor({ timeout: 20000 });
       await page.locator('.lib-search input').focus();
       const lane = page.locator('.track-row .track-lane').first(); const lb = await lane.boundingBox();
@@ -60,7 +60,7 @@ const shots = path.resolve('test-output');
       await page.waitForFunction(n => window.__fc.state.project.value.clips.length > n, n, { timeout: 60000 });
       await page.locator('.lib-search input').focus(); // a user typically clicks back into search
     }, { focusIs: /input\[search\]/ });
-    await check('usage dropdown changed (select focused)', async () => { await page.locator('.rail-btn', { hasText: 'Audio' }).click(); await page.locator('.lib-tabs button', { hasText: 'Music' }).click(); await page.locator('.usage select').focus(); await page.locator('.usage select').selectOption('personal'); await page.locator('.usage select').focus(); }, { focusIs: /select/ });
+    await check('usage dropdown changed (select focused)', async () => { await page.locator('.rail-btn', { hasText: 'Audio' }).click(); await page.locator('.lib-tabs button', { hasText: 'Music' }).click(); await page.locator('.audio-browse-title button', { hasText: 'Filters' }).click(); await page.locator('.audio-project-use summary').click(); await page.locator('.usage select').focus(); await page.locator('.usage select').selectOption('personal'); await page.locator('.usage select').focus(); }, { focusIs: /select/ });
     await check('My audio add', async () => { await page.locator('.lib-tabs button', { hasText: 'My audio' }).click(); await page.locator('.audio-row', { hasText: 'Tune' }).locator('button[aria-label="Add at playhead"]').click(); });
     await page.evaluate(() => window.__fc.state.commit('Make gap', d => { d.settings.magnetic = false; const c = d.clips.filter(x => x.trackId === 'main').sort((a, b) => a.start - b.start).at(-1); c.start += 2; }));
     await check('Close gaps', () => page.locator('.tl-toggle', { hasText: 'Close gaps' }).click());

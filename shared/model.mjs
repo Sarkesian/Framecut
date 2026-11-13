@@ -17,7 +17,9 @@ export const num = (v, min, max, fallback) => (Number.isFinite(+v) && v !== null
 
 export function dimensions(ratio, resolution) {
   const [a, b] = String(RATIOS[ratio] ? ratio : '16:9').split(':').map(Number);
-  const short = RESOLUTIONS.includes(+resolution) ? +resolution : 1080;
+  // Standard sizes, or any custom even size an export asks for (144 to 4320 on the short side).
+  const n = Math.round(+resolution / 2) * 2;
+  const short = RESOLUTIONS.includes(+resolution) ? +resolution : Number.isFinite(n) && n >= 144 && n <= 4320 ? n : 1080;
   const even = n => Math.max(2, Math.round(n / 2) * 2);
   return a >= b ? [even(short * a / b), short] : [short, even(short * b / a)];
 }

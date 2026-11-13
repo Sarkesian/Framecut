@@ -50,7 +50,7 @@ class Library {
       url: `/media/${a.id}?v=${v}`, proxyUrl: a.proxy ? `/proxy/${a.id}?v=${v}` : null, thumb: a.thumb ? `/cache/thumbs/${path.basename(a.thumb)}?v=${v}` : null,
       strip: a.strip ? { url: `/cache/filmstrips/${path.basename(a.strip.file)}?v=${v}`, count: a.strip.count, w: a.strip.w, h: a.strip.h, interval: a.strip.interval, version: a.strip.version || 1, sampleStart: a.strip.sampleStart } : null,
       wave: a.wave ? `/cache/waveforms/${path.basename(a.wave)}?v=${v}` : null, needsProxy: !!a.needsProxy, proxyPending: !!a.needsProxy && !a.proxy,
-      role: a.role || null, animated: !!a.animated, source: a.source ? publicSource(a.source) : null,
+      role: a.role || null, animated: !!a.animated, source: a.source ? publicSource(a.source) : null, owned: this.owned(a),
     };
   }
   list() { return [...this.assets.values()].map(a => this.public(a)); }
@@ -200,12 +200,17 @@ class Library {
     }
     return fixed;
   }
+  // Files FrameCut made itself (recordings, reversed / stabilised / cut-out clips). Everything else is the
+  // user's own media, which FrameCut only points at and never deletes.
+  owned(a) { return [this.dirs.derived, path.join(this.dirs.media, 'recordings')].some(d => a.path.startsWith(d + path.sep)); }
+  // Takes an asset out of the library. The user's own file is never touched; only a file FrameCut created
+  // is deleted with it. Returns what happened so the UI can say so.
   async remove(id) {
-    const a = this.assets.get(id); if (!a) return;
+    const a = this.assets.get(id); if (!a) return { removed: false, deletedFile: false };
     this.assets.delete(id); this.persist();
-    // Only files FrameCut created (recordings, derived clips) are deleted; user media is never touched.
-    const owned = [this.dirs.derived, path.join(this.dirs.media, 'recordings')].some(d => a.path.startsWith(d + path.sep));
+    const owned = this.owned(a);
     if (owned) await fsp.unlink(a.path).catch(() => {});
+    return { removed: true, deletedFile: owned, name: a.name };
   }
 }
 module.exports = { Library, MEDIA_EXT };

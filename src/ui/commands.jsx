@@ -1,12 +1,12 @@
 // Central command registry: menu bar, keyboard shortcuts and the shortcut reference.
-import { Scissors, Copy, ClipboardPaste, Trash2, Undo2, Redo2, Type, Upload, Mic, Captions, ZoomIn, ZoomOut, Maximize, Settings, Keyboard, Download, FolderOpen, Plus, Save, ArrowLeft, Magnet, Sparkles, Film, Blend } from 'lucide-preact';
-import { project, selection, player, time, undo, redo, toast, saveNow, saveState, commit, zoom, libraryTab, duration, primary, history, menu, transitionSel, rememberMedia, asset, importing } from '../lib/state.js';
+import { Scissors, Copy, ClipboardPaste, Trash2, Undo2, Redo2, Type, Upload, Mic, Captions, ZoomIn, ZoomOut, Maximize, Settings, Keyboard, Download, FolderOpen, Plus, Save, ArrowLeft, Magnet, Sparkles, Blend } from 'lucide-preact';
+import { project, selection, player, time, undo, redo, toast, saveNow, saveState, commit, zoom, libraryTab, duration, primary, history, menu, transitionSel, rememberMedia, asset, importing, effectPick } from '../lib/state.js';
 import { leaveProject, canSwitchProject } from './exitGuard.jsx';
 import { effect } from '@preact/signals';
 import { isDragging, stopDrag } from '../lib/drag.js';
 import { api, native, pickMedia } from '../lib/api.js';
 import { splitAt, deleteClips, duplicateClips, copyClips, cutClips, pasteClips, selectAll, addText, addAssets, trimClip, applyTransition, updateClips, closeAllGaps, removeTransition } from '../lib/edit.js';
-import { clipEnd, mainTrack, trackClips, RATIOS, RESOLUTIONS, FRAME_RATES } from '../../shared/model.mjs';
+import { clipEnd, mainTrack, RATIOS, RESOLUTIONS, FRAME_RATES } from '../../shared/model.mjs';
 import { showDialog, closeDialog, Modal, Select, Segmented, Color, Slider, Kbd } from './kit.jsx';
 import { openExport } from './ExportDialog.jsx';
 import { openPreferences } from './Preferences.jsx';
@@ -79,7 +79,7 @@ export const ACTIONS = [
   { id: 'paste', label: 'Paste at playhead', keys: ['Ctrl+V'], icon: ClipboardPaste, run: pasteSel, group: 'Edit' },
   { id: 'paste-in-place', label: 'Paste in place (original time)', keys: ['Ctrl+Shift+V'], run: () => pasteClips(undefined, { inPlace: true }), group: 'Edit' },
   { id: 'select-all', label: 'Select all', keys: ['Ctrl+A'], run: () => selectAll(), group: 'Edit' },
-  { id: 'deselect', label: 'Clear selection', keys: ['Escape'], run: () => { if (ui.value.blade) { setUi({ blade: false }); return; } selection.value = []; transitionSel.value = null; clearKeys(); }, group: 'Edit' },
+  { id: 'deselect', label: 'Clear selection', keys: ['Escape'], run: () => { if (ui.value.blade) { setUi({ blade: false }); return; } if (effectPick.value) { effectPick.value = null; return; } selection.value = []; transitionSel.value = null; clearKeys(); }, group: 'Edit' },
   { id: 'lock', label: 'Lock / unlock selected', keys: ['Ctrl+L'], run: () => toggleLock(), group: 'Edit' },
   { id: 'mute', label: 'Mute / unmute clip', keys: ['Ctrl+M'], run: toggleMute, group: 'Edit' },
   { id: 'undo', label: 'Undo', keys: ['Ctrl+Z'], icon: Undo2, run: () => { const l = undo(); toast(l ? 'Undid ' + l.toLowerCase() : 'Nothing left to undo.'); }, group: 'Edit' },
@@ -186,7 +186,7 @@ function ProjectSettingsDialog() {
       <div class="field"><label>Resolution</label><Select value={s.resolution} options={RESOLUTIONS.map(r => [r, r === 2160 ? '4K (2160p)' : r === 4320 ? '8K (4320p)' : r + 'p'])} onChange={v => set({ resolution: +v })} /></div>
       <div class="field"><label>Frame rate</label><Select value={s.fps} options={FRAME_RATES.map(f => [f, f + ' fps'])} onChange={v => set({ fps: +v })} /></div>
     </div>
-    <div class="field"><label>Canvas background</label><Segmented value={s.background.type} options={[['black', 'Black'], ['color', 'Color'], ['blur', 'Blurred video']]} onChange={v => set({ background: { ...s.background, type: v } })} /></div>
+    <div class="field"><label>Canvas background</label><Segmented value={s.background.type} options={[['black', 'Black'], ['color', 'Color'], ['blur', 'Blur']]} onChange={v => set({ background: { ...s.background, type: v } })} /></div>
     {s.background.type === 'color' && <Color label="Background color" value={s.background.color} onChange={v => set({ background: { ...s.background, color: v } })} />}
     {s.background.type === 'blur' && <Slider label="Blur strength" min={4} max={60} step={1} value={s.background.blur} def={24} onChange={v => set({ background: { ...s.background, blur: v } })} />}
   </Modal>;

@@ -93,3 +93,14 @@
 .clip.snap-l::before, .clip.snap-r::after { content: ''; position: absolute; top: -3px; bottom: -3px; width: 3px; border-radius: 2px; background: var(--accent); box-shadow: 0 0 8px var(--accent); z-index: 4; pointer-events: none; }
 .clip.snap-l::before { left: -1.5px; } .clip.snap-r::after { right: -1.5px; }
 .track-head.fixed { cursor: default; }
+
+/* Transition block: grab either end to resize, × removes the selected one. */
+.tr-block { user-select: none; } .tr-block:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tr-block .tr-grip { position: absolute; top: 0; bottom: 0; width: 7px; cursor: ew-resize; z-index: 1; }
+.tr-block .tr-grip.l { left: 0; border-radius: 7px 0 0 7px; } .tr-block .tr-grip.r { right: 0; border-radius: 0 7px 7px 0; }
+.tr-block:hover .tr-grip, .tr-block.sel .tr-grip, .tr-block.resizing .tr-grip { background: rgba(255,255,255,.38); }
+.tr-block { overflow: visible; } .tr-block > .ellipsis { min-width: 0; }
+/* The remove badge sits on the corner, clear of the middle, so a click on the block itself can never hit it. */
+.tr-block .tr-x { position: absolute; right: -8px; top: -9px; z-index: 2; display: grid; place-items: center; width: 17px; height: 17px; border-radius: 50%; background: var(--bg-2); border: 1px solid rgba(255,255,255,.55); color: #fff; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,.5); }
+.tr-block .tr-x:hover { background: var(--danger); border-color: var(--danger); }
+.tr-block.resizing { border-color: #fff; }

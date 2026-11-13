@@ -18,7 +18,8 @@ class SfxKit {
   async search({ q = '', category, length, page = 1, pageSize = 40 }) {
     const terms = String(q).toLowerCase().split(/\s+/).filter(Boolean);
     const LEN = { short: [0, 10], medium: [10, 60], long: [60, Infinity] }[length];
-    let hits = this.words.filter(([x, w]) => (!category || x.category === category) && (!LEN || (x.duration >= LEN[0] && x.duration < LEN[1])) && terms.every(t => w.includes(t)));
+    const cats = category ? new Set(String(category).split(',')) : null; // one category, or several joined by commas
+    let hits = this.words.filter(([x, w]) => (!cats || cats.has(x.category)) && (!LEN || (x.duration >= LEN[0] && x.duration < LEN[1])) && terms.every(t => w.includes(t)));
     // Name and tag matches rank above description matches.
     if (terms.length) hits = hits.map(([x]) => [x, x.name.toLowerCase().includes(terms[0]) ? 0 : x.tags.includes(terms[0]) ? 1 : 2]).sort((a, b) => a[1] - b[1]);
     const all = hits.map(h => h[0]); const start = (Math.max(1, page) - 1) * pageSize;

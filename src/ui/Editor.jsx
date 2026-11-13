@@ -1,7 +1,7 @@
 // Editor workspace: asset browser | preview | inspector over a multitrack timeline.
-import { useEffect, useRef, useState } from 'preact/hooks';
-import { ArrowLeft, Undo2, Redo2, Download, Check, LoaderCircle, TriangleAlert, Keyboard, Settings, ChevronDown } from 'lucide-preact';
-import { project, saveState, history, undo, redo, commit, toast, player, time, selection, saveNow, jobs, audioExpanded, libraryTab } from '../lib/state.js';
+import { useEffect, useState } from 'preact/hooks';
+import { ArrowLeft, Undo2, Redo2, Download, Check, LoaderCircle, TriangleAlert, Keyboard, Settings } from 'lucide-preact';
+import { project, saveState, history, undo, redo, commit, toast, saveNow, audioExpanded, libraryTab } from '../lib/state.js';
 import { native } from '../lib/api.js';
 import { openMenu, useDraft } from './kit.jsx';
 import { Logo } from './Logo.jsx';

@@ -220,3 +220,17 @@
 .sticker-category-strip button { flex: none; }
 .st-name { position: absolute; bottom: 2px; left: 4px; right: 4px; color: var(--text-3); font-size: 9px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-align: center; pointer-events: none; }
 @container (min-width: 480px) { .audio-nav { grid-template-columns: repeat(6, minmax(0, 1fr)); } .audio-welcome { padding: 18px 22px; } .audio-welcome h3 { font-size: 32px; } .audio-category { flex-basis: 128px; } .audio-category-art { height: 78px; } .audio-hub .audio-row { min-height: 59px; } }
+
+/* Browse by category: one row of chips per group, scrolled sideways (BrowseRail adds the arrows). */
+.music-browser { margin: 0 0 10px; } .music-groups { margin-bottom: 8px; }
+.chip-shelf { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+.chip-shelf .fchip { white-space: nowrap; height: 26px; } .chip-shelf .fchip.on { border-color: var(--accent-line); color: var(--accent); background: var(--accent-soft); }
+.chip-shelf .fchip.more { border-style: dashed; color: var(--text-3); }
+.audio-collections { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr)); gap: 7px; }
+.audio-collections button { position: relative; display: flex; flex-direction: column; gap: 3px; padding: 10px 26px 10px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-2); color: var(--text); text-align: left; cursor: pointer; font: inherit; }
+.audio-collections button:hover { border-color: var(--accent-line); background: var(--bg-3); } .audio-collections b { font-size: 12px; font-weight: 600; } .audio-collections small { font-size: 10.5px; color: var(--text-3); line-height: 1.4; }
+.audio-collections svg { position: absolute; right: 9px; top: 50%; margin-top: -6px; color: var(--text-3); }
+/* Credit badge on a row: a button that copies the credit line. */
+.lic-copy { border: 0; cursor: pointer; font-family: inherit; } .lic-copy:hover { filter: brightness(1.25); } .lic-copy:focus-visible { outline: 1px solid var(--accent-line); }
+.lib-row.unavailable { opacity: .55; } .lib-row.unavailable .lib-title { text-decoration: line-through; text-decoration-color: var(--text-3); }
+.audio-result-summary > span[data-tip] { cursor: help; }

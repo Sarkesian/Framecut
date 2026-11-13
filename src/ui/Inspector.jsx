@@ -1,17 +1,17 @@
 // Right panel: properties for whatever is selected.
-import { useEffect, useState, useRef } from 'preact/hooks';
+import { useState, useRef } from 'preact/hooks';
 import { useDraft } from './kit.jsx';
-import { Lock, FlipHorizontal2, FlipVertical2, RotateCcw, Trash2, Rewind, Snowflake, Gauge, Scissors, AudioLines, Unlink, Wand2, X, Plus, AlignLeft, AlignCenter, AlignRight, Bold, Italic, CaseUpper, Film, Type, Music, Sparkles, LoaderCircle, Scan, Layers, Smile } from 'lucide-preact';
-import { project, primary, selection, time, toast, asset, media, player, commit, fonts, prefs, transitionSel } from '../lib/state.js';
+import { Lock, FlipHorizontal2, FlipVertical2, RotateCcw, Trash2, Rewind, Snowflake, Gauge, Scissors, Wand2, X, AlignLeft, AlignCenter, AlignRight, Bold, Italic, CaseUpper, Film, Type, Music, Sparkles, LoaderCircle, Scan, Layers, Smile } from 'lucide-preact';
+import { project, primary, selection, time, toast, asset, media, player, commit, fonts, transitionSel } from '../lib/state.js';
 import { TransitionInspector } from './TransitionPanel.jsx';
 import { selectTransition, applyTransition } from '../lib/edit.js';
 import { transitionDef } from '../../shared/catalog.mjs';
 import { api, waitJob } from '../lib/api.js';
-import { updateClip, updateClips, setSpeed, detachAudio, cutClip, trackOf, freeTrack, setClipText } from '../lib/edit.js';
+import { updateClip, updateClips, setSpeed, cutClip, trackOf, freeTrack, setClipText, removeEffect } from '../lib/edit.js';
 import { toggleLock } from '../lib/viewport.js';
 import { dimensions, clipSpeed } from '../../shared/model.mjs';
 import { Slider, Toggle, Segmented, Select, Color, Section, Empty, Combo } from './kit.jsx';
-import { ANIMATIONS, EFFECTS, FILTERS, TRANSITIONS, effectDef, filterDef, TEXT_STYLE, CAPTION_STYLE, TEXT_PRESETS, EMOJI } from '../../shared/catalog.mjs';
+import { ANIMATIONS, EFFECTS, FILTERS, TRANSITIONS, effectDef, TEXT_STYLE, CAPTION_STYLE, TEXT_PRESETS, EMOJI } from '../../shared/catalog.mjs';
 import { restyleText } from './AssetPanel.jsx';
 import { RATIOS, RESOLUTIONS, FRAME_RATES, clipEnd, transitionPartner, maxTransition, newClip, DEFAULT_COLOR, DEFAULT_TRANSFORM } from '../../shared/model.mjs';
 import { shortTime } from '../lib/format.js';
@@ -200,11 +200,12 @@ function EffectsPanel({ c }) {
   const list = c.effects || [];
   const avail = EFFECTS.filter(e => !list.some(x => x.id === e.id) && !(c.kind === 'adjust' && e.clipOnly));
   return <>
-    {!list.length && <Empty icon={Sparkles} title="No effects yet" text="Add one below, or pick from the Effects panel on the left." />}
-    {list.map((e, i) => { const def = effectDef(e.id); return <Section key={e.id} title={def?.name || e.id} right={<button class="icon-btn sm" data-tip="Remove effect" onClick={() => updateClip(c.id, x => { x.effects = x.effects.filter(y => y.id !== e.id); }, { label: 'Remove effect' })}><X size={13} /></button>}>
+    {!list.length && <Empty icon={Sparkles} title="No effects yet" text="Try effects from the Effects panel on the left, or add one below." />}
+    {list.length > 1 && <div class="row" style={{ padding: '10px 14px 0' }}><small class="muted grow">{list.length} effects stacked, applied top to bottom.</small><button class="btn ghost sm" onClick={() => removeEffect()}><X size={12} />Remove all</button></div>}
+    {list.map((e, i) => { const def = effectDef(e.id); return <Section key={e.id} title={def?.name || e.id} right={<button class="btn ghost sm fx-remove" data-tip={'Take ' + (def?.name || 'this effect') + ' off this clip'} onClick={() => removeEffect(e.id)}><X size={12} />Remove effect</button>}>
       {def?.params.map(pr => <Slider key={pr.key} label={pr.label} min={pr.min} max={pr.max} step={pr.step} value={e[pr.key] ?? pr.value} def={pr.value} fmt={v => Math.round(v * 100) + '%'} onChange={v => updateClip(c.id, x => { x.effects[i][pr.key] = v; }, { label: def.name, key: 'fx' + e.id + c.id })} />)}
     </Section>; })}
-    {avail.length > 0 && <div class="field" style={{ padding: '0 14px' }}><Select value="" options={[['', '+ Add effect…'], ...avail.map(e => [e.id, e.name])]} onChange={v => { if (!v) return; const def = effectDef(v); updateClip(c.id, x => { x.effects = [...(x.effects || []), { id: v, ...Object.fromEntries(def.params.map(p => [p.key, p.value])) }]; }, { label: 'Add ' + def.name }); }} /></div>}
+    {avail.length > 0 && <div class="field" style={{ padding: '0 14px' }}><Select value="" options={[['', list.length ? '+ Stack another effect…' : '+ Add effect…'], ...avail.map(e => [e.id, e.name])]} onChange={v => { if (!v) return; const def = effectDef(v); updateClip(c.id, x => { x.effects = [...(x.effects || []), { id: v, ...Object.fromEntries(def.params.map(p => [p.key, p.value])) }]; }, { label: 'Add ' + def.name }); }} /></div>}
   </>;
 }
 function AnimPanel({ c }) {

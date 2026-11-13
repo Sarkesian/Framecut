@@ -1,9 +1,9 @@
 // Audio inspector: one-click profiles, the ten essential tools (simple / advanced), fades, takes, and mixing helpers.
 import { useEffect, useState } from 'preact/hooks';
-import { Wand2, Copy, ClipboardPaste, Unlink, Volume2, VolumeX, Play, Pause, Check, Save, RotateCcw, Ear, Trash2 } from 'lucide-preact';
-import { project, selection, asset, toast, prefs, savePrefs, player, commit, media } from '../lib/state.js';
+import { Copy, ClipboardPaste, Unlink, Play, Pause, Check, Save, RotateCcw, Ear, Trash2 } from 'lucide-preact';
+import { project, selection, asset, toast, prefs, savePrefs, player } from '../lib/state.js';
 import { updateClip, updateClips, detachAudio } from '../lib/edit.js';
-import { Slider, Toggle, Segmented, Select, Section, prompt, Switch } from './kit.jsx';
+import { Slider, Segmented, Select, Section, prompt, Switch } from './kit.jsx';
 import { AUDIO_PROFILES, AUDIO_DEFAULTS, audioFx, profileFx } from '../../shared/audio.mjs';
 import { shortTime } from '../lib/format.js';
 import { preview, togglePreview, stopPreview } from '../lib/creative.js';

@@ -5,6 +5,7 @@ const { dimensions, normalizeProject, stickerMedia, clipSpeed } = require('../sh
 const { fx, filterDef } = require('../shared/catalog.mjs');
 const { fmtNum: f, evaluate } = require('../shared/expr.mjs');
 const { keyExpr } = require('../shared/audio.mjs');
+const { targetPlan, canTarget } = require('../shared/exportsize.mjs');
 
 const tempo = speed => { const parts = []; let s = speed; while (s > 2) { parts.push('atempo=2'); s /= 2; } while (s < 0.5) { parts.push('atempo=0.5'); s *= 2; } parts.push('atempo=' + f(s)); return parts.join(','); };
 const even = n => Math.max(2, Math.round(n / 2) * 2);
@@ -57,6 +58,11 @@ function renderPlan(raw, { assets, rasters = {}, luts = {}, processedAudio = {},
   for (const c of project.clips) if ((c.kind === 'video' || c.kind === 'image' || c.kind === 'audio' || stickerMedia(c)) && !media(c.mediaId)) throw Error(`“${c.name || 'A clip'}” is missing its media file. Relink it, then export again.`);
   if (!plan.duration) throw Error('Your timeline is empty. Add a clip before exporting.');
   const range = settings.range && settings.range.to > settings.range.from ? settings.range : { from: 0, to: plan.duration };
+  // "Fit under N MB": the bitrate comes from the length actually being exported (same maths as the dialog's estimate).
+  if (+settings.targetMB > 0 && spec.video && canTarget(fmt, settings.codec)) {
+    const tp = targetPlan({ targetMB: +settings.targetMB, duration: range.to - range.from, W, H, fps, format: fmt, codec: settings.codec, audioKbps: +settings.audioBitrate || 192, hasAudio: plan.audio.length > 0, scale: +settings.targetScale > 0 ? +settings.targetScale : 1 });
+    settings = { ...settings, bitrate: tp.videoKbps, audioBitrate: tp.audioKbps || 96, tight: true };
+  }
   const total = plan.duration;
   const inputs = [], filters = [];
   const addInput = (args) => { inputs.push(...args); return inputs.filter(a => a === '-i').length - 1; };
@@ -220,19 +226,22 @@ function encoderArgs(fmt, s) {
   const q = { high: 0, balanced: 1, small: 2 }[s.quality] ?? 1;
   const crf = [18, 23, 28][q], cq = [19, 25, 31][q];
   const kbps = +s.bitrate > 0 ? Math.round(+s.bitrate) : 0;
-  const ab = [128, 192, 256, 320].includes(+s.audioBitrate) ? +s.audioBitrate : 192;
-  const rate = kbps ? ['-b:v', kbps + 'k', '-maxrate', Math.round(kbps * 1.5) + 'k', '-bufsize', kbps * 2 + 'k'] : null;
+  const ab = [96, 128, 160, 192, 256, 320].includes(+s.audioBitrate) ? +s.audioBitrate : 192;
+  // tight: the file has a size limit, so peaks are held closer to the average and the software encoders
+  // spend more effort per bit (slower preset) to keep the picture clear at the lower rate.
+  const rate = kbps ? ['-b:v', kbps + 'k', '-maxrate', Math.round(kbps * (s.tight ? 1.25 : 1.5)) + 'k', '-bufsize', kbps * 2 + 'k'] : null;
+  const preset = s.tight ? 'slow' : 'medium';
   const hw = s.hardwareEncoder; // 'nvenc' | 'amf' | 'qsv' | null (resolved by server)
   const aac = ['-c:a', 'aac', '-b:a', ab + 'k'];
   const codec = s.codec;
   const h264 = () => hw === 'nvenc' ? ['-c:v', 'h264_nvenc', '-preset', 'p5', '-tune', 'hq', ...(rate || ['-rc', 'vbr', '-cq', String(cq), '-b:v', '0']), '-pix_fmt', 'yuv420p']
     : hw === 'amf' ? ['-c:v', 'h264_amf', '-quality', 'quality', ...(rate || ['-rc', 'cqp', '-qp_i', String(cq), '-qp_p', String(cq)]), '-pix_fmt', 'yuv420p']
     : hw === 'qsv' ? ['-c:v', 'h264_qsv', ...(rate || ['-global_quality', String(cq)]), '-pix_fmt', 'nv12']
-    : ['-c:v', 'libx264', '-preset', 'medium', ...(rate || ['-crf', String(crf)]), '-pix_fmt', 'yuv420p'];
+    : ['-c:v', 'libx264', '-preset', preset, ...(rate || ['-crf', String(crf)]), '-pix_fmt', 'yuv420p'];
   const hevc = () => hw === 'nvenc' ? ['-c:v', 'hevc_nvenc', '-preset', 'p5', '-tune', 'hq', ...(rate || ['-rc', 'vbr', '-cq', String(cq + 2), '-b:v', '0']), '-pix_fmt', 'yuv420p', '-tag:v', 'hvc1']
     : hw === 'amf' ? ['-c:v', 'hevc_amf', ...(rate || ['-rc', 'cqp', '-qp_i', String(cq), '-qp_p', String(cq)]), '-tag:v', 'hvc1']
     : hw === 'qsv' ? ['-c:v', 'hevc_qsv', ...(rate || ['-global_quality', String(cq)]), '-tag:v', 'hvc1']
-    : ['-c:v', 'libx265', '-preset', 'medium', ...(rate || ['-crf', String(crf + 4)]), '-pix_fmt', 'yuv420p', '-tag:v', 'hvc1'];
+    : ['-c:v', 'libx265', '-preset', preset, ...(rate || ['-crf', String(crf + 4)]), '-pix_fmt', 'yuv420p', '-tag:v', 'hvc1'];
   switch (fmt) {
     case 'mp4': return [...(codec === 'hevc' ? hevc() : h264()), ...aac, '-movflags', '+faststart'];
     case 'mkv': return [...(codec === 'hevc' ? hevc() : h264()), ...aac];
@@ -250,4 +259,4 @@ function encoderArgs(fmt, s) {
   return [];
 }
 
-module.exports = { renderPlan, FORMATS, tempo };
+module.exports = { renderPlan, FORMATS, tempo, encoderArgs };

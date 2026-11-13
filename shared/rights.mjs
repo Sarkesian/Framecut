@@ -7,7 +7,6 @@
 // The three labels creators see. Everything maps onto one of them (plus "Your file" for imports).
 export const LABELS = { free: 'No credit needed', credit: 'Credits handled automatically', restricted: 'Restricted usage', own: 'Your file' };
 // Discovery modes: what the library shows. Default is attribution-free only.
-export const INCLUDE = [['free', 'No credit needed'], ['credit', 'Also show credit-required (credits automatic)'], ['all', 'Everything usable (incl. restricted)']];
 export const includeMode = v => (['free', 'credit', 'all'].includes(v) ? v : 'free');
 
 // What each provider allows FrameCut to do. Preview, local storage and export are separate rights.
@@ -36,6 +35,12 @@ export const PROVIDERS = {
     home: 'https://ccmixter.org', terms: 'https://ccmixter.org/terms',
     note: 'Community music with per-track Creative Commons licenses. Attribution-free mode shows only tracks their creators released under CC0; each license is re-read from ccMixter before adding.',
     preview: true, storage: 'license', export: 'license',
+  },
+  incompetech: {
+    id: 'incompetech', name: 'Incompetech', kinds: ['music'], enabled: true,
+    home: 'https://incompetech.com/music/royalty-free/music.html', terms: 'https://incompetech.com/music/royalty-free/licenses/',
+    note: 'About 1,400 finished pieces by composer Kevin MacLeod, sorted by genre and feel. Free to use, including in monetized videos, as long as the music is credited (CC BY 4.0). FrameCut reads the catalog the site publishes for apps and writes the credit for you.',
+    preview: true, storage: true, export: true, license: { id: 'by', version: '4.0', url: 'https://creativecommons.org/licenses/by/4.0/', holder: 'Kevin MacLeod' },
   },
   archive: {
     id: 'archive', name: 'Internet Archive', kinds: ['music'], enabled: true, defaultActive: false,
@@ -85,7 +90,6 @@ export const PROVIDERS = {
   giphy: { id: 'giphy', name: 'GIPHY', kinds: ['sticker'], enabled: false, reason: 'API rules forbid caching media, so stickers could not be saved in projects or exported.' },
   tenor: { id: 'tenor', name: 'Tenor', kinds: ['sticker'], enabled: false, reason: 'Tenor stopped accepting new API clients in January 2026.' },
 };
-export const providerInfo = id => PROVIDERS[id] || null;
 
 // License facts. `cc` licenses are verified against their canonical creativecommons.org address.
 const LICENSES = {

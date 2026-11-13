@@ -59,8 +59,10 @@ async function startServer({ dataDir = path.join(__dirname, '..', '.workspace'),
     prefs = next; await writeJson(prefsPath, prefs, 2); res.json(prefs);
   }));
   app.get('/api/storage', wrap(async (_req, res) => {
-    const size = async dir => { let total = 0; const walk = async d => { for (const e of await fsp.readdir(d, { withFileTypes: true }).catch(() => [])) { const p = path.join(d, e.name); if (e.isDirectory()) await walk(p); else total += (await fsp.stat(p).catch(() => ({ size: 0 }))).size; } }; await walk(dir); return total; };
-    res.json({ dataDir, cacheDir, projectsDir: projects.root, cacheBytes: await size(cacheDir), projectBytes: await size(projects.root), mediaBytes: await size(path.join(dataDir, 'media')), engineBytes: await size(path.join(dataDir, 'engines')), dataBytes: await size(dataDir) });
+    // Folders are measured side by side, and the files of one folder together, instead of one stat at a time.
+    const size = async dir => { const entries = await fsp.readdir(dir, { withFileTypes: true }).catch(() => []); const sizes = await Promise.all(entries.map(e => { const p = path.join(dir, e.name); return e.isDirectory() ? size(p) : fsp.stat(p).then(s => s.size, () => 0); })); return sizes.reduce((a, b) => a + b, 0); };
+    const [cacheBytes, projectBytes, mediaBytes, engineBytes, dataBytes] = await Promise.all([cacheDir, projects.root, path.join(dataDir, 'media'), path.join(dataDir, 'engines'), dataDir].map(size));
+    res.json({ dataDir, cacheDir, projectsDir: projects.root, cacheBytes, projectBytes, mediaBytes, engineBytes, dataBytes });
   }));
   app.post('/api/storage/clear-cache', wrap(async (_req, res) => {
     for (const sub of ['proxies', 'audio', 'luts']) await fsp.rm(path.join(cacheDir, sub), { recursive: true, force: true });
@@ -94,7 +96,20 @@ async function startServer({ dataDir = path.join(__dirname, '..', '.workspace'),
   }));
   app.post('/api/media/:id/relink', wrap(async (req, res) => res.json(library.public(await library.relink(req.params.id, String(req.body.path))))));
   app.post('/api/media/relink-folder', wrap(async (req, res) => res.json({ fixed: await library.relinkFolder(String(req.body.folder)) })));
-  app.delete('/api/media/:id', wrap(async (req, res) => { await library.remove(req.params.id); res.json({ ok: true }); }));
+  // Which saved projects use a media file (asked before it is removed from the library).
+  const mediaUsage = async id => {
+    const out = [];
+    for (const info of await projects.list()) { try { const p = await projects.load(info.id, { quiet: true }); const clips = p.clips.filter(c => c.mediaId === id || c.cutout?.mediaId === id || c.takes?.some(t => t.mediaId === id)).length; if (clips) out.push({ id: p.id, name: p.name, clips }); } catch {} }
+    return out;
+  };
+  app.get('/api/media/:id/usage', wrap(async (req, res) => { const a = library.get(req.params.id); if (!a) return res.status(404).json({ error: 'Media not found.' }); res.json({ projects: await mediaUsage(a.id), owned: library.owned(a) }); }));
+  // Removing from the library never deletes the user's own file. It is refused while another project still
+  // uses the file (except: the project named in ?except=, which the editor has open and has already cleaned up).
+  app.delete('/api/media/:id', wrap(async (req, res) => {
+    const used = (await mediaUsage(req.params.id)).filter(p => p.id !== String(req.query.except || ''));
+    if (used.length && req.query.force !== '1') return res.status(409).json({ error: `This file is still used in ${used.length === 1 ? '“' + used[0].name + '”' : used.length + ' projects'}. Remove it from ${used.length === 1 ? 'that project' : 'those projects'} first.`, code: 'in-use', projects: used });
+    res.json({ ok: true, ...(await library.remove(req.params.id)) });
+  }));
   app.post('/api/media/:id/proxy', wrap(async (req, res) => { const a = library.get(req.params.id); if (!a) throw Error('Not found'); a.needsProxy = true; library.ensureDerivatives(a); res.json(library.public(a)); }));
   const sendAsset = key => (req, res) => {
     const a = library.get(req.params.id); const file = a && (key === 'proxy' ? a.proxy : a.path);

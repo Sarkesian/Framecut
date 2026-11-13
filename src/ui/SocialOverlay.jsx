@@ -11,7 +11,6 @@ import { Smartphone } from 'lucide-preact';
 import { ui, setUi } from '../lib/uiprefs.js';
 import { openMenu } from './kit.jsx';
 
-export const SOCIAL = { tiktok: { name: 'TikTok' } };
 
 export function socialMenu(e) {
   const cur = ui.value.social || 'none';

@@ -16,7 +16,6 @@
 let active = null;
 
 export const isDragging = () => !!active;
-export const activeDrag = () => active;
 
 // Ends the current drag, if any. reason: 'cancel' | 'end'.
 export function stopDrag(reason = 'cancel') { active?.finish(null, reason); }

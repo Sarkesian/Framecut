@@ -4,7 +4,7 @@ import { signal } from '@preact/signals';
 import { project, commit, toast, selection, prefs, savePrefs, time, player } from './state.js';
 import { api, waitJob } from './api.js';
 import { uid, clipEnd, newClip, dimensions } from '../../shared/model.mjs';
-import { resolveCaption, groupWords, groupLimits, breakLines, CAPTION_PRESETS_V2, presetDef, merge, defaultCaptions, POP_INTENSITY } from '../../shared/captions.mjs';
+import { resolveCaption, groupWords, groupLimits, breakLines, CAPTION_PRESETS_V2, defaultCaptions, POP_INTENSITY } from '../../shared/captions.mjs';
 import { addTrack } from './edit.js';
 
 export const capScope = signal('project'); // project | track | caption | word

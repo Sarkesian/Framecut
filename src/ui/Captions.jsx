@@ -3,13 +3,14 @@
 // timing — is in the details panel on the right once a caption is selected (CaptionInspector), like every
 // other clip. Each change can target all captions, a track, a caption or a single word, and inherited
 // values stay editable at the higher levels.
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { Wand2, Captions as CaptionsIcon, Search, Replace, Scissors, Merge, Play, Repeat, RotateCcw, Copy, ClipboardPaste, Star, Save, Check, TriangleAlert, LoaderCircle, FileText, Download, Music2, ChevronDown, ChevronRight, Sparkles, Type, Layers, Trash2, X, SlidersHorizontal } from 'lucide-preact';
+import { useEffect, useRef, useState } from 'preact/hooks';
+import { computed } from '@preact/signals';
+import { Wand2, Captions as CaptionsIcon, Search, Replace, Scissors, Merge, Play, Repeat, RotateCcw, Copy, ClipboardPaste, Star, Save, Check, TriangleAlert, FileText, Download, Music2, ChevronDown, ChevronRight, Sparkles, Type, Trash2, X, SlidersHorizontal } from 'lucide-preact';
 import { project, selection, time, player, prefs, savePrefs, toast, commit, libraryTab } from '../lib/state.js';
 import { Segmented, Select, Slider, Toggle, Color, Progress, confirm, prompt, openMenu } from './kit.jsx';
 import { scriptSuggestions, applySuggestions } from '../lib/captions.js';
-import { capScope, capWord, genState, lastResult, allPresets, userPresets, captionClips, capTrackOf, effOf, scopeTarget, scopeLabel, setCap, resetScope, applyPreset, setPopIntensity, saveAsPreset, toggleFavorite, setDefaultPreset, deletePreset, copyStyle, pasteStyle, editWord, setWordTiming, splitCaption, mergeWithNext, searchReplace, regroup, generateCaptions, captionSources, seekWord, nowWord, isCap } from '../lib/captions.js';
-import { ENTRANCES, EMPHASES, EXITS, POP_INTENSITY, resolveCaption, captionMotion, wordOverlays, CAPTION_PRESETS_V2 } from '../../shared/captions.mjs';
+import { capScope, capWord, genState, lastResult, allPresets, captionClips, effOf, scopeTarget, scopeLabel, setCap, resetScope, applyPreset, setPopIntensity, saveAsPreset, toggleFavorite, setDefaultPreset, deletePreset, copyStyle, pasteStyle, editWord, setWordTiming, splitCaption, mergeWithNext, searchReplace, regroup, generateCaptions, captionSources, seekWord, nowWord, isCap } from '../lib/captions.js';
+import { ENTRANCES, EMPHASES, EXITS, POP_INTENSITY, resolveCaption, captionMotion, wordOverlays } from '../../shared/captions.mjs';
 import { evaluate } from '../../shared/expr.mjs';
 import { renderCaptionBase, renderCaptionWord, ensureFont } from '../engine/captionRaster.js';
 import { insertCaptions } from '../lib/edit.js';
@@ -20,7 +21,6 @@ import { clipEnd, projectDuration } from '../../shared/model.mjs';
 const LANGS = [['', 'Detect automatically'], ['English', 'English'], ['Spanish', 'Spanish'], ['French', 'French'], ['German', 'German'], ['Italian', 'Italian'], ['Portuguese', 'Portuguese'], ['Dutch', 'Dutch'], ['Japanese', 'Japanese'], ['Korean', 'Korean'], ['Chinese', 'Chinese'], ['Russian', 'Russian'], ['Hindi', 'Hindi'], ['Arabic', 'Arabic'], ['Turkish', 'Turkish'], ['Polish', 'Polish']];
 const FONTS = ['Inter', 'Montserrat', 'Poppins', 'Anton', 'Playfair Display', 'Segoe UI', 'Arial Black', 'Impact', 'Georgia', 'Consolas'];
 const POSITIONS = [['top', 'Top', -0.36], ['above-hud', 'Above game HUD', 0.18], ['middle', 'Middle', 0], ['bottom', 'Bottom', 0.34]];
-export const capTab = { value: 'generate' };
 
 export function CaptionsPanel() {
   const [tab, setTab] = useState(() => (captionClips(project.value).length ? 'style' : 'generate'));
@@ -145,8 +145,11 @@ function CaptionTiming() {
     <small class="muted">Captions showing up late? Drag left. Early? Drag right. Moves every caption together and keeps word timing.</small>
   </div>;
 }
+// Ids of the captions under the playhead. A group reads this rather than the clock, so during playback only
+// the caption being spoken follows it word by word; the rest of a long transcript is left alone.
+const activeCaps = computed(() => { const p = project.value, t = time.value; return p ? p.clips.filter(c => c.kind === 'text' && t >= c.start && t < clipEnd(c)).map(c => c.id).join('|') : ''; });
 function CaptionGroup({ c, open, toggle }) {
-  const p = project.value, active = time.value >= c.start && time.value < clipEnd(c), cur = active ? nowWord(c) : -1, sel = selection.value.includes(c.id);
+  const p = project.value, active = activeCaps.value.split('|').includes(c.id), cur = active ? nowWord(c) : -1, sel = selection.value.includes(c.id);
   const [edit, setEdit] = useState(null);
   const pick = (i, e) => { selection.value = [c.id]; capWord.value = { clipId: c.id, i }; if (!e?.detail || e.detail === 1) seekWord(c, c.words[i]); };
   const loop = () => { const pl = player.current; if (!pl) return; pl.seek(c.start); pl.play(); const stop = setInterval(() => { if (!pl.playing) return clearInterval(stop); if (pl.t >= clipEnd(c)) pl.seek(c.start); }, 30); setTimeout(() => clearInterval(stop), 20000); };

@@ -213,3 +213,41 @@
 .social-note { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); max-width: 86%; padding: 6px 10px; border-radius: 8px; background: rgba(12,13,17,.85); border: 1px solid var(--line-2); color: var(--text-2); font-size: 12px; text-align: center; }
 .emoji-row { margin-top: 6px; gap: 8px; } .emoji-row small { font-size: 11px; line-height: 1.3; }
 .emoji-pick { margin-top: 8px; padding: 8px; border-radius: 8px; background: var(--bg-2); border: 1px solid var(--line); } .emoji-pick .emoji-grid { max-height: 168px; overflow-y: auto; }
+
+/* Effects: try-out card, applied list, in-player badge */
+.fx-tab .fx-card { position: sticky; top: 0; bottom: auto; margin: 0 0 10px; }
+.fx-tab .fx-tile { position: relative; } .fx-tab .fx-tile.applied span { color: var(--text); }
+.fx-applied { display: flex; flex-direction: column; gap: 6px; margin: 0 0 10px; padding: 9px 10px; border-radius: 10px; background: var(--bg-2); border: 1px solid var(--line); font-size: 12.5px; }
+.fx-applied .row { gap: 7px; } .fx-applied > .btn { align-self: flex-start; }
+.fx-card .check-row { margin: 0; min-height: 24px; }
+.fx-trying { position: absolute; left: 8px; top: 8px; z-index: 6; max-width: calc(100% - 16px); padding: 3px 9px; border-radius: 11px; background: rgba(11, 12, 16, .78); color: #fff; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; box-shadow: 0 0 0 1px var(--accent-line); }
+.fx-trying b { color: var(--accent); margin-right: 4px; }
+.tr-done { flex: none; }
+
+/* Export: file name box, resolution, file size */
+.export-name label { font-weight: 600; color: var(--text); }
+.export-name .name-box { display: flex; align-items: center; border-radius: 9px; background: var(--bg-2); border: 1px solid var(--line-2); }
+.export-name .name-box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-line); }
+.export-name .name-box .input { flex: 1; min-width: 0; height: 40px; font-size: 15px; font-weight: 600; background: transparent; border: 0; box-shadow: none; outline: 0; }
+.export-name .name-ext { padding: 0 12px 0 2px; color: var(--text-3); font-size: 13px; }
+.export-name small { display: block; margin-top: 5px; font-size: 11.5px; }
+.res-chips { align-items: center; } .res-chips small { margin-left: 4px; }
+.custom-res, .target-size { gap: 8px; margin-top: 8px; flex-wrap: wrap; } .custom-res .input, .target-size > .input { width: 96px; }
+.size-line { display: flex; align-items: center; gap: 8px; margin-top: 8px; padding: 8px 10px; border-radius: 9px; background: var(--bg-2); border: 1px solid var(--line); font-size: 12.5px; line-height: 1.4; color: var(--text-2); }
+.size-line b { color: var(--text); } .size-line svg { flex: none; color: var(--text-3); }
+.size-line.warn { border-color: color-mix(in srgb, var(--warn) 45%, transparent); } .size-line.warn svg { color: var(--warn); }
+.size-line.bad { border-color: color-mix(in srgb, var(--danger) 55%, transparent); } .size-line.bad svg { color: var(--danger); }
+.export-est b { color: var(--text); font-weight: 600; }
+
+/* Media: two shelves (this project / library), remove button on cards */
+.media-scopes { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 6px; }
+.media-scopes button { display: flex; align-items: center; gap: 7px; height: 36px; padding: 0 10px; border-radius: 9px; border: 1px solid var(--line); background: var(--bg-2); color: var(--text-2); cursor: pointer; font: inherit; font-size: 12.5px; }
+.media-scopes button b { font-weight: 600; flex: 1; text-align: left; } .media-scopes button small { color: var(--text-3); font-variant-numeric: tabular-nums; }
+.media-scopes button:hover { border-color: var(--line-2); color: var(--text); }
+.media-scopes button.on { border-color: var(--accent); background: var(--accent-soft); color: var(--text); } .media-scopes button.on svg { color: var(--accent); }
+.media-scope-note { margin: 0 0 8px; }
+.asset-tools .select { flex: none; width: auto; max-width: 132px; }
+.filter-chips .btn { margin-left: auto; }
+.rm-btn { position: absolute; left: 5px; top: 5px; width: 24px; height: 24px; border-radius: 7px; border: 0; background: rgba(11, 12, 16, .78); color: #fff; display: grid; place-items: center; cursor: pointer; opacity: 0; transform: scale(.85); transition: opacity .12s, transform .12s, background .12s; z-index: 2; }
+.media-card:hover .rm-btn, .media-card:focus-visible .rm-btn, .rm-btn:focus-visible { opacity: 1; transform: none; } .rm-btn:hover { background: var(--danger); }
+.badge.inproj { left: 5px; bottom: 5px; font-size: 10px; }

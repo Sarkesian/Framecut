@@ -3,9 +3,9 @@
 import { signal, effect } from '@preact/signals';
 import { api, waitJob, native } from './api.js';
 import { project, commit, time, toast, media, asset, player, refreshMedia, prefs, playing } from './state.js';
-import { newClip, clipEnd, projectDuration } from '../../shared/model.mjs';
+import { newClip, projectDuration } from '../../shared/model.mjs';
 import { assessRights, recordAttribution } from '../../shared/rights.mjs';
-import { freeTrack, addTrack, trackOf, overlaps } from './edit.js';
+import { addTrack, trackOf, overlaps } from './edit.js';
 import { activeOutput } from '../audio/devices.js';
 import { shortTime } from './format.js';
 
@@ -16,16 +16,26 @@ export const libStatus = signal(null);
 export const busyKeys = signal(new Map()); // key -> progress 0..1 (or null = indeterminate)
 export const selectedRecord = signal(null); // detail drawer
 
-const blank = () => ({ q: '', length: '', source: '', category: '', collection: '', browseQuery: '', browseTitle: '', browseAll: false, sort: 'relevance', results: [], page: 0, pages: 0, total: 0, status: 'idle', error: null, scroll: 0 });
+const blank = () => ({ q: '', length: '', source: '', category: '', collection: '', lens: '', browseQuery: '', browseTitle: '', browseAll: false, sort: 'relevance', results: [], page: 0, pages: 0, total: 0, status: 'idle', error: null, scroll: 0 });
 export const searches = { music: signal(blank()), sfx: signal(blank()), memes: signal({ ...blank(), collection: 'popular' }), fluent: signal(blank()), stickers: signal(blank()) };
 // Music, sound effects and the sticker search ask every free source at once ('all'); the server merges
 // them. The Animated tab browses Fluent Emoji only. Picking a source in the filter narrows to it.
 const PROVIDER = { music: 'all', sfx: 'all', memes: 'myinstants', fluent: 'fluent', stickers: 'all' };
 const KIND = { music: 'music', sfx: 'sfx', memes: 'sfx', fluent: 'sticker', stickers: 'sticker' };
-const OWN_SOURCES = ['ccmixter', 'sfxkit', 'sfxmint', 'archive', 'pixabay', 'openverse', 'fluent']; // source filter values that are whole providers
+const OWN_SOURCES = ['incompetech', 'ccmixter', 'sfxkit', 'sfxmint', 'archive', 'pixabay', 'openverse', 'fluent']; // source filter values that are whole providers
 // Category browsing (no search words) is answered by the source that owns the categories.
 const CATEGORY_PROVIDER = { sfx: 'sfxkit', fluent: 'fluent' };
 
+// Which licenses the music views show. The default includes music that asks for a credit (CC BY): that is where
+// almost all finished music is, and FrameCut writes the credit and checks it again at export. Sound effects stay
+// on "no credit needed", where the choice is already wide. The user's pick is remembered.
+export function includeFor(panel, cur = searches[panel]?.value) {
+  if (cur?.include) return cur.include;
+  if (panel !== 'music') return 'free';
+  try { const v = localStorage.getItem('fc:music-include'); if (['free', 'credit', 'all'].includes(v)) return v; } catch {}
+  return 'credit';
+}
+export function setMusicInclude(v, patch = {}) { try { localStorage.setItem('fc:music-include', v); } catch {} search('music', { include: v, ...patch }, { now: true }); }
 export const usageMode = () => (project.value?.usageMode === 'personal' ? 'personal' : 'commercial');
 export function setUsageMode(mode) {
   commit('Usage: ' + (mode === 'personal' ? 'personal' : 'commercial'), p => { p.usageMode = mode; });
@@ -33,16 +43,6 @@ export function setUsageMode(mode) {
 }
 export const rightsOf = rec => assessRights({ provider: rec.provider, license: rec.license, licenseVersion: rec.licenseVersion, kind: rec.kind, usage: usageMode(), verification: rec.licenseRecord || rec.licenseCheck || null });
 
-// Category lists of sources that have them (SFX Kit, Fluent), loaded once.
-export const categories = signal({});
-const categoryFlights = new Map();
-export async function loadCategories(provider) {
-  if (categories.value[provider]) return;
-  if (categoryFlights.has(provider)) return categoryFlights.get(provider);
-  const flight = api('/api/creative/categories?provider=' + provider).then(items => { categories.value = { ...categories.value, [provider]: items }; }).catch(() => {}).finally(() => categoryFlights.delete(provider));
-  categoryFlights.set(provider, flight); return flight;
-}
-export const warmSources = kind => api('/api/creative/warm?kind=' + kind).catch(() => {});
 export async function loadStatus() { try { libStatus.value = await api('/api/creative/status'); } catch {} return libStatus.value; }
 
 // ----- search -----
@@ -71,9 +71,10 @@ async function runSearch(panel, more, retried = false, revision = revisions[pane
   const page = more ? cur.page + 1 : 1;
   s.value = { ...cur, status: more ? 'more' : 'loading', error: null };
   const own = OWN_SOURCES.includes(cur.source);
-  const provider = panel === 'memes' ? 'myinstants' : stickerBrowse && !cur.source ? 'fluent' : own ? cur.source : cur.category && CATEGORY_PROVIDER[panel] ? CATEGORY_PROVIDER[panel] : cur.source ? 'openverse' : PROVIDER[panel];
-  const effectiveQuery = q || (panel === 'music' ? cur.browseAll ? '' : cur.browseQuery || 'ambient' : panel === 'sfx' && !cur.category && !['sfxkit', 'sfxmint'].includes(cur.source) ? cur.browseQuery || 'whoosh' : '');
-  const params = new URLSearchParams({ provider, kind: KIND[panel], q: effectiveQuery, page: String(page), usage: usageMode(), include: cur.include || 'free', length: cur.length, source: own ? '' : cur.source, category: cur.category, ...(stickerBrowse || panel === 'memes' ? { collection: cur.collection } : {}), ...(audioBrowse && provider === 'all' ? { deadline: '2500' } : {}) });
+  const shelf = /^fx:/.test(cur.category); // a sound-effect category that every source helps fill
+  const provider = panel === 'memes' ? 'myinstants' : stickerBrowse && !cur.source ? 'fluent' : own ? cur.source : shelf ? 'all' : cur.category && CATEGORY_PROVIDER[panel] ? CATEGORY_PROVIDER[panel] : cur.source ? 'openverse' : PROVIDER[panel];
+  const effectiveQuery = q || (panel === 'music' ? cur.browseAll ? '' : cur.browseQuery || '' : panel === 'sfx' && !cur.category && !['sfxkit', 'sfxmint'].includes(cur.source) ? cur.browseQuery || 'whoosh' : '');
+  const params = new URLSearchParams({ provider, kind: KIND[panel], q: effectiveQuery, page: String(page), usage: usageMode(), include: includeFor(panel, cur), length: cur.length, source: own ? '' : cur.source, category: cur.category, ...(panel === 'music' && !q && !cur.browseAll && cur.lens ? { lens: cur.lens } : {}), ...(stickerBrowse || panel === 'memes' ? { collection: cur.collection } : {}), ...(audioBrowse && provider === 'all' ? { deadline: '4000' } : {}) });
   try {
     const r = await fetch('/api/creative/search?' + params, { signal: ctl.signal }); const d = await r.json();
     if (!r.ok) throw Object.assign(Error(d.error), { code: d.code, retryAfter: d.retryAfter });
@@ -118,21 +119,43 @@ let audioEl = null, recordingCheck = () => false, raf = 0;
 export const setRecordingCheck = fn => { recordingCheck = fn; };
 const tick = () => { cancelAnimationFrame(raf); if (!audioEl || audioEl.paused || !preview.value.key) return; previewTime.value = audioEl.currentTime; raf = requestAnimationFrame(tick); };
 const patch = x => { if (preview.value.key) preview.value = { ...preview.value, ...x }; };
-export function stopPreview() { cancelAnimationFrame(raf); if (audioEl) { audioEl.pause(); audioEl.removeAttribute('src'); audioEl.load(); } preview.value = { key: null, state: 'idle', d: 0, title: '' }; previewTime.value = 0; }
+export function stopPreview() { cancelAnimationFrame(raf); clearTimeout(watchdog); previewRec = null; if (audioEl) { audioEl.pause(); audioEl.removeAttribute('src'); audioEl.load(); } preview.value = { key: null, state: 'idle', d: 0, title: '' }; previewTime.value = 0; }
 export function pausePreview() { if (audioEl && preview.value.key && !audioEl.paused) audioEl.pause(); }
 const previewUrl = rec => `/api/creative/preview/${rec.provider}/${encodeURIComponent(rec.sourceId)}`;
 // The player gave up on a preview. Formats it cannot decode (or that the source labels wrongly) are tried once
 // more as MP3, converted by FrameCut; if that fails too, the message says what actually went wrong.
-async function previewFailed() {
-  const key = preview.value.key, src = audioEl.getAttribute('src') || ''; if (!key) return;
-  if (src.startsWith('/api/creative/preview/') && !src.includes('as=mp3')) {
-    patch({ state: 'loading' }); audioEl.src = src + (src.includes('?') ? '&' : '?') + 'as=mp3';
-    audioEl.play().catch(() => {}); return;
+const DEAD_CODES = ['gone', 'forbidden', 'type', 'corrupt'];
+let previewRec = null, watchdog = 0;
+// A preview that shows "loading" with nothing arriving for this long is treated as failed instead of spinning on.
+const armWatchdog = () => { clearTimeout(watchdog); watchdog = setTimeout(() => { if (preview.value.key && preview.value.state === 'loading') previewFailed({ stalled: true }); }, 30000); };
+async function previewFailed({ stalled = false } = {}) {
+  clearTimeout(watchdog);
+  const key = preview.value.key, rec = previewRec, src = audioEl.getAttribute('src') || ''; if (!key) return;
+  const proxied = rec?.provider && rec.sourceId ? previewUrl(rec) : null;
+  if (!stalled) {
+    // Played straight from its source (a direct address) and that failed: fetch it through FrameCut instead.
+    if (proxied && !src.startsWith('/api/creative/preview/') && src === rec.previewUrl) { patch({ state: 'loading' }); audioEl.src = proxied; armWatchdog(); audioEl.play().catch(() => {}); return; }
+    // Formats the player cannot decode (or that the source labels wrongly) are tried once more as MP3.
+    if (src.startsWith('/api/creative/preview/') && !src.includes('as=mp3')) { patch({ state: 'loading' }); audioEl.src = src + (src.includes('?') ? '&' : '?') + 'as=mp3'; armWatchdog(); audioEl.play().catch(() => {}); return; }
   }
-  let why = 'The file may be unavailable right now.';
-  if (src.startsWith('/api/creative/preview/')) try { const ctl = new AbortController(), r = await fetch(src.replace(/[?&]as=mp3/, ''), { signal: ctl.signal }); if (!r.ok) { const d = await r.json().catch(() => null); throw Object.assign(Error(d?.error || `The source answered ${r.status}.`), { code: d?.code, retryAfter: d?.retryAfter }); } ctl.abort(); why = 'It is in a format FrameCut cannot play. You can still add it to the timeline.'; } catch (e) { why = e.code === 'offline' ? 'You appear to be offline.' : e.code === 'gone' ? 'It is no longer available from its source.' : e.code === 'quota' ? `The source is busy — try again in ${e.retryAfter || 60} seconds.` : e.message; }
+  const title = `“${preview.value.title || 'This preview'}”`;
+  let message = stalled ? `${title} is taking too long to start. Its source is slow or not answering right now; try again in a moment.` : `${title} can’t be played right now. The file may be unavailable.`, code = null;
+  // Ask FrameCut why: the answer says what happened at the source (gone, refused, rate limit, offline) and what to do.
+  if (!stalled && src.startsWith('/api/creative/preview/')) try {
+    const ctl = new AbortController(), r = await fetch(src.replace(/[?&]as=mp3/, ''), { signal: ctl.signal });
+    if (!r.ok) { const d = await r.json().catch(() => null); message = d?.error || message; code = d?.code || null; }
+    else { ctl.abort(); message = `${title} is in a format the preview player can’t play. You can still add it to the timeline.`; }
+  } catch { if (navigator.onLine === false) message = `${title} can’t be played: you appear to be offline.`; }
+  if (DEAD_CODES.includes(code)) markUnavailable(key, message);
   if (preview.value.key !== key) return;
-  toast(`“${preview.value.title || 'This preview'}” could not be played. ${why}`, 'warn', { timeout: 8000 }); stopPreview();
+  toast(message, 'warn', { timeout: 9000 }); stopPreview();
+}
+// An item whose file is gone or refused is greyed out wherever it is listed, with the reason, so it isn't tried again.
+function markUnavailable(key, message) {
+  const flag = x => (x.key === key ? { ...x, unavailable: message } : x);
+  for (const k of Object.keys(searches)) { const s = searches[k]; if (s.value.results.some(x => x.key === key)) s.value = { ...s.value, results: s.value.results.map(flag) }; }
+  const l = lists.value; lists.value = { audio: { favorites: l.audio.favorites.map(flag), recents: l.audio.recents.map(flag) }, sticker: { favorites: l.sticker.favorites.map(flag), recents: l.sticker.recents.map(flag) } };
+  if (selectedRecord.value?.key === key) selectedRecord.value = { ...selectedRecord.value, unavailable: message };
 }
 // Pointing at a result starts fetching its preview, so the click that follows plays almost at once.
 let warmTimer, warmed = new Set();
@@ -150,21 +173,23 @@ export async function togglePreview(rec) {
     return;
   }
   if (recordingCheck()) return toast('Previews are paused while you record, so nothing leaks into your microphone.', 'warn');
+  if (rec.unavailable) return toast(rec.unavailable, 'warn', { timeout: 8000 });
   if (!audioEl) {
     audioEl = new Audio(); audioEl.preload = 'auto';
     audioEl.addEventListener('loadedmetadata', () => { if (Number.isFinite(audioEl.duration)) patch({ d: audioEl.duration }); });
-    audioEl.addEventListener('playing', () => { patch({ state: 'playing' }); tick(); });
+    audioEl.addEventListener('playing', () => { clearTimeout(watchdog); patch({ state: 'playing' }); tick(); });
+    audioEl.addEventListener('progress', () => { if (preview.value.state === 'loading') armWatchdog(); });
     audioEl.addEventListener('pause', () => { if (preview.value.key && audioEl.getAttribute('src')) { patch({ state: 'paused' }); previewTime.value = audioEl.currentTime; } });
-    audioEl.addEventListener('waiting', () => patch({ state: 'loading' }));
+    audioEl.addEventListener('waiting', () => { patch({ state: 'loading' }); armWatchdog(); });
     audioEl.addEventListener('seeked', () => { previewTime.value = audioEl.currentTime; });
     audioEl.addEventListener('ended', stopPreview);
-    audioEl.addEventListener('error', previewFailed);
+    audioEl.addEventListener('error', () => previewFailed());
   }
   player.current?.pause();
   audioEl.pause();
   audioEl.removeAttribute('src'); audioEl.load();
   const key = rec.key;
-  preview.value = { key, state: 'loading', d: (rec.durationMs || 0) / 1000, title: rec.title || '' }; previewTime.value = 0;
+  preview.value = { key, state: 'loading', d: (rec.durationMs || 0) / 1000, title: rec.title || '' }; previewTime.value = 0; previewRec = rec; armWatchdog();
   const sink = activeOutput.value && activeOutput.value !== 'default' ? activeOutput.value : '';
   if (audioEl.setSinkId) await audioEl.setSinkId(sink).catch(() => {});
   if (preview.value.key !== key) return; // another item was clicked while switching outputs
@@ -186,18 +211,22 @@ export async function obtain(rec) {
   if (rec.imported && asset(rec.imported) && !asset(rec.imported).missing) return asset(rec.imported);
   const r = rights(rec);
   if (r.blocked) { toast(r.summary + (r.badge === 'Non-commercial' ? ' Switch the project to personal use if this is a non-commercial video.' : ''), 'warn', { timeout: 9000 }); return null; }
+  if (rec.unavailable) { toast(rec.unavailable, 'warn', { timeout: 9000 }); return null; }
   if (busyKeys.value.has(rec.key)) return null;
-  setBusy(rec.key, null);
+  setBusy(rec.key, null); let last = null;
   // Adding from the library downloads the file first; say so, since a long track can take a moment.
   toast(`Downloading “${rec.title}”… it is added as soon as it arrives.`, 'info', { timeout: 3500 });
   try {
     const res = await api('/api/creative/import', { provider: rec.provider, id: rec.sourceId, kind: rec.kind, usage: usageMode(), ...(rec.provider === 'myinstants' ? { acknowledgeUnknownRights: true } : {}) });
-    const out = res.asset || (await waitJob(res.job, p => setBusy(rec.key, p))).asset;
+    const out = res.asset || (await waitJob(res.job, (p, _message, job) => { setBusy(rec.key, p); last = job; })).asset;
     const m = new Map(media.value); m.set(out.id, out); media.value = m;
     markImported(rec.key, out.id); loadLists();
     return out;
   } catch (e) {
-    if (!e.cancelled) toast(friendly(e, rec), 'error', { timeout: 9000 });
+    // A failed job ends with a full sentence from FrameCut (what happened, what to do) and a reason code.
+    const failure = last?.status === 'failed' ? last.meta?.failure : null;
+    if (failure?.dead) markUnavailable(rec.key, e.message);
+    if (!e.cancelled) toast(failure ? e.message : friendly(e, rec), failure?.code === 'quota' ? 'warn' : 'error', { timeout: 10000 });
     return null;
   } finally { setBusy(rec.key); }
 }
@@ -310,5 +339,3 @@ export async function balanceClip(clipId) {
     toast(`Balanced to ${target} LUFS${voice ? ' so your voice stays clear' : ''}.`);
   } catch (e) { toast('Auto balance could not measure this track: ' + e.message, 'warn'); }
 }
-export const clipsUsing = id => project.value?.clips.filter(c => c.mediaId === id).length || 0;
-export const endOf = c => clipEnd(c);

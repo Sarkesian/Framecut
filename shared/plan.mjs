@@ -152,13 +152,27 @@ export function buildPlan(project, { W, H, media = () => null, sizes = () => nul
     if (c.kind === 'text' && c.style?.highlight && c.words?.length) L.variants = c.words.map((w, i) => ({ key: 'w' + i, from: c.start + w.start, to: i + 1 < c.words.length ? c.start + c.words[i + 1].start : clipEnd(c) }));
     return L;
   };
+  // Blurred canvas background: every video and photo, on any track, fills the frame behind everything with
+  // a blurred copy of itself. Where several are on screen at once the lowest track's copy is the one seen,
+  // so backdrops are stacked top track first; one a lower track hides for its whole time is left out.
+  if (bg.type === 'blur') {
+    const hidden = (spans, a, b) => { let at = a; for (const [s, e] of spans.slice().sort((x, y) => x[0] - y[0])) { if (s > at + 1e-6) break; at = Math.max(at, e); } return at >= b - 1e-6; };
+    const below = [], backdrops = [];
+    for (const track of visualTracks) {
+      if (track.hidden) continue;
+      const own = [], spans = [];
+      for (const c of byTrack(track.id)) if (c.kind === 'video' || c.kind === 'image') {
+        const m = M(c.id), a = media(c.mediaId) || {}; spans.push([m.vs, m.ve]);
+        if (hidden(below, m.vs, m.ve)) continue;
+        own.push({ id: c.id + ':bg', type: 'bgblur', clip: c, trackId: track.id, vs: m.vs, ve: m.ve, mediaId: c.mediaId, image: c.kind === 'image', srcDuration: a.duration || 0, blur: fx.blurSigma(Math.min(1, (bg.blur || 24) / 60), H) * 1.6, fades: [], steps: [], motion: { x: null, y: null, s: null, r: null } });
+      }
+      below.push(...spans); backdrops.unshift(own);
+    }
+    layers.push(...backdrops.flat());
+  }
   for (const track of visualTracks) {
     if (track.hidden) continue;
     const clips = byTrack(track.id);
-    if (track.main && bg.type === 'blur') for (const c of clips) if (c.kind === 'video' || c.kind === 'image') {
-      const m = M(c.id), a = media(c.mediaId) || {};
-      layers.push({ id: c.id + ':bg', type: 'bgblur', clip: c, trackId: track.id, vs: m.vs, ve: m.ve, mediaId: c.mediaId, image: c.kind === 'image', srcDuration: a.duration || 0, blur: fx.blurSigma(Math.min(1, (bg.blur || 24) / 60), H) * 1.6, fades: [], steps: [], motion: { x: null, y: null, s: null, r: null } });
-    }
     for (const c of clips) {
       if (isCaption(c)) { layers.push(...captionLayers(c, track)); continue; }
       layers.push(mediaLayer(c, track));

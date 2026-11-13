@@ -10,7 +10,7 @@ test('Original Jamendo music has an explicit licensed view; CC0 stays default an
  const queries=[];const p=new Openverse({http:{json:async url=>{queries.push(new URL(url));return{results:[{id:'original',title:'Lo-fi Love Song',url:'https://example.org/song.mp3',creator:'Composer',foreign_landing_url:'https://example.org/song',source:'jamendo',license:'by-sa',license_version:'4.0',license_url:'https://creativecommons.org/licenses/by-sa/4.0/',duration:180000,filetype:'mp3'}],result_count:1,page_count:1,page:1};}}});
  await assert.rejects(p.search({kind:'music',source:'jamendo'}),/outside the CC0/);
  const r=await p.search({kind:'music',source:'jamendo',include:'all'});assert.equal(r.items.length,1);assert.equal(r.items[0].license,'by-sa');assert.equal(queries[0].searchParams.get('source'),'jamendo');
- await p.search({kind:'music',include:'credit'});assert.equal(queries[1].searchParams.get('source'),'freesound,jamendo');
+ await p.search({kind:'music',include:'credit'});assert.equal(queries[1].searchParams.get('source'),'jamendo','credited music comes from the song catalog, not field recordings');
 });
 test('Music ranking never deletes eligible records based on sparse tags or title guesses; invalid licenses stay excluded',async()=>{
  const row=(n,title,duration,tags=[],extra={})=>({id:String(n),title,duration,tags:tags.map(name=>({name})),url:'https://example.org/'+n+'.mp3',foreign_landing_url:'https://example.org/track/'+n,source:'freesound',license:'cc0',license_version:'1.0',license_url:cc0,filetype:'mp3',...extra});
@@ -22,7 +22,7 @@ test('Music ranking never deletes eligible records based on sparse tags or title
 test('Every genre retains eligible sparse metadata on every requested page, with explicit techno navigation',async()=>{
  const p=new Openverse({http:{json:async url=>{const u=new URL(url),page=+u.searchParams.get('page'),q=u.searchParams.get('q');return{results:[{id:q+'-'+page,title:'Untitled 2020 session',url:'https://example.org/'+page+'.mp3',foreign_landing_url:'https://example.org/track/'+page,source:'freesound',license:'cc0',license_version:'1.0',license_url:cc0,duration:60000,filetype:'mp3',tags:[]}],result_count:40,page_count:2,page};}}});
  for(const genre of AUDIO_DISCOVERY.genres)for(const page of [1,2]){p.window=[];const r=await p.search({q:genre[2],kind:'music',page});assert.equal(r.items.length,1,genre[1]+' page '+page);}
- for(const id of ['techno','trance','house','edm','dnb','dubstep','synthwave','chiptune'])assert.ok(AUDIO_DISCOVERY.genres.some(g=>g[0]===id));
+ for(const id of ['techno','trance','house','edm','dnb','dubstep','chiptune'])assert.ok(AUDIO_DISCOVERY.genres.some(g=>g[0]===id));
  assert.equal(AUDIO_DISCOVERY.genres.find(g=>g[0]==='hiphop')[2],'hip hop','do not add an unnecessary AND term');
 });
 test('Audio relevance distinguishes musical evidence from spoken recordings; comedy is discoverable',()=>{

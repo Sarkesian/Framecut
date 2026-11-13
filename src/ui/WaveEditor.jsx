@@ -2,7 +2,7 @@
 // trim or adjust volume. Every operation is non-destructive (splits, trims and volume keyframes).
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { Scissors, Trash2, VolumeX, Crop, Play, Pause, ZoomIn, ZoomOut, Minus, Plus } from 'lucide-preact';
-import { project, primary, time, player, commit, toast, asset, selection, playing } from '../lib/state.js';
+import { primary, time, player, commit, toast, asset, selection, playing } from '../lib/state.js';
 import { splitAt } from '../lib/edit.js';
 import { clipEnd, uid } from '../../shared/model.mjs';
 import { keyGain } from '../../shared/audio.mjs';

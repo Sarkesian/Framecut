@@ -3,7 +3,7 @@
 // optional registered-app credentials. Anonymous access is limited to 20 requests/minute and
 // 200/day, so results are cached and the client throttles itself before Openverse has to.
 const { licenseFilter, assessRights, verifyLicense, includeMode } = require('../../shared/rights.mjs');
-const { musicEvidence, canonicalAudioUrl } = require('../../shared/audio-library.mjs');
+const { musicEvidence, canonicalAudioUrl, lensById } = require('../../shared/audio-library.mjs');
 const { isWikimediaRecord, assertSourceAllowed } = require('./blocked-sources.cjs');
 
 const API = 'https://api.openverse.org/v1';
@@ -51,9 +51,11 @@ class Openverse {
       throw e;
     }
   }
-  async search({ q = '', kind = 'music', page = 1, usage = 'commercial', length, source, pageSize = 20, include = 'free' }) {
+  async search({ q = '', kind = 'music', page = 1, usage = 'commercial', length, source, pageSize = 20, include = 'free', lens = '' }) {
     assertSourceAllowed({ source });
     include = includeMode(include);
+    // A browsing lens asks the song catalog for the plain genre word ("blues"): "blues music" matches no titles there.
+    const L = kind === 'music' && lens && include !== 'free' ? lensById(lens) : null; if (L) q = L.ov || L.query.replace(/ music$/, '');
     const params = new URLSearchParams({ q: String(q).slice(0, 200), page: String(Math.max(1, Math.min(50, page | 0 || 1))), page_size: String(pageSize), license: licenseFilter(usage, kind, include).join(','), mature: 'false' });
     let path = '/audio/?', minMs = 0;
     if (kind === 'sticker') {
@@ -63,10 +65,13 @@ class Openverse {
     } else if (kind === 'sfx') params.set('source', SOURCES[source] ? source : 'freesound');
     // Openverse's category field is reliable for music (Jamendo) but empty for most Freesound sounds.
     else if (include === 'free') {
-      if (source === 'jamendo') throw Object.assign(Error('Jamendo’s original music is outside the CC0-only view. Choose All usable licenses to browse it; credits and other terms may apply.'), { code: 'license' });
+      if (source === 'jamendo') throw Object.assign(Error('Jamendo’s original music is outside the CC0-only view. Choose a view that includes credited music to browse it.'), { code: 'license' });
       params.set('source', SOURCES[source] ? source : FREE_MUSIC_SOURCES); minMs = FREE_MUSIC_MIN_MS;
     } else {
-      params.set('source', SOURCES[source] ? source : 'freesound,jamendo');
+      // With credited music allowed, the music source is Jamendo (finished songs). Freesound is left to the
+      // sound-effect searches and the CC0-only view: asked for "rock" it answers with waves on rocks
+      // (9 of 10 results when checked on 11 November 2026), which buried the songs.
+      params.set('source', SOURCES[source] ? source : 'jamendo');
       if (source === 'jamendo') params.set('category', 'music');
     }
     const data = await this.call(path + params);

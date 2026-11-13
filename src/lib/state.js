@@ -24,7 +24,19 @@ export const transitionSel = signal(null);
 export const transitionHover = signal(null);
 // Id of a project look being tried out: the viewer shows the project with it on, the project itself is untouched.
 export const lookPick = signal(null);
+// True while the viewer is looping a range (a transition preview). Set by the player; any pause ends it.
+export const previewLoop = signal(false);
+// An effect being tried out before it is applied: { id, params, clipIds }. With clipIds it is shown on those
+// clips, without it as a layer over the whole frame. The viewer draws it; the project is untouched.
+export const effectPick = signal(null);
 effect(() => { if (selection.value.length && transitionSel.peek()) transitionSel.value = null; });
+// A selected transition always exists: undo, deleting a clip or moving it away deselects it.
+effect(() => {
+  const id = transitionSel.value, p = project.value; if (!id) return;
+  if (!p || !p.clips.some(c => c.id === id && c.transition)) transitionSel.value = null;
+});
+// Nothing selected at all: clips, a transition, keyframes are cleared by their own modules listening here.
+export function clearSelection() { batch(() => { if (selection.peek().length) selection.value = []; if (transitionSel.peek()) transitionSel.value = null; }); }
 // Whatever changed the project (an edit, undo, redo, a refused drop), the selection only ever names clips that exist.
 effect(() => {
   const p = project.value; if (!p) return; const sel = selection.peek(); if (!sel.length) return;
@@ -77,7 +89,7 @@ export function commit(label, fn, { key = null, select, window: win = 1200 } = {
     history.value = { past: merge ? h.past : [...h.past.slice(-149), { project: prev, label, selection: selection.value }], future: [] };
     project.value = draft;
     if (select) selection.value = select;
-    else selection.value = selection.value.filter(id => draft.clips.some(c => c.id === id));
+    else { const sel = selection.value; if (sel.length) { const ids = new Set(draft.clips.map(c => c.id)); if (!sel.every(id => ids.has(id))) selection.value = sel.filter(id => ids.has(id)); } }
   });
   scheduleSave();
   player.current?.invalidate();
@@ -151,11 +163,21 @@ export function toast(text, kind = 'info', { action, timeout } = {}) {
 }
 export const dismissToast = id => { toasts.value = toasts.value.filter(t => t.id !== id); };
 
+// The library is polled while background work runs. An asset that has not changed keeps its object, and a
+// poll that changed nothing leaves the map alone, so the timeline, the panels and the player's plan are only
+// redone when something really is different.
+const assetJson = new WeakMap();
+const jsonOf = a => { let s = assetJson.get(a); if (s === undefined) assetJson.set(a, s = JSON.stringify(a)); return s; };
 export async function refreshMedia() {
-  const list = await api('/api/media');
-  media.value = new Map(list.map(a => [a.id, a]));
+  const list = await api('/api/media'), prev = media.peek();
+  let same = prev.size === list.length; const next = new Map();
+  for (const a of list) { const old = prev.get(a.id), keep = old && jsonOf(old) === jsonOf(a) ? old : a; if (keep !== old) same = false; next.set(a.id, keep); }
+  if (!same) media.value = next;
   return list;
 }
+// Background jobs, polled the same way: unchanged lists do not re-render their readers.
+let jobsJson = '[]';
+export function setJobs(list) { const s = JSON.stringify(list); if (s !== jobsJson) { jobsJson = s; jobs.value = list; } }
 // Files being imported right now: the Media panel shows a progress bar instead of a pop-up.
 export const importing = signal(0);
 export async function trackImport(count, fn) { importing.value += count; try { return await fn(); } finally { importing.value = Math.max(0, importing.value - count); } }

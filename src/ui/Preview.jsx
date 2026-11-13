@@ -2,16 +2,16 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { Play, Pause, SkipBack, SkipForward, Maximize, ChevronDown, Grid2x2, Magnet, Lock, AlignStartVertical, AlignCenterVertical, AlignEndVertical, AlignStartHorizontal, AlignCenterHorizontal, AlignEndHorizontal, AlignHorizontalDistributeCenter, AlignVerticalDistributeCenter, RotateCcw, LockOpen, Crosshair } from 'lucide-preact';
-import { project, media, time, playing, player, selection, primary, commit, toast, duration, asset, transitionHover, lookPick } from '../lib/state.js';
+import { project, media, time, playing, player, selection, primary, commit, toast, duration, asset, transitionHover, lookPick, previewLoop, clearSelection, effectPick } from '../lib/state.js';
 import { SocialOverlay, SocialButton } from './SocialOverlay.jsx';
 import { Player, rasterReady } from '../engine/player.js';
 import { dimensions, RATIOS } from '../../shared/model.mjs';
 import { propValue, writeProp } from '../../shared/keys.mjs';
-import { TEXT_STYLE, CAPTION_STYLE } from '../../shared/catalog.mjs';
+import { TEXT_STYLE, CAPTION_STYLE, EFFECTS } from '../../shared/catalog.mjs';
 import { viewportTargets, snapBox } from '../../shared/snap.mjs';
 import { openMenu } from './kit.jsx';
 import { timecode } from '../lib/format.js';
-import { addAssets, addText, addSticker, applyEffect, applyFilter, setClipText, appendToText } from '../lib/edit.js';
+import { addAssets, addText, addSticker, applyEffect, applyFilter, setClipText, appendToText, withEffectPreview } from '../lib/edit.js';
 import { beginDrag } from '../lib/drag.js';
 import { ui, setUi } from '../lib/uiprefs.js';
 import { layerBox, visibleLayers, selectedLayers, canMove, align, resetProps, toggleLock } from '../lib/viewport.js';
@@ -41,11 +41,11 @@ export function Preview() {
   const shown = withLookPreview(p), trying = previewedLook(p);
   const [W, H] = dimensions(shown.settings.ratio, shown.settings.resolution);
   useEffect(() => {
-    const pl = new Player({ canvas: canvas.current, getProject: () => withLookPreview(withHoveredTransition(project.value)), getMedia: id => media.value.get(id), onTime: t => (time.value = t), onPlaying: v => (playing.value = v), onError: m => toast(m, 'warn') });
+    const pl = new Player({ canvas: canvas.current, getProject: () => withEffectPreview(withLookPreview(withHoveredTransition(project.value))), getMedia: id => media.value.get(id), onTime: t => (time.value = t), onPlaying: v => (playing.value = v), onRange: v => (previewLoop.value = v), onError: m => toast(m, 'warn') });
     player.current = pl; pl.seek(time.value);
-    return () => { pl.destroy(); player.current = null; };
+    return () => { pl.destroy(); player.current = null; previewLoop.value = false; };
   }, []);
-  useEffect(() => { player.current?.invalidate(); }, [media.value, transitionHover.value, lookPick.value]);
+  useEffect(() => { player.current?.invalidate(); }, [media.value, transitionHover.value, lookPick.value, effectPick.value, effectPick.value && selection.value]);
   // Fit the canvas into the available area at the project's aspect ratio.
   useEffect(() => {
     const ro = new ResizeObserver(() => { const r = wrap.current.getBoundingClientRect(); setBox({ w: r.width, h: r.height }); });
@@ -59,6 +59,11 @@ export function Preview() {
     const c = canvas.current; const tw = Math.min(W, Math.round(cw * dpr)), th = Math.round(tw * H / W);
     if (c.width !== tw || c.height !== th) { c.width = tw; c.height = th; player.current?.requestDraw(); }
   }, [cw, ch, W, H]);
+  // A frame zoomed past the available area scrolls. Open it on its middle: left at the top-left corner, a
+  // photo that doesn't fill the frame showed nothing but the empty canvas around it (a black viewer).
+  useLayoutEffect(() => {
+    const el = wrap.current; el.scrollLeft = (el.scrollWidth - el.clientWidth) / 2; el.scrollTop = (el.scrollHeight - el.clientHeight) / 2;
+  }, [cw, ch]);
   const onDrop = e => {
     e.preventDefault(); setOver(false);
     const d = window.__fcDrag; window.__fcDrag = null; if (!d) return;
@@ -72,7 +77,7 @@ export function Preview() {
     if (onText) appendToText(onText.id, d.sticker.value);
     else if (d.type === 'sticker') addSticker(d.sticker, { pos });
     if (d.type === 'library') d.drop({ pos });
-    if (d.type === 'effect') applyEffect(d.id);
+    if (d.type === 'effect') { effectPick.value = null; applyEffect(d.id); }
     if (d.type === 'filter') applyFilter(d.id, d.name);
     if (d.type === 'textTemplate') addTextTemplate(d.tpl || TEXT_TEMPLATES.find(t => t.id === d.id));
   };
@@ -86,7 +91,7 @@ export function Preview() {
       <button class={`icon-btn sm ${safe ? 'on' : ''}`} aria-pressed={safe} data-tip="Safe-area guides (objects also snap to them)" data-kbd="'" onClick={() => setUi({ safeArea: !safe })}><Grid2x2 size={15} /></button>
       <SocialButton />
     </div>
-    <div class={`stage-wrap ${over ? 'drop-over' : ''}`} ref={wrap} onDragOver={e => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)} onDrop={onDrop} onPointerDown={e => { if (e.target === e.currentTarget) { selection.value = []; editing.value = null; } }}>
+    <div class={`stage-wrap ${over ? 'drop-over' : ''}`} ref={wrap} onDragOver={e => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)} onDrop={onDrop} onPointerDown={e => { if (e.target === e.currentTarget) { clearSelection(); editing.value = null; } }}>
       <div class="stage" style={{ width: cw, height: ch }}>
         <canvas ref={canvas} class="stage-canvas" style={{ width: cw, height: ch }} aria-label="Video preview" onPointerDown={e => pickAt(e, cw, ch, W, H)} onContextMenu={e => { pickAt(e, cw, ch, W, H, true); if (selection.value.length) objectMenu(e); }} onDblClick={() => player.current?.toggle()} />
         {safe && <div class="guides"><div class="safe action" /><div class="safe title" /><div class="cross" /></div>}
@@ -94,6 +99,7 @@ export function Preview() {
         <Others cw={cw} W={W} />
         <SnapGuides cw={cw} ch={ch} W={W} />
         <Gizmo cw={cw} ch={ch} W={W} H={H} />
+        {effectPick.value && !trying && <div class="fx-trying" role="status"><b>Preview</b> {EFFECTS.find(x => x.id === effectPick.value.id)?.name} · not applied</div>}
         {trying && <div class="look-veil" onPointerDown={e => e.stopPropagation()}><span><b>Preview</b> {trying.name} · not applied</span></div>}
         {empty && <div class="stage-empty"><b>Your video appears here</b><span>Import media on the left, then drag it to the timeline.</span></div>}
       </div>
@@ -131,7 +137,7 @@ function pickAt(e, cw, ch, W, H, keep = false) {
       return;
     }
   }
-  if (!add && !keep) selection.value = [];
+  if (!add && !keep) clearSelection();
 }
 
 // Right-click menu for objects in the viewer: alignment, distribution, resets and locking.

@@ -15,14 +15,17 @@ const CONSTS = { PI: Math.PI, E: Math.E };
 
 const cache = new Map();
 
+// Sticky patterns match at an exact position, so a long baked expression is tokenized without copying
+// the rest of the string for every token.
+const NUM = /(\d+\.?\d*|\.\d+)(e[+-]?\d+)?/iy, ID = /[A-Za-z_][A-Za-z0-9_]*/y;
 function tokenize(src) {
   const out = []; let i = 0;
   while (i < src.length) {
     const c = src[i];
     if (/\s/.test(c)) { i++; continue; }
-    const num = /^(\d+\.?\d*|\.\d+)(e[+-]?\d+)?/i.exec(src.slice(i));
+    NUM.lastIndex = i; const num = NUM.exec(src);
     if (num) { out.push({ t: 'n', v: +num[0] }); i += num[0].length; continue; }
-    const id = /^[A-Za-z_][A-Za-z0-9_]*/.exec(src.slice(i));
+    ID.lastIndex = i; const id = ID.exec(src);
     if (id) { out.push({ t: 'id', v: id[0] }); i += id[0].length; continue; }
     if ('+-*/^(),'.includes(c)) { out.push({ t: c }); i++; continue; }
     throw Error(`Unexpected "${c}" in expression ${src}`);
@@ -58,7 +61,9 @@ function parse(src) {
 
 export function evaluate(src, vars = {}) {
   if (typeof src === 'number') return src;
-  let fn = cache.get(src); if (!fn) { fn = parse(src); cache.set(src, fn); }
+  // Every edit to an animated clip bakes new expression strings, so the cache is bounded: a long session
+  // of dragging keyframed clips must not keep every expression it ever compiled.
+  let fn = cache.get(src); if (!fn) { fn = parse(src); if (cache.size >= 4000) cache.clear(); cache.set(src, fn); }
   const v = fn(vars); return Number.isFinite(v) ? v : 0;
 }
 

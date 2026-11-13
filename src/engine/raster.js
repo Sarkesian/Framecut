@@ -4,7 +4,7 @@ import { TEXT_STYLE, stickerDef } from '../../shared/catalog.mjs';
 
 const cache = new Map();
 const imageCache = new Map();
-const hexA = (hex, a) => { const m = /^#?([0-9a-f]{6})$/i.exec(hex || ''); const n = m ? parseInt(m[1], 16) : 0; return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`; };
+export const hexA = (hex, a) => { const m = /^#?([0-9a-f]{6})$/i.exec(hex || ''); const n = m ? parseInt(m[1], 16) : 0; return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`; };
 
 export function loadImage(src) {
   if (imageCache.has(src)) return imageCache.get(src);
@@ -138,7 +138,7 @@ export async function exportRasters(project, W, H, media, { captionPresets = [] 
   const { buildPlan } = await import('../../shared/plan.mjs');
   const { renderCaptionBase, renderCaptionWord, ensureFont } = await import('./captionRaster.js');
   const capInfo = new Map();
-  const plan = buildPlan(project, { W, H, media, captionPresets, sizes: (id, info) => {
+  buildPlan(project, { W, H, media, captionPresets, sizes: (id, info) => {
     if (!info?.eff) return null;
     capInfo.set(id, info);
     const r = info.role === 'base' ? renderCaptionBase(info.clip, info.eff, W, H) : renderCaptionWord(info.clip, info.eff, info.word, W, H, info.role);
@@ -150,7 +150,6 @@ export async function exportRasters(project, W, H, media, { captionPresets = [] 
     const r = info.role === 'base' ? renderCaptionBase(info.clip, info.eff, W, H) : renderCaptionWord(info.clip, info.eff, info.word, W, H, info.role); if (!r) continue;
     out[id] = { w: r.w, h: r.h, boxes: r.boxes, words: r.words, png: r.canvas.toDataURL('image/png'), variants: {} };
   }
-  void plan;
   const capTracks = new Set(project.tracks.filter(t => t.captions).map(t => t.id));
   for (const c of project.clips) {
     if (c.kind === 'text' && (c.caption || capTracks.has(c.trackId))) continue;

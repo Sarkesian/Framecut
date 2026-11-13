@@ -5,7 +5,7 @@ import { signal } from '@preact/signals';
 import { Mic, Square, RotateCcw, FileText, Wand2, X, Headphones, Speaker, Usb, Monitor, Pin, PinOff, Volume2, Check, TriangleAlert, Activity, Focus, ChevronDown, Flag, Repeat, Scale, Waves, LoaderCircle, Captions } from 'lucide-preact';
 import { project, player, time, toast, prefs, savePrefs, commit, media, selection, playing, asset } from '../lib/state.js';
 import { api } from '../lib/api.js';
-import { freeTrack, addTrack, trackOf, insertCaptions } from '../lib/edit.js';
+import { freeTrack, trackOf, insertCaptions } from '../lib/edit.js';
 import { alignScript } from '../../shared/script.mjs';
 import { newClip, clipEnd } from '../../shared/model.mjs';
 import { profileFx, AUDIO_PROFILES, duckKeys } from '../../shared/audio.mjs';

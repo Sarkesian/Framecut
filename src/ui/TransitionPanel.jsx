@@ -1,11 +1,10 @@
 // Details panel for a selected transition (click a transition block on the timeline). Takes over the
 // right-hand panel the way a selected clip does. Simple first: pick a type, its direction and length;
 // timing, look and sound controls sit in their own sections below.
-import { Blend, Play, Square, RotateCcw, Trash2, CopyCheck, ArrowLeft, ArrowRight, ArrowUp, ArrowDown } from 'lucide-preact';
-import { signal } from '@preact/signals';
+import { Blend, Play, Square, RotateCcw, Trash2, CopyCheck, ArrowLeft, ArrowRight, ArrowUp, ArrowDown, X, Crosshair } from 'lucide-preact';
 import { ui, setUi } from '../lib/uiprefs.js';
 import { useEffect } from 'preact/hooks';
-import { project, player, time, toast, transitionHover } from '../lib/state.js';
+import { project, player, toast, transitionHover, transitionSel, previewLoop } from '../lib/state.js';
 import { updateClip, removeTransition, transitionToAllCuts } from '../lib/edit.js';
 import { Slider, Segmented, Select, Color, Section } from './kit.jsx';
 import { TRANSITION_FAMILIES, TRANSITION_EASES, TRANSITION_ALIGN, transitionDef, transitionIn, transitionWindow, transitionCaps } from '../../shared/catalog.mjs';
@@ -17,56 +16,63 @@ const DIR_TIP = { left: 'Moves to the left', right: 'Moves to the right', up: 'M
 const LENGTHS = [0.3, 0.5, 0.8, 1, 1.5, 2];
 const clipName = c => (c ? c.name || ({ video: 'Video', image: 'Photo', text: 'Text', sticker: 'Sticker' })[c.kind] || 'Clip' : '');
 
-// While a transition is selected the viewer loops it: from a moment before to a moment after, over and
-// over, following its current length and placement. Pausing, scrubbing or seeking hands control back;
-// hovering a type (or pressing Play) loops again. Deselecting stops and returns the playhead to where it was.
+// Previewing a transition. Nothing plays by itself: selecting a transition (or hovering a type) only shows
+// its settings. "Play preview" loops from a moment before the transition to a moment after it, following
+// its length and placement as they are edited. The loop belongs to the player (player.range): any pause
+// (Space, the transport button, a scrub, the Stop button here) ends it for good, and so does seeking away.
+// Deselecting while it still loops stops it and puts the playhead back where it was.
 // How much of the clips before and after the transition the loop shows is adjustable (ui.trPad, seconds).
-const loopOn = signal(false);
-export const transitionLoop = { start: null, stop: null };
-function useTransitionLoop(clipId) {
-  useEffect(() => {
-    const pl = player.current; if (!pl) return;
-    const t0 = time.value; let mine = false, alive = true, raf = 0;
-    const span = () => {
-      const p = project.value, cl = p.clips.find(x => x.id === clipId); if (!cl?.transition) return null;
-      const d = Math.min(cl.transition.duration || 0.6, Math.max(0.1, maxTransition(p, cl))); const [T0, T1] = transitionWindow(cl, d);
-      const pad = ui.value.trPad ?? 0.5; return [Math.max(0, T0 - pad), T1 + pad];
-    };
-    const start = (restart = false) => { const w = span(); if (!w) return; if (restart || pl.t < w[0] || pl.t >= w[1] - 0.02) pl.seek(w[0]); if (!pl.playing) pl.play(); mine = true; loopOn.value = true; };
-    const stop = () => { if (mine) pl.pause(); mine = false; loopOn.value = false; };
-    const tick = () => {
-      if (!alive) return;
-      if (mine) { const w = span(); if (!pl.playing || !w) { mine = false; loopOn.value = false; } else if (pl.t >= w[1] || pl.t < w[0] - 0.1) pl.seek(w[0]); }
-      raf = requestAnimationFrame(tick);
-    };
-    transitionLoop.start = start; transitionLoop.stop = stop; start(); tick();
-    return () => { alive = false; cancelAnimationFrame(raf); transitionLoop.start = transitionLoop.stop = null; loopOn.value = false; transitionHover.value = null; if (mine) { pl.pause(); pl.seek(t0); } };
-  }, [clipId]);
+let home = null; // { clipId, t }: where the playhead was when this preview was started
+function previewWindow(clipId) {
+  const p = project.value, cl = p?.clips.find(x => x.id === clipId); if (!cl?.transition) return null;
+  const d = Math.min(cl.transition.duration || 0.6, Math.max(0.1, maxTransition(p, cl))); const [T0, T1] = transitionWindow(cl, d);
+  const pad = ui.value.trPad ?? 0.5; return [Math.max(0, T0 - pad), T1 + pad];
 }
-// Hover a type: the loop shows that type (not saved until clicked).
-export const hoverType = (clipId, id) => { transitionHover.value = id ? { clipId, id } : null; if (id) transitionLoop.start?.(); };
+export function playTransition(clipId, { restart = true } = {}) {
+  const pl = player.current, w = previewWindow(clipId); if (!pl || !w) return false;
+  if (!previewLoop.peek() || home?.clipId !== clipId) home = { clipId, t: pl.t }; // Restart keeps the first position
+  return pl.playRange(w[0], w[1], { restart });
+}
+export const stopTransition = () => { if (previewLoop.peek()) player.current?.pause(); };
+function useTransitionPreview(clipId, deps) {
+  // Leaving this transition (another one, a clip, or nothing selected) ends its preview.
+  useEffect(() => () => {
+    const pl = player.current, h = home; home = null; transitionHover.value = null;
+    if (pl && previewLoop.peek()) { pl.pause(); if (h?.clipId === clipId) pl.seek(h.t); }
+  }, [clipId]);
+  // A running loop keeps to the transition while its length, placement or surroundings change.
+  useEffect(() => { if (!previewLoop.peek()) return; const w = previewWindow(clipId); if (w) player.current?.updateRange(w[0], w[1]); else player.current?.pause(); }, deps);
+}
+// Hover a type: the viewer shows that type in place of the real one (not saved until clicked). It never
+// starts or resumes playback.
+export const hoverType = (clipId, id) => { transitionHover.value = id ? { clipId, id } : null; };
+
 
 export function TransitionInspector({ c }) {
-  useTransitionLoop(c.id);
-  const previewTransition = () => (loopOn.value ? transitionLoop.stop?.() : transitionLoop.start?.(true));
   const p = project.value, a = transitionPartner(p, c), tr = c.transition;
   const def = transitionDef(tr.id) || transitionDef('dissolve'); const caps = transitionCaps(def);
   const max = Math.max(0.1, maxTransition(p, c)); const d = Math.min(tr.duration || 0.6, max);
+  useTransitionPreview(c.id, [c.id, c.start, d, tr.align, ui.value.trPad]);
+  const looping = previewLoop.value;
+  const previewTransition = () => (looping ? stopTransition() : playTransition(c.id));
+  const [W0, W1] = transitionWindow(c, d);
+  const close = () => { transitionSel.value = null; };
   const set = (label, fn, key) => updateClip(c.id, x => { if (!x.transition) return false; fn(x.transition); }, { label, key: key ? key + ':' + c.id : undefined });
   const pickFamily = f => set('Transition type', t => { t.id = transitionIn(f.id, def.dir && f.dirs.includes(def.dir) ? def.dir : f.dirs[0]).id; });
   const blur = tr.blur ?? def.blur ?? 0, strength = tr.strength ?? 1;
   const groups = [...new Set(TRANSITION_FAMILIES.map(f => f.group))];
   return <div class="inspector tr-inspector">
     <div class="insp-head"><span class="kind-dot k-transition"><Blend size={13} /></span><div class="grow ellipsis"><b class="ellipsis">{def.family && def.dir ? TRANSITION_FAMILIES.find(f => f.id === def.family)?.name : def.name}</b><small class="muted ellipsis">Transition · {shortTime(d)} · {clipName(a)} → {clipName(c)}</small></div>
-      <button class={`icon-btn sm ${loopOn.value ? 'on' : ''}`} data-tip={loopOn.value ? 'Stop the preview loop' : 'Play the preview loop'} aria-label={loopOn.value ? 'Stop preview' : 'Play preview'} aria-pressed={loopOn.value} onClick={previewTransition}>{loopOn.value ? <Square size={13} /> : <Play size={14} />}</button></div>
+      <button class="btn sm tr-done" data-tip="Finish editing this transition and deselect it" data-kbd="Esc" aria-label="Done, deselect transition" onClick={close}><X size={13} />Done</button></div>
     <div class="insp-scroll">
       <Section title="Preview">
         <div class="row">
-          <button class={`btn sm ${loopOn.value ? 'primary' : ''}`} aria-pressed={loopOn.value} onClick={previewTransition}>{loopOn.value ? <><Square size={12} />Stop preview</> : <><Play size={13} />Play preview</>}</button>
-          <button class="btn sm" data-tip="Start the loop again from the top" onClick={() => transitionLoop.start?.(true)}><RotateCcw size={13} />Restart</button>
+          <button class={`btn sm tr-play ${looping ? 'primary' : ''}`} aria-pressed={looping} data-tip={looping ? 'Stop the preview (Space also stops it)' : 'Play this transition on a loop until you stop it'} onClick={previewTransition}>{looping ? <><Square size={12} />Stop preview</> : <><Play size={13} />Play preview</>}</button>
+          {looping && <button class="btn sm" data-tip="Start the loop again from the top" onClick={() => playTransition(c.id)}><RotateCcw size={13} />Restart</button>}
+          {!looping && <button class="btn sm" data-tip="Move the playhead to the middle of this transition" onClick={() => player.current?.seek((W0 + W1) / 2)}><Crosshair size={13} />Go to transition</button>}
         </div>
         <Slider label="Show before & after" min={0} max={3} step={0.1} value={ui.value.trPad ?? 0.5} def={0.5} unit=" s" onChange={v => setUi({ trPad: v })} />
-        <small class="muted">How much of the clips around the cut the loop plays, so you see the transition in context.</small>
+        <small class="muted">{looping ? 'Looping. Space, Stop or a click on the timeline ends the preview.' : 'Nothing plays until you press Play preview. The slider sets how much of the clips around the cut the loop shows.'}</small>
       </Section>
       <Section title="Type">
         <div role="radiogroup" aria-label="Transition type">{groups.map(g => <div key={g} class="tr-pick-group"><small class="muted">{g}</small><div class="tr-pick">{TRANSITION_FAMILIES.filter(f => f.group === g).map(f => <button key={f.id} role="radio" aria-checked={def.family === f.id} class={`tr-pick-tile ${def.family === f.id ? 'on' : ''}`} onClick={() => { hoverType(c.id, null); pickFamily(f); }} data-tip={f.name}
@@ -94,7 +100,7 @@ export function TransitionInspector({ c }) {
         
         <button class="btn sm" data-tip="Use these settings on every cut on this track" onClick={() => { const n = transitionToAllCuts(c.id); toast(n ? `Applied to ${n} more cut${n === 1 ? '' : 's'} on this track. Ctrl+Z to undo.` : 'There are no other cuts on this track.'); }}><CopyCheck size={13} />Apply to all cuts</button>
         <span class="grow" />
-        <button class="btn sm ghost danger" onClick={() => removeTransition(c.id)}><Trash2 size={13} />Remove</button>
+        <button class="btn sm ghost danger" data-tip="Remove this transition (the clips stay)" data-kbd="Delete" onClick={() => removeTransition(c.id)}><Trash2 size={13} />Remove transition</button>
       </div>
     </div>
   </div>;

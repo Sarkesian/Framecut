@@ -2,9 +2,9 @@
 import { shiftKeys } from '../../shared/keys.mjs';
 import { sliceGainKeys } from '../../shared/timeline-preview.mjs';
 import { spanTo } from '../../shared/snap.mjs';
-import { newClip, uid, clipEnd, srcOut, trackClips, mainTrack, transitionPartner, maxTransition, hasMedia, trackKindFor, clipSpeed, clampTrackIndex } from '../../shared/model.mjs';
+import { newClip, uid, clipEnd, trackClips, mainTrack, transitionPartner, maxTransition, hasMedia, trackKindFor, clipSpeed, clampTrackIndex } from '../../shared/model.mjs';
 import { CAPTION_STYLE, TEXT_STYLE, effectDef } from '../../shared/catalog.mjs';
-import { commit, project, selection, time, asset, toast, player, transitionSel } from './state.js';
+import { commit, project, selection, time, asset, toast, player, transitionSel, effectPick } from './state.js';
 import { ui } from './uiprefs.js';
 
 const EPS = 1e-4;
@@ -103,12 +103,70 @@ export function addAdjustment({ effects = [], filter = null, name = 'Adjustment'
   commit('Add ' + name.toLowerCase(), p => { c.trackId = freeTrack(p, 'effect', at, at + d).id; p.clips.push(c); }, { select: [c.id] });
 }
 
-// Apply to selected visual clips; if none, add as an adjustment layer at the playhead.
-export function applyEffect(id) {
-  const def = effectDef(id); const targets = selectedClips().filter(c => c.kind !== 'audio');
-  const params = Object.fromEntries(def.params.map(x => [x.key, x.value]));
-  if (!targets.length) { if (def.clipOnly) return toast('Select a clip to add camera shake.', 'warn'); return addAdjustment({ name: def.name, effects: [{ id, ...params }] }); }
-  commit('Add ' + def.name, p => { for (const c of p.clips) if (targets.some(t => t.id === c.id)) { c.effects = (c.effects || []).filter(e => e.id !== id); c.effects.push({ id, ...params }); } });
+// ----- Effects -----
+// Same model as filters: one click never piles things up. An effect is tried out first (effectPick, drawn by
+// the viewer only), applied on purpose, and applying REPLACES what the target had. Stacking several effects
+// is still possible, but only when asked for ({ stack: true }: "Add on top", or the inspector's Add effect).
+const fxOf = id => { const def = effectDef(id); return { id, ...Object.fromEntries(def.params.map(x => [x.key, x.value])) }; };
+const fxNames = list => (list || []).map(e => effectDef(e.id)?.name).filter(Boolean).join(' + ');
+const withEffect = (list, fx, stack) => (stack ? [...(list || []).filter(e => e.id !== fx.id), fx] : [fx]);
+// Effect layers (adjustment clips that carry effects) covering time t.
+export const effectLayersAt = (p, t) => p.clips.filter(c => c.kind === 'adjust' && (c.effects || []).length && c.start <= t + 1e-3 && clipEnd(c) > t);
+// What an effect click works on: the selected picture clips, or else the effect layer under the playhead
+// (null when there is none yet, in which case applying makes a new layer there).
+export function effectTarget(p = project.value, t = time.value) {
+  const clips = p ? p.clips.filter(c => selection.value.includes(c.id) && c.kind !== 'audio') : [];
+  return clips.length ? { clips, layer: null } : { clips, layer: p ? effectLayersAt(p, t).at(-1) || null : null };
+}
+export function applyEffect(id, { stack = false } = {}) {
+  const def = effectDef(id); if (!def) return false;
+  const { clips, layer } = effectTarget(), fx = fxOf(id);
+  if (!clips.length && def.clipOnly) { toast('Select a clip to add camera shake.', 'warn'); return false; }
+  if (!clips.length && !layer) { addAdjustment({ name: def.name, effects: [fx] }); return true; }
+  const ids = (clips.length ? clips : [layer]).filter(c => !(def.clipOnly && c.kind === 'adjust')).map(c => c.id);
+  if (!ids.length) { toast('Camera shake goes on a clip, not on an effect layer. Select a clip first.', 'warn'); return false; }
+  commit((stack ? 'Add ' : 'Apply ') + def.name, p => {
+    for (const c of p.clips) if (ids.includes(c.id)) { c.effects = withEffect(c.effects, fx, stack); if (c.kind === 'adjust' && !c.filter?.id) c.name = fxNames(c.effects) || c.name; }
+  });
+  return true;
+}
+// Takes one effect (or, without an id, every effect) off the target. An effect layer left with nothing on it
+// is removed altogether, like an emptied filter layer.
+export function removeEffect(id = null) {
+  const { clips, layer } = effectTarget();
+  const ids = (clips.length ? clips : layer ? [layer] : []).filter(c => (c.effects || []).some(e => !id || e.id === id)).map(c => c.id);
+  if (!ids.length) return false;
+  commit(id ? 'Remove ' + (effectDef(id)?.name || 'effect') : 'Remove effects', p => {
+    const gone = new Set();
+    for (const c of p.clips) if (ids.includes(c.id)) {
+      c.effects = id ? c.effects.filter(e => e.id !== id) : [];
+      if (c.kind === 'adjust' && !c.filter?.id) { if (c.effects.length) c.name = fxNames(c.effects) || c.name; else gone.add(c.id); }
+    }
+    if (!gone.size) return;
+    const tracks = new Set(p.clips.filter(c => gone.has(c.id)).map(c => c.trackId));
+    p.clips = p.clips.filter(c => !gone.has(c.id));
+    p.tracks = p.tracks.filter(t => !(t.kind === 'effect' && tracks.has(t.id) && !p.clips.some(c => c.trackId === t.id)));
+  });
+  return true;
+}
+// The project as the viewer shows it while an effect is being tried out. Never saved, never in undo history.
+let fxMemo = { p: null, pick: null, sel: null, r: null };
+export function withEffectPreview(p) {
+  const pick = effectPick.value; if (!pick || !p) return p;
+  const sel = selection.value;
+  if (fxMemo.p === p && fxMemo.pick === pick && fxMemo.sel === sel) return fxMemo.r;
+  const def = effectDef(pick.id); let r = p;
+  if (def) {
+    const fx = fxOf(pick.id), { clips, layer } = effectTarget(p, pick.at);
+    const ids = new Set((clips.length ? clips : layer ? [layer] : []).filter(c => !(def.clipOnly && c.kind === 'adjust')).map(c => c.id));
+    if (ids.size) r = { ...p, clips: p.clips.map(c => (ids.has(c.id) ? { ...c, effects: withEffect(c.effects, fx, pick.stack) } : c)) };
+    else if (!def.clipOnly && !clips.length) {
+      const end = Math.max(...p.clips.map(clipEnd), pick.at + 3), d = Math.max(1, Math.min(5, end - pick.at));
+      const tr = { id: '__fx-preview', kind: 'effect', name: 'Preview' };
+      r = { ...p, tracks: [tr, ...p.tracks], clips: [...p.clips, newClip('adjust', { id: '__fx-preview', trackId: tr.id, name: def.name, start: pick.at, duration: d, effects: [fx], filter: { id: null, intensity: 1 } })] };
+    }
+  }
+  fxMemo = { p, pick, sel, r }; return r;
 }
 // Filter layers (adjustment clips that only carry a filter) covering time t.
 export const filterLayersAt = (p, t) => p.clips.filter(c => c.kind === 'adjust' && c.filter?.id && !(c.effects || []).length && c.start <= t + 1e-3 && clipEnd(c) > t);
@@ -244,7 +302,6 @@ export function duplicateClips(ids = selection.value) {
   }, { select: out });
 }
 let clipboard = null, clipboardBase = 0;
-export const hasClipboard = () => !!clipboard?.length;
 export function copyClips(ids = selection.value) { const p = project.value; const src = p.clips.filter(c => ids.includes(c.id)); if (!src.length) return false; const base = Math.min(...src.map(c => c.start)); clipboardBase = base; clipboard = src.map(c => ({ ...structuredClone(c), _offset: c.start - base, _kind: trackOf(p, c.trackId)?.kind, _main: !!trackOf(p, c.trackId)?.main })); return true; }
 export function cutClips() { if (copyClips()) deleteClips(); }
 // Paste at the playhead (default) or, with inPlace, at the time the clips were copied from.
@@ -267,25 +324,6 @@ export function pasteClips(at = time.value, { inPlace = false } = {}) {
       p.clips.push(c); out.push(c.id);
     }
   }, { select: out });
-}
-// Move a clip; on collision it lands on a free track of the same kind.
-export function placeClips(moves, { label = 'Move clip' } = {}) {
-  commit(label, p => {
-    const ids = new Set(moves.map(m => m.id));
-    for (const m of moves) {
-      const c = p.clips.find(x => x.id === m.id); if (!c) continue;
-      const target = trackOf(p, m.trackId) || trackOf(p, c.trackId);
-      if (target.kind !== trackKindFor(c.kind)) continue;
-      c.start = Math.max(0, m.start);
-      if (target.main) { c.trackId = target.id; c.start = m.mainIndexTime ?? c.start; }
-      else c.trackId = overlaps(p, target.id, c.start, c.start + c.duration, ids) ? freeTrack(p, target.kind, c.start, c.start + c.duration, { ignore: ids }).id : target.id;
-    }
-    // Reorder main track by requested position (magnetic insert)
-    const main = mainTrack(p); const mains = p.clips.filter(c => c.trackId === main.id);
-    mains.sort((a, b) => a.start - b.start || (ids.has(a.id) ? -1 : 1));
-    let t = 0; for (const c of mains) { c.start = t; t += c.duration; }
-    for (const c of p.clips) if (c.transition && !transitionPartner(p, c)) c.transition = null;
-  });
 }
 // Where an edge can go: media clips can't reveal source before 0 or past the file's end; every clip keeps ≥ 0.05 s.
 // An edge also can't be stretched over the neighbouring clip on its track — unless ripple is on (later clips
@@ -406,9 +444,6 @@ export function bladeCut(t, ids) {
   if (!targets.length) return toast('Click inside a clip, away from its edges, to cut it.', 'warn');
   splitAt(t, targets.map(c => c.id));
 }
-export function closeGaps(trackId) {
-  commit('Close gaps', p => { let t = 0; for (const c of trackClips(p, trackId)) { c.start = t; t += c.duration; } });
-}
 export function setTrack(trackId, patch, label = 'Track change') { commit(label, p => { Object.assign(trackOf(p, trackId), patch); }); }
 export function removeTrack(trackId) {
   commit('Delete track', p => { const t = trackOf(p, trackId); if (!t || t.main) return false; p.clips = p.clips.filter(c => c.trackId !== trackId); p.tracks = p.tracks.filter(x => x.id !== trackId); });
@@ -436,4 +471,3 @@ export function insertCaptions(segments, { replaceRange, trackName = 'Captions',
   });
 }
 export function selectAll() { const p = project.value; selection.value = p.clips.filter(c => !trackOf(p, c.trackId)?.locked).map(c => c.id); }
-export const sourceEnd = srcOut;

@@ -8,7 +8,7 @@ import './styles/studio.css';
 import './styles/library.css';
 import './styles/fonts.css';
 import './styles/captions.css';
-import { route, prefs, health, fonts, userLuts, refreshMedia, openProject, media, jobs, toast } from './lib/state.js';
+import { route, prefs, health, fonts, userLuts, refreshMedia, openProject, media, setJobs, toast } from './lib/state.js';
 import { api } from './lib/api.js';
 import { installTooltips, TooltipHost, MenuHost, DialogHost, ToastHost } from './ui/kit.jsx';
 import { Home } from './ui/Home.jsx';
@@ -35,7 +35,7 @@ function App() {
     const tick = async () => {
       if (stop) return;
       try {
-        const list = await api('/api/jobs'); jobs.value = list;
+        const list = await api('/api/jobs'); setJobs(list);
         const busy = list.some(j => ['queued', 'running'].includes(j.status)) || [...media.value.values()].some(a => !a.missing && ((a.video && a.kind !== 'image' && !a.strip) || (a.audio && !a.wave) || a.proxyPending));
         if (busy) await refreshMedia();
         setTimeout(tick, busy ? 1000 : 2500);

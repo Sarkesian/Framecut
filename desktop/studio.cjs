@@ -222,8 +222,8 @@ class Studio {
         const hw = settings.hardware === 'off' || this.prefs().hardware === 'off' ? null : enc.preferred;
         const ext = path.extname(output).slice(1).toLowerCase();
         const tmp = `${stem}.framecut-part.${ext || 'mp4'}`;
-        const attempt = async hardwareEncoder => {
-          const plan = renderPlan(project, { assets, rasters: rasterFiles, luts, processedAudio, settings: { ...settings, hardwareEncoder }, captionPresets: this.prefs().captionPresets || [] });
+        const attempt = async (hardwareEncoder, extra = {}) => {
+          const plan = renderPlan(project, { assets, rasters: rasterFiles, luts, processedAudio, settings: { ...settings, ...extra, hardwareEncoder }, captionPresets: this.prefs().captionPresets || [] });
           await fsp.writeFile(path.join(dir, 'graph.txt'), plan.graph);
           progress(0, 'Rendering…');
           await new Promise((resolve, reject) => {
@@ -236,9 +236,16 @@ class Studio {
           });
           return plan;
         };
-        let plan;
+        let plan, used = hw;
         try { plan = await attempt(hw); }
-        catch (e) { if (!hw || e.cancelled) throw e; progress(0, 'Hardware encoder unavailable, using software encoder…'); plan = await attempt(null); }
+        catch (e) { if (!hw || e.cancelled) throw e; progress(0, 'Hardware encoder unavailable, using software encoder…'); used = null; plan = await attempt(null); }
+        // A size limit is a promise: if the encoder overshot it, render once more with the rate scaled down.
+        const cap = +settings.targetMB > 0 ? +settings.targetMB * 1e6 : 0; let fitted = null;
+        if (cap) {
+          let size = (await fsp.stat(tmp)).size;
+          if (size > cap) { progress(0, 'Fitting under ' + settings.targetMB + ' MB…'); plan = await attempt(used, { targetScale: cap / size * 0.95 }); size = (await fsp.stat(tmp)).size; }
+          fitted = size <= cap;
+        }
         // rename replaces an existing file in one step (the user confirmed overwriting it); no separate delete.
         await fsp.rename(tmp, output);
         if (settings.subtitles === 'srt') await fsp.writeFile(stem + '.srt', toSrt(project, settings.range));
@@ -246,7 +253,7 @@ class Studio {
         let creditsFile = null;
         if (typeof settings.credits === 'string' && settings.credits.trim()) { creditsFile = stem + ' - credits.txt'; await fsp.writeFile(creditsFile, settings.credits.slice(0, 200000).replace(/\r?\n/g, '\r\n')); }
         const st = await fsp.stat(output);
-        return { output, bytes: st.size, duration: plan.duration, width: plan.width, height: plan.height, creditsFile };
+        return { output, bytes: st.size, duration: plan.duration, width: plan.width, height: plan.height, creditsFile, targetMB: cap ? +settings.targetMB : null, fitted };
       } catch (e) {
         await fsp.rm(`${stem}.framecut-part.${path.extname(output).slice(1).toLowerCase() || 'mp4'}`, { force: true }).catch(() => {});
         throw e;

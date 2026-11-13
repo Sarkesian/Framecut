@@ -1,22 +1,21 @@
 // Left panel: creative asset browser (media, audio, text, stickers, effects, filters, captions, templates).
 // Transitions have no tab here: they are added on a cut in the timeline and edited in the details panel.
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { Film, Music, Type, Smile, Sparkles, Blend, Palette, Captions, LayoutTemplate, Plus, Upload, Search, Star, TriangleAlert, FolderOpen, Trash2, Mic, Square, Play, Pause, Image as ImageIcon, Link2, Gauge, Layers, LoaderCircle, Wand2, FileText, Download, Languages, X, RotateCcw, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, SlidersHorizontal } from 'lucide-preact';
-import { libraryTab, project, media, asset, commit, toast, time, player, selection, primary, prefs, userLuts, fonts, rememberMedia, transitionSel, importing, trackImport, lookPick, commitTentative, dropTentative, tentativeKey } from '../lib/state.js';
-import { api, native, importFiles, pickFile, waitJob } from '../lib/api.js';
-import { addAssets, addText, addSticker, applyEffect, applyFilter, removeFilter, filterLayersAt, applyTransition, insertCaptions, trackOf } from '../lib/edit.js';
-import { openMenu, Empty, Segmented, Select, Progress, confirm, useDraft } from './kit.jsx';
+import { computed } from '@preact/signals';
+import { Film, Music, Type, Smile, Sparkles, Palette, Captions, LayoutTemplate, Plus, Upload, Search, Star, TriangleAlert, FolderOpen, Trash2, Image as ImageIcon, Link2, Gauge, Layers, LoaderCircle, X, RotateCcw, Check, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, SlidersHorizontal } from 'lucide-preact';
+import { libraryTab, project, media, asset, commit, toast, time, player, selection, primary, userLuts, rememberMedia, importing, trackImport, lookPick, commitTentative, dropTentative, tentativeKey, effectPick, saveNow } from '../lib/state.js';
+import { api, native, importFiles, pickFile } from '../lib/api.js';
+import { addAssets, addText, applyEffect, removeEffect, effectTarget, applyFilter, removeFilter, filterLayersAt } from '../lib/edit.js';
+import { openMenu, Select, Progress, confirm, showDialog, closeDialog, Modal } from './kit.jsx';
 import { importMedia } from './commands.jsx';
-import { TEXT_PRESETS, CAPTION_PRESETS, EMOJI, SHAPE_STICKERS, EFFECTS, TRANSITIONS, TRANSITION_FAMILIES, FILTERS, CAPTION_STYLE, TEXT_STYLE } from '../../shared/catalog.mjs';
+import { TEXT_PRESETS, CAPTION_PRESETS, EFFECTS, FILTERS, TEXT_STYLE } from '../../shared/catalog.mjs';
 import { TEXT_TEMPLATES, textTemplateClips, PROJECT_TEMPLATES, projectFromTemplate, TEMPLATE_CATEGORIES, TEMPLATE_THEMES, TEMPLATE_ANIMS, TEMPLATE_POSITIONS, TEMPLATE_SIZES, TEMPLATE_LENGTHS, customizeTemplate } from '../../shared/templates.mjs';
 import { ui, setUi } from '../lib/uiprefs.js';
-import { clipEnd, newClip, mainTrack } from '../../shared/model.mjs';
-import { renderText, svgUrl } from '../engine/raster.js';
+import { clipEnd } from '../../shared/model.mjs';
+import { renderText } from '../engine/raster.js';
 import { filterPreviews, effectPreviews } from './previews.js';
-import { shortTime, bytes } from '../lib/format.js';
-import { transcribe, groupWords } from '../lib/whisper.js';
+import { shortTime } from '../lib/format.js';
 import { freeTrack } from '../lib/edit.js';
-import { openStudio } from './Studio.jsx';
 import { AudioLibrary, StickerLibrary } from './Library.jsx';
 import { CaptionsPanel } from './Captions.jsx';
 
@@ -34,12 +33,58 @@ const Head = ({ title, children }) => <div class="asset-head"><h2>{title}</h2><d
 const SearchBox = ({ value, onInput, placeholder = 'Search' }) => <div class="search"><Search size={14} /><input class="input" type="search" placeholder={placeholder} value={value} onInput={e => onInput(e.target.value)} /></div>;
 
 // ---------------- Media ----------------
+// Two shelves, each with one job:
+//   This project: the files this project uses. Importing puts files here; removing one only takes it out of
+//                 this project.
+//   Library:      every file ever imported into FrameCut, on hand for any project. Using one adds it to the
+//                 project; removing one makes FrameCut forget it.
+// Files are linked, never copied, and no removal here ever deletes a file of the user's from disk.
+const MEDIA_SORTS = [['new', 'Newest first'], ['name', 'Name A to Z'], ['long', 'Longest first'], ['kind', 'By type']];
+const sortMedia = (list, by) => [...list].sort((a, b) => (by === 'name' ? a.name.localeCompare(b.name) : by === 'long' ? (b.duration || 0) - (a.duration || 0) : by === 'kind' ? a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name) : String(b.imported || '').localeCompare(String(a.imported || ''))));
+const usesMedia = (c, id) => c.mediaId === id || c.cutout?.mediaId === id || !!c.takes?.some(t => t.mediaId === id);
+// Takes files out of the open project, with the clips that play them. One undo step; nothing on disk changes.
+function dropFromProject(ids, label) {
+  commit(label, d => {
+    const gone = new Set(d.clips.filter(c => ids.some(id => usesMedia(c, id))).map(c => c.id));
+    for (const c of d.clips) if (c.detachedAudio && gone.has(c.detachedAudio)) { delete c.detachedAudio; c.muted = false; }
+    const from = d.clips.filter(c => gone.has(c.id)).map(c => c.trackId);
+    d.clips = d.clips.filter(c => !gone.has(c.id));
+    d.tracks = d.tracks.filter(t => t.main || t.captions || t.locked || d.clips.some(c => c.trackId === t.id) || !(t.autoRemove || (from.includes(t.id) && t.kind === 'effect')));
+    d.mediaIds = d.mediaIds.filter(x => !ids.includes(x)); d.favorites = d.favorites.filter(x => !ids.includes(x));
+  });
+}
+async function removeFromProject(a) {
+  const n = project.value.clips.filter(c => usesMedia(c, a.id)).length;
+  if (n && !(await confirm({ title: `Remove “${a.name}” from this project?`, ok: n > 1 ? `Remove it and ${n} clips` : 'Remove it and its clip', danger: true, text: `It is on the timeline (${n} clip${n > 1 ? 's' : ''}), so ${n > 1 ? 'those clips go' : 'that clip goes'} too. The file itself stays on your computer and in your library. Ctrl+Z brings it all back.` }))) return;
+  dropFromProject([a.id], 'Remove media from project');
+  toast(`“${a.name}” removed from this project${n ? ` with ${n} clip${n > 1 ? 's' : ''}` : ''}. The file is untouched and still in your library. Ctrl+Z to undo.`);
+}
+async function removeFromLibrary(a) {
+  const p = project.value; let usage;
+  try { usage = await api(`/api/media/${a.id}/usage`); } catch (e) { return toast(e.message, 'error'); }
+  const others = usage.projects.filter(x => x.id !== p.id), here = p.clips.filter(c => usesMedia(c, a.id)).length;
+  if (others.length) return showDialog(() => <Modal title="This file is used in other projects" footer={<button class="btn primary" onClick={() => closeDialog()}>OK</button>}><p class="dim" style={{ margin: 0 }}>“{a.name}” is used in {others.map(x => `“${x.name}”`).join(', ')}. Remove it from {others.length > 1 ? 'those projects' : 'that project'} first, then from the library. Nothing was changed.</p></Modal>);
+  const file = usage.owned ? 'FrameCut made this file itself (a recording or a processed clip), so the file is deleted too.' : 'Your original file stays exactly where it is on your computer. FrameCut only forgets about it.';
+  if (!(await confirm({ title: `Remove “${a.name}” from the library?`, ok: 'Remove from library', danger: true, text: `${file}${here ? ` It is on this project’s timeline (${here} clip${here > 1 ? 's' : ''}); ${here > 1 ? 'those clips are' : 'that clip is'} removed as well.` : ''} This can’t be undone, but you can import the file again at any time.` }))) return;
+  try {
+    if (p.mediaIds.includes(a.id) || here) { dropFromProject([a.id], 'Remove media'); await saveNow(); }
+    const r = await api(`/api/media/${a.id}?except=${p.id}`, undefined, 'DELETE');
+    const m = new Map(media.value); m.delete(a.id); media.value = m; player.current?.invalidate();
+    toast(r.deletedFile ? `“${a.name}” removed from the library and deleted.` : `“${a.name}” removed from the library. Your file was not touched.`);
+  } catch (e) { toast(e.message, 'error', { timeout: 9000 }); }
+}
 function MediaTab() {
-  const p = project.value; const [q, setQ] = useState(''), [kind, setKind] = useState('all'), [scope, setScope] = useState('project'), [over, setOver] = useState(false), [busy, setBusy] = useState(false);
+  const p = project.value; const [q, setQ] = useState(''), [kind, setKind] = useState('all'), [over, setOver] = useState(false);
+  const scope = ui.value.mediaScope === 'all' ? 'all' : 'project', setScope = v => setUi({ mediaScope: v });
+  const sort = MEDIA_SORTS.some(x => x[0] === ui.value.mediaSort) ? ui.value.mediaSort : 'new';
   const all = [...media.value.values()].filter(a => a.role !== 'sticker' && a.role !== 'library-audio');
-  // "All" really means all: audio you imported is listed with your videos and photos (it used to be hidden there).
-  const list = all.filter(a => (scope === 'all' || p.mediaIds.includes(a.id)) && (kind === 'all' || (kind === 'fav' ? p.favorites.includes(a.id) : a.kind === kind)) && a.name.toLowerCase().includes(q.toLowerCase()));
+  const mine = all.filter(a => p.mediaIds.includes(a.id));
+  const usedIds = new Set(p.clips.flatMap(c => [c.mediaId, c.cutout?.mediaId, ...(c.takes || []).map(t => t.mediaId)]).filter(Boolean));
+  const unused = mine.filter(a => !usedIds.has(a.id));
+  // Audio you imported is listed with your videos and photos.
+  const list = sortMedia((scope === 'all' ? all : mine).filter(a => (kind === 'all' || (kind === 'fav' ? p.favorites.includes(a.id) : kind === 'unused' ? !usedIds.has(a.id) : a.kind === kind)) && a.name.toLowerCase().includes(q.toLowerCase())), sort);
   const missing = all.filter(a => a.missing && p.mediaIds.includes(a.id));
+  const clearUnused = () => { const ids = unused.map(a => a.id); dropFromProject(ids, 'Remove unused media'); toast(`Removed ${ids.length} unused file${ids.length > 1 ? 's' : ''} from this project. They are still in your library. Ctrl+Z to undo.`); };
   const drop = async e => {
     e.preventDefault(); setOver(false); if (!e.dataTransfer.files.length) return;
     const files = [...e.dataTransfer.files];
@@ -49,11 +94,18 @@ function MediaTab() {
   return <div class={`tab-body ${over ? 'drop-over' : ''}`} onDragOver={e => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setOver(true); } }} onDragLeave={e => !e.currentTarget.contains(e.relatedTarget) && setOver(false)} onDrop={drop}>
     <Head title="Media"><button class="btn primary sm" onClick={() => importMedia()}><Upload size={14} />Import</button></Head>
     {missing.length > 0 && <div class="notice warn"><TriangleAlert size={15} /><div><b>{missing.length} file{missing.length > 1 ? 's are' : ' is'} missing.</b> They were moved or renamed. <button class="btn sm" onClick={() => relinkFolder()}>Find in folder…</button></div></div>}
-    <div class="asset-tools"><SearchBox value={q} onInput={setQ} placeholder="Search media" /><Segmented value={scope} options={[['project', 'Project'], ['all', 'Library']]} onChange={setScope} /></div>
-    <div class="filter-chips">{[['all', 'All'], ['video', 'Videos'], ['image', 'Photos'], ['audio', 'Audio'], ['fav', '★ Favorites']].map(([k, l]) => <button key={k} class={`fchip ${kind === k ? 'on' : ''}`} onClick={() => setKind(k)}>{l}</button>)}</div>
+    <div class="media-scopes" role="tablist" aria-label="Media shelf">
+      <button role="tab" aria-selected={scope === 'project'} class={scope === 'project' ? 'on' : ''} onClick={() => setScope('project')}><Film size={14} /><b>This project</b><small>{mine.length}</small></button>
+      <button role="tab" aria-selected={scope === 'all'} class={scope === 'all' ? 'on' : ''} onClick={() => setScope('all')}><FolderOpen size={14} /><b>Library</b><small>{all.length}</small></button>
+    </div>
+    <p class="muted hint media-scope-note">{scope === 'project' ? 'Files this project uses. Removing one here only takes it out of this project.' : 'Everything you have imported into FrameCut, ready for any project. Double-click or drag one to use it here.'}</p>
+    <div class="asset-tools"><SearchBox value={q} onInput={setQ} placeholder={scope === 'project' ? 'Search this project' : 'Search your library'} /><Select label="Sort media" value={sort} options={MEDIA_SORTS} onChange={v => setUi({ mediaSort: v })} /></div>
+    <div class="filter-chips">{[['all', 'All'], ['video', 'Videos'], ['image', 'Photos'], ['audio', 'Audio'], ['fav', '★ Favorites'], ...(scope === 'project' && unused.length ? [['unused', `Not on timeline · ${unused.length}`]] : [])].map(([k, l]) => <button key={k} class={`fchip ${kind === k ? 'on' : ''}`} onClick={() => setKind(k)}>{l}</button>)}
+      {scope === 'project' && kind === 'unused' && unused.length > 0 && <button class="btn sm ghost danger" data-tip="Take every file that is not on the timeline out of this project. The files stay in your library and on disk." onClick={clearUnused}><Trash2 size={12} />Remove these {unused.length} from project</button>}</div>
     {importing.value > 0 && <div class="import-bar" role="status"><span>Importing {importing.value} file{importing.value > 1 ? 's' : ''}…</span><Progress indeterminate /></div>}
-    {!list.length ? <div class="dropzone" onClick={() => importMedia()}><Upload size={26} /><b>{all.length && scope === 'project' ? 'Nothing here yet' : 'Bring your footage in'}</b><span>Drop videos, photos or music here, or click to browse.<br />Files are linked — never copied.</span>{scope === 'project' && all.some(a => !p.mediaIds.includes(a.id)) && <button class="btn sm" onClick={e => { e.stopPropagation(); setScope('all'); }}>Show my whole library</button>}</div>
-      : <div class="media-grid">{list.map(a => <MediaCard key={a.id} a={a} fav={p.favorites.includes(a.id)} used={p.clips.some(c => c.mediaId === a.id)} />)}</div>}
+    {!list.length ? ((q || kind !== 'all') && (scope === 'all' ? all : mine).length ? <div class="lib-state"><Search size={22} /><b>Nothing matches</b><span>Try another word or filter.</span><button class="btn sm" onClick={() => { setQ(''); setKind('all'); }}>Show everything</button></div>
+      : <div class="dropzone" onClick={() => importMedia()}><Upload size={26} /><b>{scope === 'project' && all.length ? 'This project has no media yet' : 'Bring your footage in'}</b><span>Drop videos, photos or music here, or click to browse.<br />Files are linked, never copied or moved.</span>{scope === 'project' && all.length > 0 && <button class="btn sm" onClick={e => { e.stopPropagation(); setScope('all'); }}>Reuse something from your library ({all.length})</button>}</div>)
+      : <div class="media-grid">{list.map(a => <MediaCard key={a.id} a={a} scope={scope} inProject={p.mediaIds.includes(a.id)} fav={p.favorites.includes(a.id)} used={usedIds.has(a.id)} />)}</div>}
   </div>;
 }
 async function relinkFolder() {
@@ -66,7 +118,7 @@ export async function relinkOne(a) {
   const f = await pickFile({ title: `Find “${a.name}”`, extensions: [a.name.split('.').pop() || '*', '*'] }); if (!f?.path) return;
   try { const n = await api(`/api/media/${a.id}/relink`, { path: f.path }); const m = new Map(media.value); m.set(n.id, n); media.value = m; player.current?.invalidate(); toast('Relinked.'); } catch (e) { toast(e.message, 'error'); }
 }
-function MediaCard({ a, fav, used }) {
+function MediaCard({ a, fav, used, scope = 'project', inProject = true }) {
   const [hover, setHover] = useState(null);
   // Thumbnail, filmstrip and waveform are built in the background right after import.
   const preparing = !a.missing && ((a.kind === 'video' && (!a.thumb || !a.strip)) || (a.audio && !a.wave));
@@ -80,9 +132,13 @@ function MediaCard({ a, fav, used }) {
     a.missing && { text: 'Relink…', icon: Link2, onClick: () => relinkOne(a) },
     native && !a.missing && { text: 'Show in folder', icon: FolderOpen, onClick: () => native.showInFolder(a.folder + '\\' + a.name) },
     a.kind === 'video' && !a.proxyUrl && { text: 'Create playback copy (smoother preview)', icon: Gauge, onClick: () => api(`/api/media/${a.id}/proxy`, {}).then(() => toast('Creating a playback copy in the background.')) },
+    !inProject && { text: 'Add to this project (without placing it)', icon: Plus, onClick: () => { commit('Add media to project', p => { if (!p.mediaIds.includes(a.id)) p.mediaIds.push(a.id); }); toast(`“${a.name}” added to this project.`); } },
     { divider: true },
-    { text: used ? 'Remove from project (in use)' : 'Remove from project', icon: Trash2, danger: true, disabled: used, onClick: () => commit('Remove media', p => { p.mediaIds = p.mediaIds.filter(x => x !== a.id); }) },
+    inProject && { text: used ? 'Remove from project (and its clips)…' : 'Remove from project', icon: Trash2, danger: true, onClick: () => removeFromProject(a) },
+    { text: 'Remove from library…', icon: Trash2, danger: true, onClick: () => removeFromLibrary(a) },
+    { label: a.owned ? 'Made in FrameCut' : 'Removing never deletes your file' },
   ];
+  const remove = scope === 'project' ? () => removeFromProject(a) : () => removeFromLibrary(a);
   return <div class={`media-card ${a.missing ? 'missing' : ''}`} draggable={!a.missing} tabIndex={0} aria-label={a.name}
     onDragStart={e => dragPayload(e, { type: 'media', id: a.id })} onDblClick={() => add()} onKeyDown={e => e.key === 'Enter' && add()} onContextMenu={e => openMenu(e, menuItems)}
     onPointerMove={e => { const r = e.currentTarget.getBoundingClientRect(); setHover((e.clientX - r.left) / r.width); }} onPointerLeave={() => setHover(null)}>
@@ -91,7 +147,9 @@ function MediaCard({ a, fav, used }) {
         : a.thumb ? <img src={a.thumb} alt="" loading="lazy" draggable={false} /> : a.svg ? <img src={a.url} alt="" draggable={false} /> : <div class="thumb-icon">{a.kind === 'audio' ? <Music size={22} /> : a.kind === 'image' ? <ImageIcon size={22} /> : <Film size={22} />}</div>}
       {preparing && <div class="card-prep" data-tip="Preparing the preview — you can already use this file"><Progress indeterminate /></div>}
       {a.kind !== 'image' && <span class="badge dur">{shortTime(a.duration)}</span>}
-      {used && <span class="badge used" data-tip="Used in this project">●</span>}
+      {used && <span class="badge used" data-tip="On this project’s timeline">●</span>}
+      {scope === 'all' && inProject && !used && <span class="badge inproj" data-tip="In this project">In project</span>}
+      <button class="rm-btn" data-tip={scope === 'project' ? 'Remove from this project (the file is not deleted)' : a.owned ? 'Remove from library (deletes this FrameCut-made file)' : 'Remove from library (your file is not deleted)'} aria-label={scope === 'project' ? 'Remove from project' : 'Remove from library'} onClick={e => { e.stopPropagation(); remove(); }} onDblClick={e => e.stopPropagation()}><Trash2 size={13} /></button>
       {fav && <Star size={13} class="fav" fill="currentColor" />}
       {a.missing && <div class="missing-overlay"><TriangleAlert size={16} />Missing<button class="btn sm" onClick={e => { e.stopPropagation(); relinkOne(a); }}>Relink</button></div>}
       {a.proxyPending && <span class="badge proxy" data-tip="Preparing a smooth playback copy"><LoaderCircle size={10} class="spin" /></span>}
@@ -155,20 +213,58 @@ export function dropTemplatePreview({ rewind = false } = {}) {
 
 // ---------------- Effects / Filters / Transitions ----------------
 const useSourceThumb = () => { const c = primary.value; const a = c?.mediaId && asset(c.mediaId); return a?.thumb || null; };
+// Effects work like filters, one step calmer: a click only tries an effect out in the player. Clicking another
+// swaps the try-out. Nothing is on the project until Apply, which replaces what was there; "Add on top" is the
+// one way to stack. What is applied is listed with a Remove effect button. Esc, a second click or leaving the
+// tab ends a try-out. Dragging an effect onto a clip is deliberate, so it applies straight away.
+// What the Effects and Filters tabs need from the clock: which layer is under the playhead and whether the
+// selected clips are. They read these rather than the time itself, so an open tab re-renders when one of
+// them changes instead of on every frame of playback.
+const effectsClock = computed(() => { const p = project.value, t = time.value; if (!p) return ''; const { clips, layer } = effectTarget(p, t); return (layer?.id || '') + '|' + (clips.some(c => t >= c.start - 1e-3 && t < clipEnd(c)) ? 1 : 0); });
+const filterLayerNow = computed(() => { const p = project.value; return p ? filterLayersAt(p, time.value).at(-1)?.id ?? null : null; });
 function EffectsTab() {
-  const [prev, setPrev] = useState({}); const src = useSourceThumb(); const sel = primary.value;
+  const [prev, setPrev] = useState({}); const src = useSourceThumb();
   useEffect(() => { effectPreviews(src).then(setPrev); }, [src]);
+  useEffect(() => () => { effectPick.value = null; }, []);
+  const p = project.value, pick = effectPick.value; effectsClock.value; selection.value; const t = time.peek();
+  const { clips, layer } = effectTarget(p, t);
+  const targets = clips.length ? clips : layer ? [layer] : [];
+  const applied = [...new Set(targets.flatMap(c => (c.effects || []).map(e => e.id)))];
+  const what = clips.length > 1 ? `${clips.length} selected clips` : clips.length ? (clips[0].kind === 'adjust' ? 'the selected effect layer' : `“${(clips[0].name || clips[0].text || 'the selected clip').slice(0, 28)}”`) : layer ? 'the effect layer under the playhead' : 'the whole picture, as a new effect layer at the playhead';
   const groups = [...new Set(EFFECTS.map(e => e.group))];
-  return <div class="tab-body">
+  const pickDef = pick && EFFECTS.find(e => e.id === pick.id);
+  const tryOut = e => {
+    if (pick?.id === e.id) { effectPick.value = null; return; }
+    if (e.clipOnly && !clips.some(c => c.kind !== 'adjust')) return toast('Select a clip to try camera shake.', 'warn');
+    effectPick.value = { id: e.id, stack: false, at: time.value };
+  };
+  const apply = stack => { const id = pick.id; effectPick.value = null; if (applyEffect(id, { stack })) toast(`${pickDef.name} ${stack ? 'added on top' : 'applied'}. Adjust it under Effects on the right. Ctrl+Z to undo.`); };
+  // The try-out shows where it would go; say so when the playhead is somewhere else.
+  const offscreen = pick && clips.length > 0 && !clips.some(c => t >= c.start - 1e-3 && t < clipEnd(c));
+  const others = pick ? applied.filter(id => id !== pick.id) : [];
+  return <div class="tab-body fx-tab">
     <Head title="Effects" />
-    <p class="muted hint">{sel && sel.kind !== 'audio' ? <>Click to add to <b>{sel.name || 'the selected clip'}</b>. </> : 'Click to add an effect layer at the playhead, or drag onto a clip. '}</p>
-    {groups.map(g => <div key={g}><h4 class="group-title">{g}</h4><div class="tile-grid">{EFFECTS.filter(e => e.group === g).map(e => <button key={e.id} class="tile fx-tile" draggable onDragStart={ev => dragPayload(ev, { type: 'effect', id: e.id })} onClick={() => applyEffect(e.id)}>{prev[e.id] ? <img src={prev[e.id]} alt="" draggable={false} /> : <div class="ph" />}<span>{e.name}</span></button>)}</div></div>)}
+    <p class="muted hint">Click an effect to preview it on <b>{what}</b>. Nothing changes until you press <b>Apply</b>. Drag one onto a clip to apply it straight away.</p>
+    {applied.length > 0 && <div class="fx-applied" role="region" aria-label="Applied effects">
+      <small class="muted">{applied.length > 1 ? 'Applied effects' : 'Applied effect'}</small>
+      {applied.map(id => <div key={id} class="row"><Sparkles size={13} class="accentc" /><b class="grow ellipsis">{EFFECTS.find(e => e.id === id)?.name || id}</b><button class="btn sm fx-remove" onClick={() => removeEffect(id)}><X size={12} />Remove effect</button></div>)}
+      {applied.length > 1 && <button class="btn sm ghost" onClick={() => removeEffect()}><Trash2 size={12} />Remove all effects</button>}
+    </div>}
+    {pickDef && <div class="look-card fx-card" role="region" aria-label={`${pickDef.name} effect`}>
+      <div class="look-card-head"><div class="grow"><b class="ellipsis">{pickDef.name}</b><small class="muted">Preview · not applied yet</small></div>
+        <button class="btn primary sm fx-apply" onClick={() => apply(false)}>{others.length ? 'Replace' : 'Apply'}</button>
+        <button class="icon-btn sm" aria-label="Cancel preview" data-tip="Stop previewing without changing anything" data-kbd="Esc" onClick={() => { effectPick.value = null; }}><X size={14} /></button></div>
+      {others.length > 0 && <label class="check-row fx-stack"><span>Preview on top of {others.map(id => EFFECTS.find(e => e.id === id)?.name).join(' + ')}</span><input type="checkbox" checked={!!pick.stack} onChange={e => { effectPick.value = { ...pick, stack: e.target.checked }; }} /></label>}
+      {others.length > 0 && <div class="row"><small class="muted grow">{pick.stack ? 'Add on top keeps the current effects and stacks this one over them.' : `Replace swaps ${others.length > 1 ? 'the current effects' : 'the current effect'} for this one.`}</small><button class="btn sm fx-add-top" onClick={() => apply(true)}><Plus size={12} />Add on top</button></div>}
+      {offscreen && <small class="warnc">Move the playhead over the clip to see the preview.</small>}
+    </div>}
+    {groups.map(g => <div key={g}><h4 class="group-title">{g}</h4><div class="tile-grid">{EFFECTS.filter(e => e.group === g).map(e => <button key={e.id} class={`tile fx-tile ${pick?.id === e.id ? 'on' : ''} ${applied.includes(e.id) ? 'applied' : ''}`} aria-pressed={pick?.id === e.id} data-tip={pick?.id === e.id ? 'Previewing · click again to stop' : applied.includes(e.id) ? `${e.name} · applied` : `Preview ${e.name}`} draggable onDragStart={ev => dragPayload(ev, { type: 'effect', id: e.id })} onClick={() => tryOut(e)}>{prev[e.id] ? <img src={prev[e.id]} alt="" draggable={false} /> : <div class="ph" />}{applied.includes(e.id) && <b class="look-on" aria-label="Applied"><Check size={11} /></b>}<span>{e.name}</span></button>)}</div></div>)}
   </div>;
 }
 function FiltersTab() {
   const [prev, setPrev] = useState({}); const src = useSourceThumb(); const sel = primary.value;
   // What a click changes and what Remove takes off: the selected clip, or else the filter layer under the playhead.
-  const onClip = sel && !['audio', 'text'].includes(sel.kind), layer = onClip ? null : filterLayersAt(project.value, time.value).at(-1);
+  const onClip = sel && !['audio', 'text'].includes(sel.kind), layer = onClip ? null : (filterLayerNow.value, filterLayersAt(project.value, time.peek()).at(-1));
   const current = onClip ? sel.filter?.id : layer?.filter?.id;
   useEffect(() => { filterPreviews(src).then(setPrev); }, [src]);
   const groups = [...new Set(FILTERS.map(f => f.group))];

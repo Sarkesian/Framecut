@@ -3,6 +3,7 @@
 // license is re-read from its own license_url and checked like any other source. No key needed.
 // ccMixter tracks are no longer indexed by Openverse, so nothing here is duplicated there.
 const { verifyLicense, assessRights, includeMode } = require('../../shared/rights.mjs');
+const { lensById } = require('../../shared/audio-library.mjs');
 
 const API = 'https://ccmixter.org/api/query';
 const LIC = { free: 'zero', credit: 'zero,by', all: 'zero,by' };
@@ -24,13 +25,20 @@ class CcMixter {
   // search hides most of that. Cheap: a count query.
   warm() { if (Date.now() - (this.warmedAt || 0) < 30e3) return; this.warmedAt = Date.now(); this.http.json(this.base + '?f=count&lic=zero', { timeout: 60000 }).catch(() => {}); }
   async query(params) { this.throttle(); const d = await this.http.json(this.base + '?' + new URLSearchParams({ f: 'json', ...params }), { timeout: 60000 }); return Array.isArray(d) ? d : []; }
-  async search({ q = '', page = 1, include = 'free', length, pageSize = 20 }) {
+  async search({ q = '', page = 1, include = 'free', length, lens = '', pageSize = 30 }) {
     const lic = LIC[includeMode(include)]; page = Math.max(1, Math.min(50, page | 0 || 1));
     const params = { lic, limit: String(pageSize), offset: String((page - 1) * pageSize), sort: 'rank', ord: 'DESC', tags: 'audio' };
-    if (q) Object.assign(params, { search: String(q).slice(0, 100), search_type: 'all' });
+    // A browsing lens with a ccMixter tag is answered from uploader tags (thousands of tracks for the big
+    // genres); anything else is a full-text search.
+    const L = lens ? lensById(lens) : null; if (L) q = L.ccq || L.query;
+    if (L?.cc) params.tags = L.cc;
+    else if (q) Object.assign(params, { search: String(q).slice(0, 100), search_type: 'all' });
     const rows = await this.query(params);
     const LEN = { clip: [0, 60e3], song: [60e3, Infinity] }[length];
-    const items = rows.map(r => this.normalize(r)).filter(r => r && (!LEN || (r.durationMs != null && r.durationMs >= LEN[0] && r.durationMs < LEN[1])));
+    // ccMixter is a remix community: about a third of what it lists are bare vocal takes ("a cappellas") and
+    // site promos, uploaded as raw material. They are left out of music results unless the search asks for vocals.
+    const vocals = /\b(a ?cappella|acapella|vocals?|pell)\b/i.test(q);
+    const items = rows.map(r => this.normalize(r)).filter(r => r && (vocals || !r.rawMaterial) && (!LEN || (r.durationMs != null && r.durationMs >= LEN[0] && r.durationMs < LEN[1])));
     // No separate count request (ccMixter can be slow): another page is offered while pages come back full.
     const more = rows.length >= pageSize;
     return { items, total: (page - 1) * pageSize + rows.length + (more ? 1 : 0), page, pages: more ? page + 1 : page };
@@ -57,6 +65,9 @@ class CcMixter {
     rec.licenseCheck = verifyLicense(rec, { checkedAt: rec.metadataCheckedAt, method: 'ccmixter-api' });
     rec.tier = assessRights({ provider: 'ccmixter', license: rec.license, licenseVersion: version, kind: 'music', usage: 'commercial', verification: rec.licenseCheck }).tier;
     Object.defineProperty(rec, 'downloadUrl', { value: file.download_url, enumerable: false });
+    // ccMixter's own upload types: a finished track is a "remix" or an "original"; "acappella" alone is a bare vocal.
+    const types = String(r.upload_extra?.ccud || '').split(',');
+    Object.defineProperty(rec, 'rawMaterial', { value: types.includes('site_promo') || (types.includes('acappella') && !types.includes('remix') && !types.includes('original')), enumerable: false });
     return rec;
   }
   // ccMixter's file host refuses downloads that don't come from one of its own pages (HTTP 403 without a Referer).

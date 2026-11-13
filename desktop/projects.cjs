@@ -26,16 +26,16 @@ class Projects {
   }
   dir(id) { if (!SAFE_ID.test(id)) throw Error('Invalid project id.'); return path.join(this.root, id); }
   async list() {
-    const out = [];
-    for (const id of await fsp.readdir(this.root).catch(() => [])) {
-      if (id.startsWith('.')) continue;
+    // Projects are read side by side, so the home screen does not wait for each file in turn.
+    const ids = (await fsp.readdir(this.root).catch(() => [])).filter(id => !id.startsWith('.'));
+    const out = await Promise.all(ids.map(async id => {
       try {
         const p = await this.load(id, { quiet: true });
         const thumb = path.join(this.dir(id), 'thumb.jpg');
-        out.push({ id: p.id, name: p.name, modified: p.modified, created: p.created, ratio: p.settings.ratio, duration: projectDuration(p), clips: p.clips.length, thumb: fs.existsSync(thumb) ? `/api/projects/${id}/thumb?v=${Date.parse(p.modified) || 0}` : null, recovered: !!p.recovered });
-      } catch {}
-    }
-    return out.sort((a, b) => String(b.modified).localeCompare(String(a.modified)));
+        return { id: p.id, name: p.name, modified: p.modified, created: p.created, ratio: p.settings.ratio, duration: projectDuration(p), clips: p.clips.length, thumb: fs.existsSync(thumb) ? `/api/projects/${id}/thumb?v=${Date.parse(p.modified) || 0}` : null, recovered: !!p.recovered };
+      } catch { return null; }
+    }));
+    return out.filter(Boolean).sort((a, b) => String(b.modified).localeCompare(String(a.modified)));
   }
   async load(id, { quiet } = {}) {
     const file = path.join(this.dir(id), 'project.json');

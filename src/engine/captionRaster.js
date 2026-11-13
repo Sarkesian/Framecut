@@ -2,8 +2,8 @@
 // (all words, inactive look) plus small per-word images (active look) that animate on top. Word
 // positions come from real text metrics, so overlays land exactly on their words and the line never
 // shifts while words pop. The same canvases feed the WebGL preview and the FFmpeg export (as PNGs).
+import { hexA } from './raster.js';
 const cache = new Map();
-const hexA = (hex, a) => { const m = /^#?([0-9a-f]{6})$/i.exec(hex || ''); const n = m ? parseInt(m[1], 16) : 0; return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`; };
 export const captionFont = (s, px) => `${s.italic ? 'italic ' : ''}${s.weight || 700} ${px}px "${String(s.font || 'Inter').replace(/"/g, '')}", "Segoe UI", "Segoe UI Emoji", "Nirmala UI", "Yu Gothic UI", "Malgun Gothic", sans-serif`;
 const loaded = new Set();
 export async function ensureFont(s) {
@@ -90,4 +90,3 @@ export function renderCaptionWord(clip, eff, wi, W, H, role = 'emph') {
   if (cache.size > 600) cache.delete(cache.keys().next().value);
   cache.set(key, out); return out;
 }
-export const captionCacheGet = key => cache.get(key) || null;
