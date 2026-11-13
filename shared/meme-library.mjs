@@ -1,5 +1,7 @@
 // Editorial collections, not live popularity rankings. Metadata checked against the official API
-// on 2026-11-10. No audio is bundled; reuse rights remain unverified.
+// on 2026-11-10; "Trending" is a snapshot of the site's US trending board, checked against the API on
+// 2026-11-13. No audio is bundled; reuse rights remain unverified. A pick whose listing the site later
+// drops still resolves from its entry here (see MyInstants.getAsset).
 export const MEME_COLLECTIONS = [
   {
     "id": "popular",
@@ -21,6 +23,46 @@ export const MEME_COLLECTIONS = [
       "evil-laugh",
       "censor-beep-1",
       "villager"
+    ]
+  },
+  {
+    "id": "trending",
+    "label": "Viral picks",
+    "slugs": [
+      "fahhhhhhhhhhhhhh-3525",
+      "faaah-63455",
+      "formula-1-box-box-27468",
+      "vine-boom-sound-70972",
+      "fart",
+      "slip-fart-cuffem-3383",
+      "anime-wow",
+      "rizz-sound-effect-54189",
+      "among-us-role-reveal-sound-34956",
+      "yo-phone-is-ringing-your-phone-was-ringing-78391",
+      "dexter-meme-26140",
+      "fahhh-42300",
+      "bark-fart-38489",
+      "apple-pay-45496",
+      "fart-button",
+      "spongebob-fail-11236",
+      "shocked-sound-37548",
+      "bruh",
+      "michael-jackson-hee-hee-40277",
+      "the-undertaker-bell-30938",
+      "capcut-explosion-sound-62266",
+      "anime-ahh-73606",
+      "bone-crack-23901",
+      "chicken-on-tree-screaming-53890",
+      "cat-laugh-meme-1-15761",
+      "ding-sound-effect",
+      "m-e-o-w-82698",
+      "romanceeeeeeeeeeeeee-29042",
+      "punch-sound-86161",
+      "spiderman-meme-song-37638",
+      "metal-pipe-clang-80894",
+      "ack-87763",
+      "hub-intro-sound-55662",
+      "dun-dun-dunnnnnnnn-68584"
     ]
   },
   {
@@ -318,5 +360,150 @@ export const MEME_SOUNDS = [
     "slug": "golden-bell-one-piece-89419",
     "name": "Golden Bell One Piece",
     "sound": "https://www.myinstants.com/media/sounds/one-piece-sound-effects-gold-bell.mp3"
+  },
+  {
+    "slug": "fahhhhhhhhhhhhhh-3525",
+    "name": "FAHHHHHHHHHHHHHH",
+    "sound": "https://www.myinstants.com/media/sounds/fahhhhhhhhhhhhhh.mp3"
+  },
+  {
+    "slug": "faaah-63455",
+    "name": "FAAAH",
+    "sound": "https://www.myinstants.com/media/sounds/faaah.mp3"
+  },
+  {
+    "slug": "formula-1-box-box-27468",
+    "name": "formula 1 box box",
+    "sound": "https://www.myinstants.com/media/sounds/formula-1-box-box.mp3"
+  },
+  {
+    "slug": "slip-fart-cuffem-3383",
+    "name": "Slip Fart - Cuffem",
+    "sound": "https://www.myinstants.com/media/sounds/slip-fart-cuffem.mp3"
+  },
+  {
+    "slug": "rizz-sound-effect-54189",
+    "name": "rizz sound effect",
+    "sound": "https://www.myinstants.com/media/sounds/rizz-sound-effect.mp3"
+  },
+  {
+    "slug": "among-us-role-reveal-sound-34956",
+    "name": "Among Us role reveal sound",
+    "sound": "https://www.myinstants.com/media/sounds/among-us-role-reveal-sound.mp3"
+  },
+  {
+    "slug": "yo-phone-is-ringing-your-phone-was-ringing-78391",
+    "name": "Yo phone is ringing your phone was ringing",
+    "sound": "https://www.myinstants.com/media/sounds/yo-phone-is-ringing-your-phone-was-ringing.mp3"
+  },
+  {
+    "slug": "dexter-meme-26140",
+    "name": "Dexter meme",
+    "sound": "https://www.myinstants.com/media/sounds/dexter-meme.mp3"
+  },
+  {
+    "slug": "fahhh-42300",
+    "name": "Fahhh",
+    "sound": "https://www.myinstants.com/media/sounds/fahhh_KcgAXfs.mp3"
+  },
+  {
+    "slug": "bark-fart-38489",
+    "name": "bark&fart",
+    "sound": "https://www.myinstants.com/media/sounds/bark-fart_XRsy1HE.mp3"
+  },
+  {
+    "slug": "apple-pay-45496",
+    "name": "Apple Pay",
+    "sound": "https://www.myinstants.com/media/sounds/applepay.mp3"
+  },
+  {
+    "slug": "spongebob-fail-11236",
+    "name": "SpongeBob Fail",
+    "sound": "https://www.myinstants.com/media/sounds/spongebob-fail.mp3"
+  },
+  {
+    "slug": "shocked-sound-37548",
+    "name": "Shocked sound",
+    "sound": "https://www.myinstants.com/media/sounds/shocked-sound-effect.mp3"
+  },
+  {
+    "slug": "michael-jackson-hee-hee-40277",
+    "name": "Michael Jackson Hee Hee",
+    "sound": "https://www.myinstants.com/media/sounds/michael-jackson-hee-hee.mp3"
+  },
+  {
+    "slug": "the-undertaker-bell-30938",
+    "name": "The Undertaker Bell",
+    "sound": "https://www.myinstants.com/media/sounds/undertakers-bell_2UwFCIe.mp3"
+  },
+  {
+    "slug": "capcut-explosion-sound-62266",
+    "name": "CapCut explosion sound",
+    "sound": "https://www.myinstants.com/media/sounds/capcut-explosion-sound.mp3"
+  },
+  {
+    "slug": "anime-ahh-73606",
+    "name": "anime ahh",
+    "sound": "https://www.myinstants.com/media/sounds/anime-ahh.mp3"
+  },
+  {
+    "slug": "bone-crack-23901",
+    "name": "Bone Crack",
+    "sound": "https://www.myinstants.com/media/sounds/bone-crack.mp3"
+  },
+  {
+    "slug": "chicken-on-tree-screaming-53890",
+    "name": "Chicken on tree screaming",
+    "sound": "https://www.myinstants.com/media/sounds/chicken-on-tree-screaming.mp3"
+  },
+  {
+    "slug": "cat-laugh-meme-1-15761",
+    "name": "cat laugh meme 1",
+    "sound": "https://www.myinstants.com/media/sounds/cat-laugh-meme-1.mp3"
+  },
+  {
+    "slug": "ding-sound-effect",
+    "name": "ding sound effect",
+    "sound": "https://www.myinstants.com/media/sounds/ding-sound-effect_2.mp3"
+  },
+  {
+    "slug": "m-e-o-w-82698",
+    "name": "M e o w ~",
+    "sound": "https://www.myinstants.com/media/sounds/m-e-o-w.mp3"
+  },
+  {
+    "slug": "romanceeeeeeeeeeeeee-29042",
+    "name": "romanceeeeeeeeeeeeee",
+    "sound": "https://www.myinstants.com/media/sounds/romanceeeeeeeeeeeeee.mp3"
+  },
+  {
+    "slug": "punch-sound-86161",
+    "name": "Punch Sound",
+    "sound": "https://www.myinstants.com/media/sounds/punch-gaming-sound-effect-hd_RzlG1GE.mp3"
+  },
+  {
+    "slug": "spiderman-meme-song-37638",
+    "name": "spiderman meme song",
+    "sound": "https://www.myinstants.com/media/sounds/spiderman-meme-song.mp3"
+  },
+  {
+    "slug": "metal-pipe-clang-80894",
+    "name": "Metal pipe clang",
+    "sound": "https://www.myinstants.com/media/sounds/metal-pipe-clang.mp3"
+  },
+  {
+    "slug": "ack-87763",
+    "name": "ACK",
+    "sound": "https://www.myinstants.com/media/sounds/ack.mp3"
+  },
+  {
+    "slug": "hub-intro-sound-55662",
+    "name": "Hub Intro Sound",
+    "sound": "https://www.myinstants.com/media/sounds/hub-intro-sound.mp3"
+  },
+  {
+    "slug": "dun-dun-dunnnnnnnn-68584",
+    "name": "dun dun dunnnnnnnn",
+    "sound": "https://www.myinstants.com/media/sounds/dun-dun-dun-sound-effect-brass_8nFBccR.mp3"
   }
 ];

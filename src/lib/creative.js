@@ -80,7 +80,7 @@ async function runSearch(panel, more, retried = false, revision = revisions[pane
     if (ctl.signal.aborted || revision !== revisions[panel]) return;
     const seen = new Set(more ? s.value.results.map(x => x.key) : []);
     const items = (more ? s.value.results : []).concat(d.items.filter(x => !seen.has(x.key)));
-    s.value = { ...s.value, results: items, page: d.page, pages: d.pages, total: d.total, status: items.length ? 'ok' : 'empty', error: null, sources: d.sources || [{ provider: d.provider || provider, total: d.total }], partial: d.partial || [] };
+    s.value = { ...s.value, results: items, page: d.page, pages: d.pages, total: d.total, capped: !!d.capped, status: items.length ? 'ok' : 'empty', error: null, sources: d.sources || [{ provider: d.provider || provider, total: d.total }], partial: d.partial || [] };
     if (panel !== 'fluent' && q) rememberSearch(panel, q);
     // A slow source keeps working in the background and caches its answer: ask once more so it fills in.
     if (!more && !retried && d.partial?.some(p => p.code === 'slow')) retries[panel] = setTimeout(() => { if (revision === revisions[panel] && s.value.page <= 1) runSearch(panel, false, true, revision); }, 7000);

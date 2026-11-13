@@ -16,7 +16,7 @@ export const PROVIDERS = {
   myinstants: {
     id: 'myinstants', name: 'MyInstants', kinds: ['sfx'], enabled: true, dedicated: true, userManaged: true,
     home: 'https://www.myinstants.com/', terms: 'https://www.myinstants.com/en/terms_of_use.html',
-    note: 'Official API soundboard in Memes & Reactions. Selected sounds can be imported and edited. The API does not provide reuse licenses: source details are preserved and reuse rights remain unverified. You decide whether your use is permitted. Anonymous API access allows 10 requests per minute.',
+    note: 'MyInstants soundboard in Memes & Reactions, searched the way its site is. Selected sounds can be imported and edited. MyInstants does not provide reuse licenses: source details are preserved and reuse rights remain unverified. You decide whether your use is permitted.',
     preview: true, storage: true, export: true,
   },
   openverse: {

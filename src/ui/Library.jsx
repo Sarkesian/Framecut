@@ -168,12 +168,13 @@ function MemeLibrary() {
       <p class="meme-rights-note"><Info size={13} /><span>Reuse rights unverified. Check permission before use.</span></p>
       {view === 'favorites' ? favorites.length ? <AudioList items={favorites} panel="memes" /> : <div class="lib-state"><Heart size={22} /><b>Save a sound for later</b><span>Tap the heart on a MyInstants result to keep it here.</span></div> : <>
         <SearchField panel="memes" placeholder="Search MyInstants by sound name…" />
-        <div class="meme-collections" role="group" aria-label="Curated meme collections">{[...MEME_COLLECTIONS, { id: '', label: 'All API sounds' }].map(g => <button key={g.id} class={`fchip ${!s.q && s.collection === g.id ? 'on' : ''}`} aria-pressed={!s.q && s.collection === g.id} onClick={() => search('memes', { collection: g.id, q: '' }, { now: true })}>{g.label}</button>)}</div>
-        <p class="muted meme-note">{s.q ? 'Searching all MyInstants sound names.' : s.collection ? `${MEME_COLLECTIONS.find(g => g.id === s.collection)?.label} · Curated by FrameCut, not a live popularity ranking.` : 'Full API browse order. Use Show more to continue.'}</p>
+        <div class="meme-collections" role="group" aria-label="Curated meme collections">{[...MEME_COLLECTIONS, { id: '', label: 'Trending now' }].map(g => <button key={g.id} class={`fchip ${!s.q && s.collection === g.id ? 'on' : ''}`} aria-pressed={!s.q && s.collection === g.id} onClick={() => search('memes', { collection: g.id, q: '' }, { now: true })}>{g.label}</button>)}</div>
+        <p class="muted meme-note">{s.q ? 'Searching MyInstants the way its site does.' : s.collection ? `${MEME_COLLECTIONS.find(g => g.id === s.collection)?.label} · Curated by FrameCut, not a live popularity ranking.` : 'Live from the MyInstants trending board. Use Show more to continue.'}</p>
         <details class="meme-search-ideas"><summary>Search ideas</summary><Chips label="Quick searches" icon={Smile} items={['Meme', 'Bruh', 'Vine boom', 'Cartoon', 'Fail', 'Laugh', 'Gaming', 'Surprise']} onPick={q => search('memes', { q }, { now: true })} /></details>
-        {s.q && <button class="btn sm ghost" onClick={() => search('memes', { q: '' }, { now: true })}>Back to {MEME_COLLECTIONS.find(g => g.id === s.collection)?.label || 'all API sounds'}</button>}
+        {s.q && <button class="btn sm ghost" onClick={() => search('memes', { q: '' }, { now: true })}>Back to {MEME_COLLECTIONS.find(g => g.id === s.collection)?.label || 'trending now'}</button>}
         <AudioResults s={s} panel="memes" />
-        <p class="muted meme-note">Searches match sound names. Show more continues through the API’s pages. Anonymous access: 10 lookups per minute; searches are cached.</p>
+        {s.q && s.capped ? <p class="meme-rights-note"><Info size={13} /><span>MyInstants returns at most 250 matches per search, so some sounds are left out. Add a word from the sound’s name to find it.</span></p> : null}
+        <p class="muted meme-note">Results come from the MyInstants site and are cached. Show more loads the next page. Click + to add a sound at the playhead.</p>
       </>}
     </>}
   </div>;
@@ -249,7 +250,7 @@ function AudioResults({ s, panel, limit, compact }) {
   if (s.sort === 'long') items.sort((a, b) => (b.durationMs || 0) - (a.durationMs || 0));
   if (limit) items = items.slice(0, limit);
   return <>
-    {!compact && <div class="audio-result-summary" aria-live="polite"><span>{panel === 'memes' ? `${s.results.length} of ${s.total} ${!s.q && s.collection ? 'curated picks' : 'source matches'} loaded` : `${s.results.length} ${panel === 'music' ? 'tracks' : 'sounds'} shown`}</span><span>{[...new Set(s.results.map(r => r.sourceName || SOURCE_NAMES[r.provider]))].filter(Boolean).join(' · ')}</span></div>}
+    {!compact && <div class="audio-result-summary" aria-live="polite"><span>{panel === 'memes' ? !s.q && s.collection ? `${s.results.length} of ${s.total} curated picks loaded` : `${s.results.length} sounds loaded${s.page < s.pages ? ' · more available' : ''}` : `${s.results.length} ${panel === 'music' ? 'tracks' : 'sounds'} shown`}</span><span>{[...new Set(s.results.map(r => r.sourceName || SOURCE_NAMES[r.provider]))].filter(Boolean).join(' · ')}</span></div>}
     {s.partial?.length > 0 && <div class="audio-source-notice" role="status">{s.partial.map(p => `${SOURCE_NAMES[p.provider] || p.provider} ${p.code === 'slow' ? 'is still loading' : p.code === 'quota' ? 'has reached its access limit' : 'is unavailable'}`).join(' · ')}<button onClick={() => search(panel, {}, { now: true })}>Retry</button></div>}
     <AudioList items={items} panel={panel} />
     {!compact && <MoreButton s={s} panel={panel} />}
@@ -445,7 +446,7 @@ function Discover() {
 }
 
 const GROUPS = [['Smileys & Emotion', '😀'], ['People & Body', '👋'], ['Animals & Nature', '🦊'], ['Food & Drink', '🍕'], ['Activities', '🎉'], ['Travel & Places', '🚀'], ['Objects', '💡'], ['Flags', '🏁']].map(([id, glyph]) => ({ id, name: id.replace(' & ', ' & '), glyph }));
-function MoreButton({ s, panel = 'fluent' }) { return s.page < s.pages ? <div class="lib-more lib-pagination"><span class="muted">{['music', 'sfx'].includes(panel) ? `${s.results.length} shown · more available` : `Showing ${s.results.length.toLocaleString()} of ${(s.total || 0).toLocaleString()}`}</span><button class="btn sm ghost" disabled={s.status === 'more'} onClick={() => search(panel, {}, { more: true })}>{s.status === 'more' ? <LoaderCircle size={14} class="spin" /> : null}Show more</button></div> : null; }
+function MoreButton({ s, panel = 'fluent' }) { return s.page < s.pages ? <div class="lib-more lib-pagination"><span class="muted">{['music', 'sfx'].includes(panel) || (panel === 'memes' && (s.q || !s.collection)) ? `${s.results.length} shown · more available` : `Showing ${s.results.length.toLocaleString()} of ${(s.total || 0).toLocaleString()}`}</span><button class="btn sm ghost" disabled={s.status === 'more'} onClick={() => search(panel, {}, { more: true })}>{s.status === 'more' ? <LoaderCircle size={14} class="spin" /> : null}Show more</button></div> : null; }
 function Animated() {
   const s = searches.fluent.value;
   useEffect(() => { if (!s.category && !s.q) search('fluent', { category: GROUPS[0].id }, { now: true }); }, []);

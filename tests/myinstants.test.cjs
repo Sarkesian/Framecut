@@ -56,3 +56,42 @@ test('MyInstants stays outside the CC0 catalog; imports require user direction a
   const rights = assessRights({ provider: 'myinstants', license: 'cc0', kind: 'sfx' });
   assert.equal(rights.export, true); assert.equal(rights.level, 'caution'); assert.equal(rights.commercial, 'unknown'); assert.equal(rights.badge, 'Rights unverified');
 });
+test('Built-in picks resolve from their own entry when the catalog drops the listing or is rate limited, and every pick is importable', async () => {
+  const { MEME_COLLECTIONS, MEME_SOUNDS } = require('../shared/meme-library.mjs');
+  for (const code of ['gone', 'quota']) {
+    const p = new MyInstants({ http: { json: async () => { throw Object.assign(Error('no'), { code, status: code === 'gone' ? 404 : 0 }); } } });
+    const r = await p.getAsset(MEME_SOUNDS[0].slug); assert.equal(r.downloadUrl, MEME_SOUNDS[0].sound);
+    await assert.rejects(p.getAsset('not-a-built-in-pick'), e => e.code === code);
+  }
+  const p = new MyInstants({ http: {} });
+  for (const s of MEME_SOUNDS) assert.ok(p.normalize(s)?.downloadUrl, s.slug);
+  for (const g of MEME_COLLECTIONS) for (const slug of g.slugs) assert.ok(MEME_SOUNDS.some(s => s.slug === slug), `${g.id}: ${slug}`);
+});
+test('MyInstants searches the site’s own pages: ranked results that name their file, open-ended paging, API only as the fallback', async () => {
+  const card = (slug, name, file = slug) => `<div class="instant">\n<button class="small-button" onclick="play('/media/sounds/${file}.mp3', 'loader-1', '${slug}')" title="Play"></button>\n<a href="/en/instant/${slug}/" class="instant-link link-secondary">${name}</a>\n</div>`;
+  const full = n => Array.from({ length: 36 }, (_, i) => card(`s${n}-${i}`, 'Sound ' + i)).join('');
+  const asked = []; let api = 0;
+  const http = {
+    json: async () => { api++; return { count: 250, next: null, results: [row()] }; },
+    text: async url => {
+      const u = new URL(url); asked.push(u.pathname + u.search); const page = +u.searchParams.get('page') || 1;
+      if (u.pathname === '/en/trending/us/') return full('t' + page);
+      if (u.searchParams.get('name') === 'broken') return '<html>redesigned</html>';
+      if (page === 1) return '<div class="instants result-page">' + card('tom-jerry-1', 'Tom &amp; Jerry &#x27;scream&#x27;', 'tom_x') + card('../evil', 'bad', 'evil') + full(1).split('<div class="instant">').slice(0, 35).join('<div class="instant">');
+      if (page === 2) return card('last-one', 'Last');
+      throw Object.assign(Error('The media service answered 404.'), { status: 404, code: 'gone' });
+    },
+  };
+  const p = new MyInstants({ http });
+  const a = await p.search({ q: 'tom & jerry' });
+  assert.equal(asked[0], '/en/search/?name=tom+%26+jerry'); assert.equal(a.live, true); assert.equal(a.pages, 2); assert.equal(api, 0);
+  assert.equal(a.items[0].sourceId, 'tom-jerry-1'); assert.equal(a.items[0].title, "Tom & Jerry 'scream'"); assert.equal(a.items[0].downloadUrl, 'https://www.myinstants.com/media/sounds/tom_x.mp3');
+  assert.ok(!a.items.some(r => r.sourceId.includes('evil')));
+  const b = await p.search({ q: 'tom & jerry', page: 2 }); assert.equal(b.items.length, 1); assert.equal(b.pages, 2);
+  await p.search({ q: 'tom & jerry' }); assert.equal(asked.length, 2); // cached
+  const t = await p.search({ page: 2 }); assert.equal(asked.at(-1), '/en/trending/us/?page=2'); assert.equal(t.items.length, 36); assert.equal(t.pages, 3);
+  assert.deepEqual((await p.search({ q: 'nothing', page: 3 })).items, []);
+  const f = await p.search({ q: 'broken' }); assert.equal(api, 1); assert.equal(f.capped, true); assert.equal(f.items.length, 1);
+  const down = new MyInstants({ http: { ...http, text: async () => { throw Object.assign(Error('offline'), { code: 'offline' }); } } });
+  await assert.rejects(down.search({ q: 'x' }), e => e.code === 'offline');
+});

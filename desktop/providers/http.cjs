@@ -74,6 +74,11 @@ class SafeHttp {
     catch (e) { if (e instanceof SyntaxError) throw Object.assign(Error('The media service sent an unreadable answer.'), { code: 'http' }); throw e; }
     finally { res.cleanup(); }
   }
+  async text(u, opts = {}, max = 2 * 1024 ** 2) {
+    const res = await this.open(u, opts);
+    try { return (await readLimited(res, max, opts.timeout || 20000)).toString('utf8'); }
+    finally { res.cleanup(); }
+  }
   // Streams to `file` (via a .part file), hashing as it goes. Throws when maxBytes is exceeded.
   async toFile(u, file, { accept, headers, maxBytes = 200 * 1024 ** 2, signal, onProgress, timeout = 30000 } = {}) {
     const res = await this.open(u, { accept, headers, signal, timeout });
