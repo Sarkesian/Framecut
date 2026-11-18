@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "framecut-ui-check",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["-e", "require('./desktop/server.cjs').startServer({ port: 5199, dataDir: require('path').join(require('os').tmpdir(), 'framecut-ui-check') }).then(s => console.log('FRAMECUT_URL=' + s.url))"],
+      "port": 5199
+    },
+    {
+      "name": "framecut-ui-check-2",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["-e", "require('./desktop/server.cjs').startServer({ port: 5198, dataDir: require('path').join(require('os').tmpdir(), 'framecut-ui-check-2') }).then(s => console.log('FRAMECUT_URL=' + s.url))"],
+      "port": 5198
+    }
+  ]
+}
