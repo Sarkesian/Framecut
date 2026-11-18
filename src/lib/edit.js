@@ -354,8 +354,13 @@ export function closeGap(trackId, at) {
   });
 }
 export function setSpeed(id, speed) {
+  speed = Number(speed);
+  if (!Number.isFinite(speed) || speed < 0.1 || speed > 10) return toast('Choose a playback speed between 0.1× and 10×.', 'warn');
   commit('Change speed', p => {
     const c = p.clips.find(x => x.id === id); if (!c) return false;
+    if (c.locked || trackOf(p, c.trackId)?.locked) return false;
+    const minimum = Math.max(0.04, 1 / (p.settings.fps || 30));
+    if (c.duration * (c.speed || 1) / speed < minimum - 1e-8) { toast('This cut is too short for that speed. Keep at least ' + Math.ceil(minimum * 1000) + ' ms on the timeline.', 'warn'); return false; }
     const srcLen = c.duration * (c.speed || 1), k = (c.speed || 1) / speed, oldEnd = clipEnd(c); c.speed = speed; c.duration = srcLen / speed;
     // On Main, the clips after it make room (or close up) by the change in length, so nothing overlaps.
     if (trackOf(p, c.trackId).main) { const d = clipEnd(c) - oldEnd; for (const x of p.clips) if (x.id !== c.id && x.trackId === c.trackId && x.start >= oldEnd - EPS) x.start += d; }

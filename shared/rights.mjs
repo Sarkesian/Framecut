@@ -16,7 +16,7 @@ export const PROVIDERS = {
   openverse: {
     id: 'openverse', name: 'Openverse', kinds: ['music', 'sfx', 'sticker'], enabled: true,
     home: 'https://openverse.org', terms: 'https://docs.openverse.org/terms_of_service.html',
-    note: 'Openverse indexes openly licensed audio and images hosted by Freesound, Jamendo, Wikimedia Commons, SVG Silh and others. FrameCut re-reads each item’s license from Openverse before adding it and keeps that record.',
+    note: 'Openverse indexes openly licensed audio and images hosted by Freesound, Jamendo, SVG Silh and PhyloPic. FrameCut re-reads each item’s license from Openverse before adding it and keeps that record.',
     preview: true, storage: 'license', export: 'license',
   },
   sfxkit: {

@@ -24,8 +24,8 @@ const SFX_IDEAS = ['Whoosh', 'Click', 'Pop', 'Swoosh', 'Applause', 'Footsteps', 
 const STICKER_IDEAS = ['Star', 'Heart', 'Arrow', 'Speech bubble', 'Crown', 'Trophy', 'Rocket', 'Lightning', 'Fire', 'Music note', 'Sun', 'Flower', 'Cat', 'Dog', 'Bird', 'Tree', 'Check mark', 'Question mark'];
 // Source filter per panel. Whole providers (ccMixter, SFX Kit) or Openverse's own sources.
 const SOURCES = {
-  music: [['', 'All sources'], ['ccmixter', 'ccMixter'], ['freesound', 'Freesound'], ['wikimedia_audio', 'Wikimedia Commons']],
-  sfx: [['', 'All sources'], ['sfxkit', 'SFX Kit'], ['freesound', 'Freesound'], ['wikimedia_audio', 'Wikimedia Commons']],
+  music: [['', 'All sources'], ['ccmixter', 'ccMixter'], ['freesound', 'Freesound']],
+  sfx: [['', 'All sources'], ['sfxkit', 'SFX Kit'], ['freesound', 'Freesound']],
 };
 const SOURCE_NAMES = { openverse: 'Openverse', ccmixter: 'ccMixter', sfxkit: 'SFX Kit', fluent: 'Fluent Emoji', pixabay: 'Pixabay', assetpolish: 'AssetPolish' };
 const reduced = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -151,7 +151,7 @@ function OnlineAudio({ panel }) {
       {panel === 'sfx' && <CategoryChips panel="sfx" provider="sfxkit" title="Sound effect categories" />}
       {fav.length > 0 && <><h4 class="group-title">Favorites</h4><AudioList items={fav} panel={panel} /></>}
       {rec.length > 0 && <><h4 class="group-title">Recently used</h4><AudioList items={rec} panel={panel} /></>}
-      {!fav.length && !rec.length && <p class="muted hint lib-intro">{panel === 'music' ? 'Free music you can use without credit: CC0 tracks from ccMixter, plus public-domain and CC0 recordings from Freesound and Wikimedia Commons (via Openverse).' : 'Free sound effects you can use without credit: the 320-sound SFX Kit made for video editing, plus CC0 sounds from Freesound and Wikimedia Commons (via Openverse).'} Every result is license-checked before it’s added.</p>}
+      {!fav.length && !rec.length && <p class="muted hint lib-intro">{panel === 'music' ? 'Free music you can use without credit: CC0 tracks from ccMixter, plus public-domain and CC0 recordings from Freesound (via Openverse).' : 'Free sound effects you can use without credit: the 320-sound SFX Kit made for video editing, plus CC0 sounds from Freesound (via Openverse).'} Every result is license-checked before it’s added.</p>}
     </div>
       : s.status === 'loading' ? <Skeleton />
         : s.status === 'error' || s.status === 'empty' ? <StateCard s={s} panel={panel} onRetry={() => search(panel, {}, { now: true })} />
@@ -193,7 +193,7 @@ function AudioRow({ rec, panel }) {
     <PlayButton active={playing} onClick={() => togglePreview(rec)} />
     <div class="grow lib-meta">
       <div class="ellipsis lib-title" title={rec.title}>{rec.title}</div>
-      <div class="lib-sub"><button class="lic-btn" tabIndex={-1} aria-label="License and source" onClick={() => (selectedRecord.value = rec)}><LicenseBadge rec={rec} /></button><small class={`ellipsis ${busy ? 'lib-dl' : 'muted'}`}>{busy ? `Downloading${prog != null ? ' ' + Math.round(prog * 100) + '%' : '…'}` : [rec.durationMs ? shortTime(rec.durationMs / 1000) : null, rec.creator, rec.sourceName].filter(Boolean).join(' · ')}</small></div>
+      <div class="lib-sub"><button class="lic-btn" tabIndex={-1} aria-label="License and source" onClick={() => (selectedRecord.value = rec)}><Info size={12} /></button><small class={`ellipsis ${busy ? 'lib-dl' : 'muted'}`}>{busy ? `Downloading${prog != null ? ' ' + Math.round(prog * 100) + '%' : '…'}` : [rec.durationMs ? shortTime(rec.durationMs / 1000) : null, rec.creator, rec.sourceName].filter(Boolean).join(' · ')}</small></div>
     </div>
     <button class={`icon-btn sm fav-btn ${rec.favorite ? 'on' : ''}`} tabIndex={-1} aria-label={rec.favorite ? 'Remove from favorites' : 'Save to favorites'} aria-pressed={rec.favorite} onClick={() => toggleFavorite(rec)}><Heart size={14} fill={rec.favorite ? 'currentColor' : 'none'} /></button>
     {busy ? <span class="busy-ring" role="progressbar" aria-label="Downloading" data-tip="Downloading — it is added to the timeline when it arrives" style={{ '--p': ((prog ?? 0.15) * 100) + '%' }}><LoaderCircle size={14} class="spin" /></span>
@@ -282,7 +282,7 @@ function MyAudio() {
           onKeyDown={e => { if (e.target !== e.currentTarget) return; if (e.key === ' ') { e.preventDefault(); play(a); } if (e.key === 'Enter') { e.preventDefault(); add(a); } }}
           onContextMenu={e => openMenu(e, [{ text: 'Add at playhead', icon: Plus, onClick: () => add(a) }, src && { text: 'Copy credit', icon: Copy, onClick: () => copy(creditLine(src)) }, src?.sourcePageUrl && { text: 'Open source page', icon: ExternalLink, onClick: () => window.open(src.sourcePageUrl, '_blank') }, native && !a.missing && { text: 'Reveal file', icon: FolderOpen, onClick: () => native.showInFolder(a.folder + '\\' + a.fileName) }, a.missing && { text: 'Relink…', icon: Link2, onClick: () => relinkOne(a) }])}>
           <PlayButton active={preview.value.key === keyOf(a)} disabled={a.missing} onClick={() => play(a)} />
-          <div class="grow lib-meta"><div class="ellipsis lib-title">{(src?.title || a.name).replace(/\.[^.]+$/, '')}</div><div class="lib-sub">{src ? <LicenseBadge rec={src} compact /> : null}<small class="muted ellipsis">{a.missing ? 'File missing — relink to use' : [shortTime(a.duration), a.recording ? 'Recording' : src ? src.sourceName || 'Openverse' : a.kind === 'audio' ? 'Your file' : 'From video', p.mediaIds.includes(a.id) ? 'In project' : 'Ready offline'].filter(Boolean).join(' · ')}</small></div></div>
+          <div class="grow lib-meta"><div class="ellipsis lib-title">{(src?.title || a.name).replace(/\.[^.]+$/, '')}</div><div class="lib-sub"><small class="muted ellipsis">{a.missing ? 'File missing — relink to use' : [shortTime(a.duration), a.recording ? 'Recording' : src ? src.sourceName || 'Openverse' : a.kind === 'audio' ? 'Your file' : 'From video', p.mediaIds.includes(a.id) ? 'In project' : 'Ready offline'].filter(Boolean).join(' · ')}</small></div></div>
           <button class="icon-btn sm add" tabIndex={-1} data-tip="Add at playhead" aria-label="Add at playhead" onClick={() => add(a)}>{a.missing ? <Link2 size={15} /> : <Plus size={16} />}</button>
         </div>;
       })}</div>}
